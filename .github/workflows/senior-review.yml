@@ -1,0 +1,175 @@
+name: Senior Engineer Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# Only one review per PR at a time
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Senior Engineer Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          DIFF=$(git diff origin/${{ github.base_ref }}...HEAD)
+          DIFF_STAT=$(git diff origin/${{ github.base_ref }}...HEAD --stat)
+          COMMITS=$(git log origin/${{ github.base_ref }}..HEAD --pretty=format:"%h %s" | head -20)
+
+          # Save to files (avoids shell escaping issues)
+          echo "$DIFF" > /tmp/pr_diff.txt
+          echo "$DIFF_STAT" > /tmp/pr_diff_stat.txt
+          echo "$COMMITS" > /tmp/pr_commits.txt
+
+      - name: Build review prompt
+        id: prompt
+        run: |
+          cat > /tmp/review_prompt.md << 'PROMPT_EOF'
+          You are a senior engineer on a permission-safe AI knowledge graph system.
+          Review the following pull request changes.
+
+          Project rules (critical):
+          - Stack: Django + DRF + Celery + Neo4j + SpiceDB + Redis + Postgres
+          - Permission-safe retrieval is the core constraint — restricted facts must NEVER reach the LLM
+          - Every graph node/relationship/chunk must have source provenance fields
+          - SpiceDB is mandatory for authorization — no custom Postgres permission checks
+          - DEBUG must default to False outside local dev
+          - Never expose stack traces in API responses
+          - Never log API keys, Drive content, or raw LLM prompts
+          - Celery tasks must be idempotent and receive only primitive IDs
+          - All secrets via environment variables only
+
+          PR Title: ${{ github.event.pull_request.title }}
+          PR Author: ${{ github.event.pull_request.user.login }}
+          Base branch: ${{ github.base_ref }}
+
+          Commits:
+          PROMPT_EOF
+
+          cat /tmp/pr_commits.txt >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "Diff stat:" >> /tmp/review_prompt.md
+          cat /tmp/pr_diff_stat.txt >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "Full diff:" >> /tmp/review_prompt.md
+          echo '```diff' >> /tmp/review_prompt.md
+          head -c 50000 /tmp/pr_diff.txt >> /tmp/review_prompt.md
+          echo '```' >> /tmp/review_prompt.md
+
+          cat >> /tmp/review_prompt.md << 'FORMAT_EOF'
+
+          Write your review using this exact format:
+
+          ## Senior Engineer Review
+
+          ### Summary
+          (2-3 sentences: what does this PR do?)
+
+          ### ✅ What's Good
+          - (list good patterns, good tests, correct security decisions)
+
+          ### ❌ Issues — Must Fix Before Merge
+          - (file:line — bugs, security holes, permission leaks, missing provenance)
+
+          ### ⚠️ Improvements — Should Fix
+          - (code quality, test gaps, naming, missing validation)
+
+          ### 💡 Suggestions — Nice To Have
+          - (optional future improvements)
+
+          ### Verdict
+          One of: ✅ APPROVE | 🔄 APPROVE WITH NOTES | ❌ REQUEST CHANGES
+
+          ### Codex Action Items
+          (numbered list for the Codex agent, ordered by priority)
+          FORMAT_EOF
+
+      - name: Run review via OpenRouter
+        id: review
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          PROMPT=$(cat /tmp/review_prompt.md)
+          ESCAPED_PROMPT=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+
+          RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -H "X-Title: Knowledge Graph Senior Review" \
+            -d "{
+              \"model\": \"anthropic/claude-sonnet-4-5\",
+              \"messages\": [{\"role\": \"user\", \"content\": $ESCAPED_PROMPT}],
+              \"max_tokens\": 4000
+            }")
+
+          REVIEW_TEXT=$(echo "$RESPONSE" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          if 'choices' in data and data['choices']:
+              print(data['choices'][0]['message']['content'])
+          else:
+              print('Review generation failed. Raw response:')
+              print(json.dumps(data, indent=2))
+          ")
+
+          echo "$REVIEW_TEXT" > /tmp/review_output.md
+          echo "Review generated successfully"
+
+      - name: Post review as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reviewText = fs.readFileSync('/tmp/review_output.md', 'utf8');
+
+            const comment = `<!-- senior-engineer-review -->
+            ## 🔍 Senior Engineer Review
+
+            ${reviewText}
+
+            ---
+            *Automated review by the Senior Engineer agent. Address all ❌ items before merging.*
+            `;
+
+            // Delete previous review comment if exists
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.body.includes('<!-- senior-engineer-review -->')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: comment,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment,
+              });
+            }

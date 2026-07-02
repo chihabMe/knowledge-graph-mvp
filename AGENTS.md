@@ -14,6 +14,41 @@ Before making changes, read these files in order:
 8. `ai-context/07-ai-coding-security-rules.md`
 9. `AGENT_PROJECT_BRIEF.md`
 
+## Pre-Commit Review Workflow (Read This Before Every Commit)
+
+This repository has an offline pre-commit hook that acts as a senior engineer
+review gate. It runs automatically on `git commit` — you cannot skip it without
+an explicit override.
+
+**Before every commit, you must:**
+
+1. Check if `REVIEW.md` exists in the repo root.
+   - If it exists, read it. It contains findings from the previous review.
+   - Address all **❌ Critical** items before staging new changes.
+   - Address **⚠️ Warning** items in the same or next commit.
+
+2. Stage your changes with `git add`.
+
+3. Run `git commit`. The pre-commit hook fires automatically and will:
+   - Run Ruff lint and format checks on staged Python files.
+   - Scan for hardcoded secrets, DEBUG=True, raw SQL, stack trace leaks.
+   - Check Neo4j writes for provenance fields.
+   - Check retrieval/query functions for SpiceDB permission checks.
+   - Check Celery tasks for model instance passing.
+   - Validate Docker Compose config if compose files changed.
+   - Optionally run pytest (skip with `SKIP_TESTS=1 git commit ...`).
+   - Write results to `REVIEW.md`.
+   - **Block the commit** if any critical issue is found.
+
+4. If the commit is blocked, read `REVIEW.md`, fix the issues, re-stage, retry.
+
+**Never use `--no-verify` or `SKIP_REVIEW=1` unless explicitly instructed.**
+
+To reinstall the hook after a fresh clone:
+```bash
+make install-hooks
+```
+
 ## Working Rules
 
 - Do not treat this as a normal chatbot project. The core product is permission-safe retrieval over a Google Drive-backed knowledge graph.

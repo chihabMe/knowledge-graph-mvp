@@ -2,7 +2,7 @@ COMPOSE = docker compose -f infra/compose.infrastructure.yml -f infra/compose.ap
 BACKEND_DIR = apps/backend
 CORE_SERVICES = postgres redis neo4j spicedb django celery-worker
 
-.PHONY: config up up-all down logs migrate django-check test lint format health smoke
+.PHONY: config up up-all down logs migrate django-check test lint format health smoke review review-branch install-hooks
 
 config:
 	docker compose -f infra/compose.infrastructure.yml config >/tmp/kg-infra-compose-check.txt
@@ -47,3 +47,15 @@ health:
 
 smoke:
 	$(COMPOSE) exec -T django python -c "import urllib.request; req=urllib.request.Request('http://127.0.0.1:8000/api/tasks/smoke-test/', method='POST'); print(urllib.request.urlopen(req).read().decode())"
+
+# Senior engineer review — reviews the last commit
+review:
+	bash scripts/review-commit.sh HEAD~1 HEAD
+
+# Reviews everything on the current branch vs main
+review-branch:
+	bash scripts/review-commit.sh origin/main HEAD
+
+# Install git hooks (run once after cloning)
+install-hooks:
+	bash scripts/install-hooks.sh
