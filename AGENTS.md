@@ -22,7 +22,7 @@ Before making changes, read these files in order:
 - Use SpiceDB for authorization. Do not replace it with ad hoc PostgreSQL permission checks.
 - Use PostgreSQL for application metadata and job state.
 - Use Neo4j for graph data, graph traversal, and vector retrieval.
-- Use Django + Django REST Framework for the main backend once the backend is rebuilt.
+- Use Django + Django REST Framework for the main backend.
 - Use Celery workers for ingestion, sync, extraction, indexing, and evaluation jobs.
 - Keep Docker Compose as the first deployment target.
 - Keep Open WebUI as the user-facing chat interface unless the user explicitly changes that direction.
@@ -33,7 +33,7 @@ Before making changes, read these files in order:
 - `ai-context/phases/`: Phase-by-phase implementation trackers with task status and recommended model effort.
 - `docs/`: Human-facing docs, API notes, and feature plans.
 - `infra/`: Docker, Traefik, monitoring, and deployment configuration.
-- `apps/backend/`: Target location for the Django backend once implementation starts.
+- `apps/backend/`: Django backend.
 - `data/import/`: Local sample ingestion files for development and tests.
 - `AGENT_PROJECT_BRIEF.md`: Detailed project brief from the planning phase.
 
@@ -60,13 +60,12 @@ graphify cluster-only apps/backend
 
 ## Current Architecture Status
 
-The target architecture is Django-based. The previous FastAPI prototype has been removed so the project can start clean.
+The backend foundation has been built with Django + Django REST Framework.
 
-The next implementation step should be a controlled Django foundation build:
+The next implementation step should be controlled Google Drive ingestion work:
 
-1. Create Django project/app structure.
-2. Add DRF APIs.
-3. Add PostgreSQL-backed app models.
-4. Add Celery tasks.
-5. Connect Neo4j and SpiceDB through service modules.
-6. Add tests around provenance and permission safety.
+1. Add PostgreSQL-backed Drive connection and sync models.
+2. Add Google Drive credential configuration.
+3. Add mocked Drive API client tests before real API calls.
+4. Store Drive metadata before downloading content.
+5. Preserve future permission/provenance requirements in every model.

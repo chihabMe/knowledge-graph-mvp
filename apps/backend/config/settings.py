@@ -1,5 +1,6 @@
 """Django settings for the knowledge graph backend."""
 
+import sys
 from pathlib import Path
 
 import environ
@@ -16,9 +17,15 @@ env_file = REPO_ROOT / ".env"
 if env_file.exists():
     environ.Env.read_env(env_file)
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", default="unsafe-local-development-key")
 DEBUG = env("DJANGO_DEBUG")
 ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS")
+
+management_commands = {Path(argument).name for argument in sys.argv}
+
+if DEBUG or management_commands.intersection({"test", "pytest"}):
+    SECRET_KEY = env("DJANGO_SECRET_KEY", default="unsafe-local-development-key")
+else:
+    SECRET_KEY = env("DJANGO_SECRET_KEY")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
