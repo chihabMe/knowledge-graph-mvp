@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # scripts/hooks/pre-commit
 #
-# Offline senior-engineer pre-commit review.
-# Runs automatically before every commit. Blocks commits with critical issues.
+# Two-stage pre-commit review gate:
+#   Stage 1 — Fast offline static checks (lint, secrets, patterns)
+#   Stage 2 — Deep AI review via agy/Claude (if agy is available)
+#
+# Writes findings to REVIEW.md.
+# Codex MUST read REVIEW.md and present findings to the user for approval
+# before making any fixes. Codex must NOT fix issues silently.
 #
 # Environment overrides:
-#   SKIP_REVIEW=1      — skip entirely (emergency only, avoid)
-#   SKIP_TESTS=1       — skip pytest (faster, use when tests already passed)
-#   REVIEW_BLOCK=0     — warn but never block (useful during initial setup)
+#   SKIP_REVIEW=1      — skip entirely (emergency only, never use casually)
+#   SKIP_TESTS=1       — skip pytest (use when tests already passed this session)
+#   SKIP_AI_REVIEW=1   — skip the agy AI review stage (static checks still run)
+#   REVIEW_BLOCK=0     — allow commit even with critical issues (setup mode only)
 
 set -euo pipefail
 
@@ -16,27 +22,23 @@ BACKEND_DIR="$REPO_ROOT/apps/backend"
 REVIEW_FILE="$REPO_ROOT/REVIEW.md"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# ─── Skip flags ─────────────────────────────────────────────────────────────
-
-if [ "${SKIP_REVIEW:-0}" = "1" ]; then
-  echo "⚠️  SKIP_REVIEW=1 set. Skipping pre-commit review."
-  exit 0
-fi
-
 # ─── Colour helpers ──────────────────────────────────────────────────────────
 
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-RESET='\033[0m'
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
-section()  { echo -e "\n${CYAN}${BOLD}── $1 ──${RESET}"; }
-pass()     { echo -e "  ${GREEN}✅ $1${RESET}"; }
-warn()     { echo -e "  ${YELLOW}⚠️  $1${RESET}"; }
-fail()     { echo -e "  ${RED}❌ $1${RESET}"; }
-info()     { echo -e "     $1"; }
+section() { echo -e "\n${CYAN}${BOLD}── $1 ──${RESET}"; }
+pass()    { echo -e "  ${GREEN}✅ $1${RESET}"; }
+warn()    { echo -e "  ${YELLOW}⚠️  $1${RESET}"; }
+fail()    { echo -e "  ${RED}❌ $1${RESET}"; }
+info()    { echo -e "     $1"; }
+
+# ─── Skip flags ──────────────────────────────────────────────────────────────
+
+if [ "${SKIP_REVIEW:-0}" = "1" ]; then
+  echo "⚠️  SKIP_REVIEW=1 set — skipping all review checks."
+  exit 0
+fi
 
 # ─── State ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +63,7 @@ fi
 
 echo ""
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-echo -e "${BOLD}  🔍 Pre-commit Senior Engineer Review${RESET}"
+echo -e "${BOLD}  🔍 Stage 1 — Static Pre-Commit Checks${RESET}"
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo -e "  ${CYAN}Time:${RESET}  $TIMESTAMP"
 echo -e "  ${CYAN}Files:${RESET} $(echo "$STAGED_FILES" | wc -l | tr -d ' ') staged"
@@ -69,145 +71,114 @@ echo -e "  ${CYAN}Files:${RESET} $(echo "$STAGED_FILES" | wc -l | tr -d ' ') sta
 # ─── Check 1: Lint ───────────────────────────────────────────────────────────
 
 section "Python Lint (Ruff)"
-
 if [ -z "$STAGED_PY_FILES" ]; then
   info "No Python files staged — skipping lint."
 else
   if [ -d "$BACKEND_DIR" ]; then
     cd "$BACKEND_DIR"
-
     if uv run ruff check $STAGED_PY_FILES 2>&1; then
       add_good "Ruff lint passed"
     else
       add_critical "Ruff lint failed — run: make lint"
     fi
-
     if uv run ruff format --check $STAGED_PY_FILES 2>&1; then
       add_good "Ruff format passed"
     else
       add_warning "Ruff format issues — run: make format"
     fi
-
     cd "$REPO_ROOT"
-  else
-    info "Backend dir not found — skipping lint."
   fi
 fi
 
-# ─── Check 2: Secret / credential patterns ───────────────────────────────────
+# ─── Check 2: Hardcoded secrets ──────────────────────────────────────────────
 
 section "Secret & Credential Scan"
-
+SECRET_FOUND=false
 SECRET_PATTERNS=(
   'password\s*=\s*["\x27][^"\x27${}]'
   'secret\s*=\s*["\x27][^"\x27${}]'
   'api_key\s*=\s*["\x27][^"\x27${}]'
   'token\s*=\s*["\x27][^"\x27${}]'
-  'OPENROUTER_API_KEY\s*=\s*["\x27](?!replace)'
-  'NEO4J_PASSWORD\s*=\s*["\x27](?!change)'
-  'POSTGRES_PASSWORD\s*=\s*["\x27](?!change)'
   'preshared_key\s*=\s*["\x27][^"\x27${}]'
 )
-
-SECRET_FOUND=false
 for pattern in "${SECRET_PATTERNS[@]}"; do
   if echo "$STAGED_DIFF" | grep -qiP "$pattern" 2>/dev/null; then
-    add_critical "Possible hardcoded secret matching pattern: $pattern"
+    add_critical "Possible hardcoded credential — pattern: $pattern"
     SECRET_FOUND=true
   fi
 done
-
-if [ "$SECRET_FOUND" = false ]; then
-  add_good "No hardcoded secrets detected"
-fi
+[ "$SECRET_FOUND" = false ] && add_good "No hardcoded secrets detected"
 
 # ─── Check 3: DEBUG mode ─────────────────────────────────────────────────────
 
-section "DEBUG Mode Check"
-
+section "DEBUG Mode"
 if echo "$STAGED_DIFF" | grep -qP '^\+\s*DEBUG\s*=\s*True' 2>/dev/null; then
-  add_critical "DEBUG = True being committed — must not reach production"
+  add_critical "DEBUG = True committed — must not reach production"
 else
   add_good "No DEBUG=True in staged changes"
 fi
 
 # ─── Check 4: Stack traces in responses ──────────────────────────────────────
 
-section "Stack Trace / Error Leak Check"
-
-if echo "$STAGED_DIFF" | grep -qP '^\+.*traceback|^\+.*exc_info=True.*Response|^\+.*str\(e\).*Response|^\+.*exception.*message.*Response' 2>/dev/null; then
-  add_warning "Possible stack trace or raw exception message in an API response — verify error is controlled"
-fi
-
-if echo "$STAGED_DIFF" | grep -qP '^\+.*raise.*Http|^\+.*return.*Response.*str\(e\)' 2>/dev/null; then
-  add_warning "Raw exception string may be leaking in a Response — use a controlled error label instead"
+section "Error Leak Check"
+if echo "$STAGED_DIFF" | grep -qP '^\+.*str\(e\).*Response|^\+.*traceback.*response|^\+.*exc_info.*Response' 2>/dev/null; then
+  add_warning "Possible raw exception string in an API response — use controlled error labels"
 else
-  add_good "No obvious error leak patterns found"
+  add_good "No obvious error leak patterns"
 fi
 
 # ─── Check 5: AllowAny on non-utility endpoints ──────────────────────────────
 
 section "Permission Class Check"
-
 ALLOW_ANY_LINES=$(echo "$STAGED_DIFF" | grep -nP '^\+.*AllowAny' 2>/dev/null || true)
 if [ -n "$ALLOW_ANY_LINES" ]; then
-  while IFS= read -r line; do
-    FILE_HINT=$(echo "$STAGED_FILES" | grep 'views.py' | head -1 || echo "a views file")
-    # Only warn if it's not in health or core (those legitimately use AllowAny)
-    if echo "$FILE_HINT" | grep -qvP 'health|core'; then
-      add_warning "AllowAny permission class added in $FILE_HINT — confirm this endpoint should be public"
-    else
-      add_good "AllowAny on health/smoke endpoint (expected)"
-    fi
-  done <<< "$ALLOW_ANY_LINES"
+  NON_UTILITY=$(echo "$STAGED_FILES" | grep 'views.py' | grep -vP 'health|core' || true)
+  if [ -n "$NON_UTILITY" ]; then
+    add_warning "AllowAny added in $NON_UTILITY — confirm this endpoint should be public"
+  else
+    add_good "AllowAny on expected utility endpoint (health/smoke)"
+  fi
 fi
 
 # ─── Check 6: Raw SQL ────────────────────────────────────────────────────────
 
-section "Raw SQL Safety Check"
-
+section "Raw SQL Safety"
 if echo "$STAGED_DIFF" | grep -qP '^\+.*cursor\(\)\.execute\(' 2>/dev/null; then
-  if echo "$STAGED_DIFF" | grep -qP '^\+.*cursor\(\)\.execute\(.*["\x27].*%s|^\+.*cursor\(\)\.execute\(.*["\x27].*\?' 2>/dev/null; then
-    add_good "Raw SQL uses parameterized query (looks safe)"
+  if echo "$STAGED_DIFF" | grep -qP '^\+.*cursor\(\)\.execute\(.*(%s|\?)' 2>/dev/null; then
+    add_good "Raw SQL uses parameterized query"
   else
-    add_critical "Raw SQL without clear parameterization — use parameterized queries only"
+    add_critical "Raw SQL without parameterization — SQL injection risk"
   fi
 fi
 
 # ─── Check 7: Neo4j provenance ───────────────────────────────────────────────
 
 section "Neo4j Provenance Check"
-
-NEO4J_WRITES=$(echo "$STAGED_DIFF" | grep -P '^\+.*session\.run|^\+.*tx\.run|^\+.*CREATE|^\+.*MERGE' 2>/dev/null || true)
-if [ -n "$NEO4J_WRITES" ]; then
+if echo "$STAGED_DIFF" | grep -qP '^\+.*session\.run|^\+.*tx\.run|^\+.*(CREATE|MERGE)\s' 2>/dev/null; then
   if echo "$STAGED_DIFF" | grep -qP 'source_document|source_chunk|extraction_run|created_at' 2>/dev/null; then
     add_good "Neo4j write includes provenance fields"
   else
-    add_warning "Neo4j write detected but no provenance fields (source_document_id, extraction_run_id, etc.) visible in diff — verify provenance is set"
+    add_warning "Neo4j write found but no provenance fields visible — verify source_document_id etc. are set"
   fi
 fi
 
 # ─── Check 8: SpiceDB bypass ─────────────────────────────────────────────────
 
-section "SpiceDB / Permission Bypass Check"
-
-if echo "$STAGED_DIFF" | grep -qP '^\+.*def.*retrieve|^\+.*def.*query|^\+.*def.*search' 2>/dev/null; then
-  if echo "$STAGED_DIFF" | grep -qP 'spicedb|allowed_documents|check_permission|visible_docs' 2>/dev/null; then
-    add_good "Retrieval/query function includes SpiceDB or permission check reference"
+section "SpiceDB Permission Check"
+if echo "$STAGED_DIFF" | grep -qP '^\+.*def.*(retrieve|query|search)' 2>/dev/null; then
+  if echo "$STAGED_DIFF" | grep -qP 'spicedb|allowed_documents|check_permission' 2>/dev/null; then
+    add_good "Retrieval function references SpiceDB / permission check"
   else
-    add_warning "New retrieval or query function added without visible SpiceDB check — confirm permission filtering is applied"
+    add_warning "New retrieval function without visible SpiceDB call — confirm permission filter is applied"
   fi
 fi
 
 # ─── Check 9: print() in production code ─────────────────────────────────────
 
 section "Debug Print Check"
-
-PRINT_IN_PROD=$(echo "$STAGED_DIFF" | grep -P '^\+\s*print\(' 2>/dev/null | \
-  grep -vP 'test_|tests\.py|conftest' || true)
+PRINT_IN_PROD=$(echo "$STAGED_DIFF" | grep -P '^\+\s*print\(' 2>/dev/null | grep -vP 'test_|tests\.py|conftest' || true)
 if [ -n "$PRINT_IN_PROD" ]; then
-  add_warning "print() statement in non-test code — use logging instead"
-  info "Affected lines: $(echo "$PRINT_IN_PROD" | wc -l)"
+  add_warning "print() in non-test code — use logging"
 else
   add_good "No print() in production code"
 fi
@@ -215,33 +186,23 @@ fi
 # ─── Check 10: Celery task safety ────────────────────────────────────────────
 
 section "Celery Task Safety"
-
-NEW_TASKS=$(echo "$STAGED_DIFF" | grep -P '^\+.*@.*task|^\+.*@shared_task' 2>/dev/null || true)
-if [ -n "$NEW_TASKS" ]; then
-  if echo "$STAGED_DIFF" | grep -qP '^\+.*def.*task.*\(.*self.*\)|bind=True' 2>/dev/null; then
-    info "Bound task found — ensure retry logic is correct"
-  fi
-  if echo "$STAGED_DIFF" | grep -qP '^\+.*\.objects\.|^\+.*Model\.' 2>/dev/null; then
-    # Check if Django model instances are being passed (they shouldn't be)
-    TASK_ARGS=$(echo "$STAGED_DIFF" | grep -P '^\+.*\.delay\(|^\+.*\.apply_async\(' 2>/dev/null || true)
-    if echo "$TASK_ARGS" | grep -qP '\.(objects|pk|id)\b' 2>/dev/null; then
-      add_warning "Possible Django model instance passed to Celery task — pass primitive IDs only"
-    else
-      add_good "Celery task arguments appear primitive"
-    fi
+if echo "$STAGED_DIFF" | grep -qP '^\+.*@.*task|^\+.*@shared_task' 2>/dev/null; then
+  TASK_ARGS=$(echo "$STAGED_DIFF" | grep -P '^\+.*\.(delay|apply_async)\(' 2>/dev/null || true)
+  if echo "$TASK_ARGS" | grep -qP '\.objects\b' 2>/dev/null; then
+    add_warning "Possible Django queryset/model passed to Celery task — use primitive IDs only"
+  else
+    add_good "Celery task arguments appear to use primitives"
   fi
 fi
 
-# ─── Check 11: Compose file validation ───────────────────────────────────────
+# ─── Check 11: Compose validation ────────────────────────────────────────────
 
 section "Docker Compose Validation"
-
-COMPOSE_CHANGED=$(echo "$STAGED_FILES" | grep -P 'compose.*\.yml$' || true)
-if [ -n "$COMPOSE_CHANGED" ]; then
+if echo "$STAGED_FILES" | grep -qP 'compose.*\.yml$' 2>/dev/null; then
   if docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml config > /dev/null 2>&1; then
     add_good "Combined Compose config is valid"
   else
-    add_critical "Docker Compose config is invalid — run: make config"
+    add_critical "Docker Compose config invalid — run: make config"
   fi
 else
   add_good "No Compose files changed"
@@ -250,9 +211,8 @@ fi
 # ─── Check 12: Tests ─────────────────────────────────────────────────────────
 
 section "Test Suite"
-
 if [ "${SKIP_TESTS:-0}" = "1" ]; then
-  add_warning "Tests skipped (SKIP_TESTS=1). Run: make test"
+  add_warning "Tests skipped (SKIP_TESTS=1) — run make test before merging"
 elif [ -d "$BACKEND_DIR" ] && [ -n "$STAGED_PY_FILES" ]; then
   cd "$BACKEND_DIR"
   if uv run pytest --tb=short -q 2>&1; then
@@ -262,32 +222,132 @@ elif [ -d "$BACKEND_DIR" ] && [ -n "$STAGED_PY_FILES" ]; then
   fi
   cd "$REPO_ROOT"
 else
-  info "No Python files staged or backend not found — skipping tests."
+  info "No Python files staged — skipping tests."
 fi
 
-# ─── Summary ─────────────────────────────────────────────────────────────────
+# ─── Stage 1 summary ─────────────────────────────────────────────────────────
 
 echo ""
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-echo -e "${BOLD}  Review Summary${RESET}"
+echo -e "${BOLD}  Stage 1 Summary${RESET}"
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-echo -e "  ${GREEN}✅ Passed:${RESET}   ${#GOOD_NOTES[@]} checks"
-echo -e "  ${YELLOW}⚠️  Warnings:${RESET} ${#WARNING_ISSUES[@]} items"
-echo -e "  ${RED}❌ Critical:${RESET} ${#CRITICAL_ISSUES[@]} items"
+echo -e "  ${GREEN}✅ Passed:${RESET}   ${#GOOD_NOTES[@]}"
+echo -e "  ${YELLOW}⚠️  Warnings:${RESET} ${#WARNING_ISSUES[@]}"
+echo -e "  ${RED}❌ Critical:${RESET} ${#CRITICAL_ISSUES[@]}"
+
+# ─── Stage 2: AI deep review via agy ─────────────────────────────────────────
+
+AI_REVIEW_TEXT=""
+
+if [ "${SKIP_AI_REVIEW:-0}" != "1" ] && command -v agy &> /dev/null; then
+  echo ""
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  echo -e "${BOLD}  🤖 Stage 2 — AI Deep Review (agy / Claude)${RESET}"
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  echo -e "  Running deep AI review on staged diff..."
+
+  DIFF_STAT=$(git diff --cached --stat 2>/dev/null || true)
+  COMMIT_MSG_HINT=$(git log -1 --pretty=format:"%s" 2>/dev/null || echo "(new commit)")
+
+  AI_PROMPT="You are a senior engineer reviewing staged changes before they are committed to a permission-safe AI knowledge graph system.
+
+Project context:
+- Stack: Django + DRF + Celery + Neo4j + SpiceDB + Redis + Postgres
+- Core rule: Restricted facts must NEVER reach the LLM — SpiceDB filters before retrieval
+- Every Neo4j node/relationship/chunk must have source provenance fields
+- SpiceDB is mandatory for authorization — no custom Postgres permission logic
+- DEBUG must default to False — never commit DEBUG=True
+- Never expose stack traces in API responses
+- Never log API keys, drive file contents, or LLM prompts
+- Celery tasks must be idempotent and accept only primitive IDs
+
+Previous commit context: $COMMIT_MSG_HINT
+
+Diff stat:
+$DIFF_STAT
+
+Full staged diff:
+\`\`\`diff
+$(echo "$STAGED_DIFF" | head -c 40000)
+\`\`\`
+
+Static checks already found:
+Critical issues: $(printf '%s\n' "${CRITICAL_ISSUES[@]:-none}" | head -20)
+Warnings: $(printf '%s\n' "${WARNING_ISSUES[@]:-none}" | head -20)
+
+Provide a structured senior engineer code review. Be specific — reference file names and line context from the diff. Format your response exactly like this:
+
+### 🤖 AI Senior Engineer Review
+
+#### What This Change Does
+(1-2 sentences)
+
+#### ✅ What's Done Well
+- (specific good patterns, correct security decisions, good test coverage)
+
+#### ❌ Must Fix Before This Commit Is Accepted
+- (concrete issues with file/line context — bugs, security holes, missing provenance, permission leaks)
+
+#### ⚠️ Should Fix Soon
+- (code quality issues, test gaps, naming, missing validation — not blockers but important)
+
+#### 💡 Suggestions
+- (optional improvements, future considerations)
+
+#### Verdict
+APPROVE / APPROVE WITH NOTES / REQUEST CHANGES
+
+#### Proposed Action Items for Codex
+(numbered list, ordered by priority — these will be shown to the user for approval)"
+
+  AI_REVIEW_TEXT=$(echo "$AI_PROMPT" | agy --no-interactive 2>/dev/null || echo "")
+
+  if [ -n "$AI_REVIEW_TEXT" ]; then
+    echo -e "  ${GREEN}✅ AI review complete${RESET}"
+  else
+    echo -e "  ${YELLOW}⚠️  AI review did not return output — static checks only${RESET}"
+    AI_REVIEW_TEXT="_(AI review unavailable — agy did not return output. Run manually: agy 'review the staged diff')_"
+  fi
+elif [ "${SKIP_AI_REVIEW:-0}" = "1" ]; then
+  AI_REVIEW_TEXT="_(AI review skipped — SKIP_AI_REVIEW=1)_"
+else
+  AI_REVIEW_TEXT="_(AI review unavailable — agy not found. Install Antigravity CLI or run: agy 'review the staged diff')_"
+fi
 
 # ─── Write REVIEW.md ─────────────────────────────────────────────────────────
 
+OVERALL_STATUS="✅ CLEAN — commit approved"
+[ ${#WARNING_ISSUES[@]} -gt 0 ] && OVERALL_STATUS="⚠️ WARNINGS — commit passed, address in next task"
+[ ${#CRITICAL_ISSUES[@]} -gt 0 ] && OVERALL_STATUS="❌ BLOCKED — fix critical issues before committing"
+
 {
-  echo "<!-- AUTO-GENERATED by pre-commit hook — read before next task -->"
-  echo ""
-  echo "# Pre-Commit Senior Engineer Review"
-  echo ""
-  echo "**Generated:** $TIMESTAMP"
-  echo "**Status:** $([ ${#CRITICAL_ISSUES[@]} -gt 0 ] && echo '❌ COMMIT BLOCKED' || ([ ${#WARNING_ISSUES[@]} -gt 0 ] && echo '⚠️ COMMITTED WITH WARNINGS' || echo '✅ CLEAN'))"
-  echo ""
+cat << HEADER
+<!-- AUTO-GENERATED by pre-commit hook — DO NOT EDIT MANUALLY -->
+<!--
+  CODEX INSTRUCTIONS — READ THIS BEFORE YOUR NEXT ACTION:
+
+  1. Read this entire file carefully.
+  2. Present the findings to the user clearly.
+  3. Ask the user: "Do you want me to fix these issues? (yes/no)"
+  4. If the user says YES → apply fixes, then retry the commit.
+  5. If the user says NO → leave the code as-is, note the warnings.
+  6. NEVER fix issues silently without user approval.
+  7. NEVER skip or dismiss ❌ Critical items without user consent.
+-->
+
+# Pre-Commit Senior Engineer Review
+
+**Generated:** $TIMESTAMP
+**Status:** $OVERALL_STATUS
+
+---
+
+## Stage 1 — Static Check Results
+
+HEADER
 
   if [ ${#CRITICAL_ISSUES[@]} -gt 0 ]; then
-    echo "## ❌ Critical — Must Fix"
+    echo "### ❌ Critical — Commit Blocked"
     echo ""
     for issue in "${CRITICAL_ISSUES[@]}"; do
       echo "- $issue"
@@ -296,7 +356,7 @@ echo -e "  ${RED}❌ Critical:${RESET} ${#CRITICAL_ISSUES[@]} items"
   fi
 
   if [ ${#WARNING_ISSUES[@]} -gt 0 ]; then
-    echo "## ⚠️ Warnings — Should Fix"
+    echo "### ⚠️ Warnings — Should Fix"
     echo ""
     for issue in "${WARNING_ISSUES[@]}"; do
       echo "- $issue"
@@ -305,7 +365,7 @@ echo -e "  ${RED}❌ Critical:${RESET} ${#CRITICAL_ISSUES[@]} items"
   fi
 
   if [ ${#GOOD_NOTES[@]} -gt 0 ]; then
-    echo "## ✅ Passed"
+    echo "### ✅ Passed"
     echo ""
     for note in "${GOOD_NOTES[@]}"; do
       echo "- $note"
@@ -313,55 +373,68 @@ echo -e "  ${RED}❌ Critical:${RESET} ${#CRITICAL_ISSUES[@]} items"
     echo ""
   fi
 
+  echo "---"
+  echo ""
+  echo "## Stage 2 — AI Deep Review (Claude / agy)"
+  echo ""
+  echo "$AI_REVIEW_TEXT"
+  echo ""
+  echo "---"
+  echo ""
   echo "## Staged Files"
   echo '```'
   echo "$STAGED_FILES"
   echo '```'
   echo ""
+  echo "---"
+  echo ""
+  echo "## ⚡ Codex — Next Steps"
+  echo ""
+  echo "> **Present these findings to the user. Ask for approval before fixing anything.**"
+  echo ""
 
   if [ ${#CRITICAL_ISSUES[@]} -gt 0 ]; then
-    echo "## Codex Action Items"
+    echo "The commit was **blocked** due to critical issues. Tell the user:"
     echo ""
-    echo "The commit was **blocked**. Fix the following before retrying:"
-    echo ""
-    N=1
-    for issue in "${CRITICAL_ISSUES[@]}"; do
-      echo "$N. Fix: $issue"
-      N=$((N+1))
-    done
-    for issue in "${WARNING_ISSUES[@]}"; do
-      echo "$N. Address (warning): $issue"
-      N=$((N+1))
-    done
+    echo '```'
+    echo "The pre-commit review found critical issues and blocked the commit."
+    echo "Here is the full review. Do you want me to fix these issues? (yes/no)"
+    echo '```'
   elif [ ${#WARNING_ISSUES[@]} -gt 0 ]; then
-    echo "## Codex Action Items"
+    echo "The commit passed but has warnings. Tell the user:"
     echo ""
-    echo "Commit passed but address these in the next task:"
-    echo ""
-    N=1
-    for issue in "${WARNING_ISSUES[@]}"; do
-      echo "$N. $issue"
-      N=$((N+1))
-    done
+    echo '```'
+    echo "The commit went through, but the review found some issues."
+    echo "Here is the full review. Do you want me to address these in a follow-up commit? (yes/no)"
+    echo '```'
+  else
+    echo "All checks passed. Tell the user the commit is clean."
   fi
+
 } > "$REVIEW_FILE"
 
-echo -e "  ${CYAN}REVIEW.md${RESET} written to repo root."
+echo ""
+echo -e "  ${CYAN}REVIEW.md${RESET} written."
 
 # ─── Block or pass ───────────────────────────────────────────────────────────
 
 if [ ${#CRITICAL_ISSUES[@]} -gt 0 ] && [ "${REVIEW_BLOCK:-1}" != "0" ]; then
   echo ""
-  echo -e "  ${RED}${BOLD}Commit BLOCKED.${RESET} Fix critical issues above, then retry."
-  echo -e "  To skip in an emergency: ${YELLOW}SKIP_REVIEW=1 git commit ...${RESET}"
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  echo -e "  ${RED}${BOLD}Commit BLOCKED.${RESET}"
+  echo -e "  Read ${CYAN}REVIEW.md${RESET} and present findings to user for approval."
+  echo -e "  Override (emergency only): ${YELLOW}SKIP_REVIEW=1 git commit${RESET}"
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
   echo ""
   exit 1
 else
-  if [ ${#CRITICAL_ISSUES[@]} -gt 0 ]; then
-    echo -e "  ${YELLOW}REVIEW_BLOCK=0 set — commit allowed despite critical issues.${RESET}"
-  fi
   echo ""
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
   echo -e "  ${GREEN}${BOLD}Commit approved.${RESET}"
+  if [ ${#WARNING_ISSUES[@]} -gt 0 ]; then
+    echo -e "  ${YELLOW}Warnings exist — read REVIEW.md and present to user.${RESET}"
+  fi
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
   echo ""
   exit 0
 fi

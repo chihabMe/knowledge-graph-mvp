@@ -30,19 +30,31 @@ an explicit override.
 2. Stage your changes with `git add`.
 
 3. Run `git commit`. The pre-commit hook fires automatically and will:
-   - Run Ruff lint and format checks on staged Python files.
-   - Scan for hardcoded secrets, DEBUG=True, raw SQL, stack trace leaks.
-   - Check Neo4j writes for provenance fields.
-   - Check retrieval/query functions for SpiceDB permission checks.
-   - Check Celery tasks for model instance passing.
-   - Validate Docker Compose config if compose files changed.
-   - Optionally run pytest (skip with `SKIP_TESTS=1 git commit ...`).
-   - Write results to `REVIEW.md`.
-   - **Block the commit** if any critical issue is found.
+   - **Stage 1 — Static checks** (offline, always runs):
+     - Ruff lint and format checks on staged Python files.
+     - Hardcoded secrets / DEBUG=True / raw SQL / stack trace leak scan.
+     - Neo4j provenance field check.
+     - SpiceDB permission bypass check.
+     - Celery task model-passing check.
+     - Docker Compose validation.
+     - pytest (skip with `SKIP_TESTS=1 git commit ...`).
+   - **Stage 2 — AI deep review** (calls agy/Claude, requires CLI):
+     - Reads the staged diff and produces a structured senior engineer review.
+     - Supplements the static checks with reasoning about design and correctness.
+   - Writes all findings to `REVIEW.md`.
+   - **Blocks the commit** if any critical issue is found.
 
-4. If the commit is blocked, read `REVIEW.md`, fix the issues, re-stage, retry.
+4. After the hook runs — whether the commit passed or was blocked:
+   - Read `REVIEW.md` in full.
+   - **Present the findings to the user clearly.** Show them the critical issues,
+     warnings, and the AI review verdict.
+   - **Ask the user:** "Do you want me to fix these issues? (yes/no)"
+   - **Wait for the user's explicit answer before touching any code.**
+   - If the user says **yes** → apply the fixes, then retry the commit.
+   - If the user says **no** → leave the code as-is and note open warnings.
 
-**Never use `--no-verify` or `SKIP_REVIEW=1` unless explicitly instructed.**
+**Critical rule: Never fix review findings silently or automatically.**
+**Never use `--no-verify` or `SKIP_REVIEW=1` unless the user explicitly says so.**
 
 To reinstall the hook after a fresh clone:
 ```bash
