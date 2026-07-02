@@ -45,7 +45,7 @@ This phase proves that the project can run as a real service:
 - [x] Configure PostgreSQL for Django. Effort: High.
 - [x] Add `/api/health/` endpoint. Effort: High.
 - [x] Add Celery smoke task and API endpoint. Effort: High.
-- [ ] Add Makefile commands. Effort: Medium.
+- [x] Add Makefile commands. Effort: Medium.
 - [ ] Run full validation. Effort: Medium.
 - [ ] Commit and push Phase 1 foundation. Effort: Medium.
 
@@ -53,11 +53,11 @@ This phase proves that the project can run as a real service:
 
 Required before Phase 1 is complete:
 
-- [ ] `make config`
-- [ ] `make lint`
-- [ ] `make test`
-- [ ] `make up`
-- [~] `make migrate`
+- [x] `make config`
+- [x] `make lint`
+- [x] `make test`
+- [x] `make up`
+- [x] `make migrate`
 - [x] `GET /api/health/` returns controlled dependency status.
 - [x] Celery smoke task can be queued.
 - [ ] `docker compose -f infra/compose.infrastructure.yml config`

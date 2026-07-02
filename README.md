@@ -1,114 +1,125 @@
 # Client-Owned AI Knowledge Graph MVP
 
-This project is a first working version of a client-owned AI knowledge system.
-It connects business documents to a Neo4j knowledge graph and exposes an
-OpenAI-compatible chat endpoint that Open WebUI can use as its main interface.
+This project is a client-owned organizational knowledge graph system.
 
-The goal is not to build a full SaaS product. The goal is to create a repeatable
-implementation package that can be deployed for one client at a time.
+The target product lets users ask questions through Open WebUI, retrieves context from Google Drive content structured in Neo4j, and enforces source-document visibility before retrieval.
 
-## What It Does
+The main success test is permission safety:
 
-- Runs Open WebUI as the client-facing chat interface.
-- Runs Neo4j as the knowledge graph database.
-- Runs a Python/FastAPI backend that ingests files and answers chat requests.
-- Stores documents, chunks, extracted terms, and relationships in Neo4j.
-- Retrieves relevant graph context before calling OpenRouter.
-- Lets Open WebUI talk to the backend through `/v1/chat/completions`.
+```text
+Users must not receive facts derived from Google Drive files they cannot access.
+```
 
-## First MVP Boundary
+## Current Stack
 
-The first ingestion path is a mounted folder at `data/import`. This makes the
-MVP testable before Google Drive OAuth is added. The Google Drive connector is
-the next milestone and should feed the same ingestion service.
+- Backend: Django + Django REST Framework
+- Background jobs: Celery
+- Broker/cache: Redis
+- App metadata: PostgreSQL
+- Knowledge graph: Neo4j
+- Authorization engine: SpiceDB
+- Reverse proxy: Traefik
+- Logs: Dozzle
+- Uptime checks: Uptime Kuma
+- User chat UI: Open WebUI
+- Model gateway: OpenRouter
 
-## Quick Start
+## Repository Map
 
-1. Copy the example env file:
+- `AGENTS.md`: entry instructions for future AI agents.
+- `ai-context/`: canonical project context for AI agents.
+- `ai-context/phases/`: phase-by-phase task trackers with completion status and model-effort level.
+- `apps/backend/`: Django backend.
+- `infra/`: Docker Compose and infrastructure configuration.
+- `docs/`: human-facing planning and setup docs.
+- `data/import/`: local sample-data folder placeholder.
+
+## Common Commands
+
+Copy environment defaults first:
 
 ```bash
 cp .env.example .env
 ```
 
-2. Edit `.env` and set:
+Validate Compose files:
 
 ```bash
-OPENROUTER_API_KEY=your-key
-NEO4J_PASSWORD=your-password
-NEO4J_AUTH=neo4j/your-password
-BACKEND_API_KEY=your-local-backend-secret
-WEBUI_SECRET_KEY=your-webui-secret
+make config
 ```
 
-3. Add test files into:
+Start the core development services:
 
 ```bash
-data/import
+make up
 ```
 
-4. Start the stack:
+Run migrations:
 
 ```bash
-docker compose up --build
+make migrate
 ```
 
-5. Ingest local files:
+Run tests and linting:
 
 ```bash
-curl -X POST http://localhost:8080/ingest/local \
-  -H "Authorization: Bearer change-this-local-secret"
+make test
+make lint
 ```
 
-6. Open the UI:
-
-```text
-http://localhost:3000
-```
-
-Open WebUI is configured to use the backend as an OpenAI-compatible endpoint.
-
-## Service URLs
-
-- Open WebUI: `http://localhost:3000`
-- Backend API: `http://localhost:8080`
-- Neo4j Browser: `http://localhost:7474`
-
-## Target Architecture Status
-
-The target backend stack is Django + Django REST Framework + Celery + Redis.
-The existing `backend/` folder still contains an earlier FastAPI prototype.
-Do not treat that prototype as the final backend.
-
-Infrastructure scaffolding lives in `infra/`.
-
-Run supporting services with:
+Check service health:
 
 ```bash
-docker compose -f infra/compose.infrastructure.yml up -d
+make health
 ```
 
-## Supported Local File Types
+Queue a Celery smoke task:
 
-- `.txt`
-- `.md`
-- `.pdf`
-- `.docx`
-- `.csv`
+```bash
+make smoke
+```
 
-## Intended Production Direction
+## Service Startup
 
-For a real client deployment:
+`make up` starts the core services needed for backend development:
 
-- Put the stack behind Caddy or Traefik for SSL.
-- Use a client-specific subdomain.
-- Replace local folder ingestion with Google Drive OAuth ingestion.
-- Add backups for Neo4j and Open WebUI data volumes.
-- Store secrets outside the repo.
+- PostgreSQL
+- Redis
+- Neo4j
+- SpiceDB
+- Django
+- Celery worker
 
-See [AGENT_PROJECT_BRIEF.md](AGENT_PROJECT_BRIEF.md) for the canonical project
-brief future AI agents should read before building features.
+`make up-all` also starts optional services:
 
-Future AI agents should also start with [AGENTS.md](AGENTS.md), then read the
-files in `ai-context/`.
+- Open WebUI
+- Dozzle
+- Uptime Kuma
+- Traefik
+- Celery beat
 
-See [docs/project-plan.md](docs/project-plan.md) for the shorter build plan.
+## Local Ports
+
+Internal services bind to localhost-only alternate ports by default:
+
+- PostgreSQL: `15432 -> 5432`
+- Redis: `16379 -> 6379`
+- Neo4j HTTP: `17474 -> 7474`
+- Neo4j Bolt: `17687 -> 7687`
+- SpiceDB gRPC: `15051 -> 50051`
+- SpiceDB HTTP: `18443 -> 8443`
+
+## Current Phase
+
+The project is in Phase 1: Django Backend Foundation.
+
+Read:
+
+- `ai-context/phases/phase-1-django-foundation.md`
+- `ai-context/06-phase-1-execution-plan.md`
+- `ai-context/07-ai-coding-security-rules.md`
+
+## Important Rule
+
+Do not build retrieval features that bypass SpiceDB or source-document provenance.
+
