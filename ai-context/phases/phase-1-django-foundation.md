@@ -40,7 +40,7 @@ This phase proves that the project can run as a real service:
 ## Tasks
 
 - [x] Create Django backend skeleton. Effort: High.
-- [ ] Add Python tooling with Ruff and pytest. Effort: Medium.
+- [x] Add Python tooling with Ruff and pytest. Effort: Medium.
 - [ ] Wire Django and Celery into app Compose file. Effort: High.
 - [ ] Configure PostgreSQL for Django. Effort: High.
 - [ ] Add `/api/health/` endpoint. Effort: High.

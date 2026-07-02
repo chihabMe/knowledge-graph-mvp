@@ -102,4 +102,3 @@ CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:
 NEO4J_URI = env("NEO4J_URI", default="bolt://localhost:7687")
 NEO4J_USER = env("NEO4J_USER", default="neo4j")
 NEO4J_PASSWORD = env("NEO4J_PASSWORD", default="change-this-neo4j-password")
-

@@ -6,4 +6,3 @@ class ProjectImportTests(SimpleTestCase):
         from django.conf import settings
 
         self.assertEqual(settings.ROOT_URLCONF, "config.urls")
-
