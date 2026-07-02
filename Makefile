@@ -37,8 +37,13 @@ format:
 	cd $(BACKEND_DIR) && uv run ruff format .
 
 health:
-	$(COMPOSE) exec -T django python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/health/').read().decode())"
+	@for attempt in $$(seq 1 30); do \
+		if $(COMPOSE) exec -T django python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/health/', timeout=10).read().decode())"; then \
+			exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	exit 1
 
 smoke:
 	$(COMPOSE) exec -T django python -c "import urllib.request; req=urllib.request.Request('http://127.0.0.1:8000/api/tasks/smoke-test/', method='POST'); print(urllib.request.urlopen(req).read().decode())"
-

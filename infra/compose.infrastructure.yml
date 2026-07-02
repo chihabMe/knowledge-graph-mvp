@@ -32,6 +32,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-postgres-password}
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -65,9 +71,11 @@ services:
       - kg-private
 
   spicedb:
-    image: ghcr.io/authzed/spicedb:latest
+    image: ghcr.io/authzed/spicedb:v1.51.1
     restart: unless-stopped
-    command: serve
+    command:
+      - --skip-release-check
+      - serve
     depends_on:
       spicedb-migrate:
         condition: service_completed_successfully
@@ -82,11 +90,16 @@ services:
       - kg-private
 
   spicedb-migrate:
-    image: ghcr.io/authzed/spicedb:latest
+    image: ghcr.io/authzed/spicedb:v1.51.1
     restart: "no"
-    command: migrate head
+    command:
+      - --skip-release-check
+      - datastore
+      - migrate
+      - head
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       SPICEDB_DATASTORE_ENGINE: postgres
       SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-kg_user}:${POSTGRES_PASSWORD:-change-this-postgres-password}@postgres:5432/${POSTGRES_DB:-knowledge_graph}?sslmode=disable
@@ -144,8 +157,12 @@ services:
 
 networks:
   kg-public:
+    name: kg-public
+  kg-egress:
+    name: kg-egress
   kg-private:
-    internal: false
+    name: kg-private
+    internal: true
 
 volumes:
   traefik-letsencrypt:

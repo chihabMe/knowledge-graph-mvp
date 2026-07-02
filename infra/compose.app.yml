@@ -24,7 +24,11 @@ services:
       spicedb:
         condition: service_started
     healthcheck:
-      test: ["CMD", "python", "manage.py", "check"]
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/', timeout=10)\"",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -32,6 +36,7 @@ services:
     networks:
       - kg-public
       - kg-private
+      - kg-egress
     labels:
       - traefik.enable=true
       - traefik.http.routers.django.rule=Host(`${DJANGO_HOST:-api.localhost}`)
@@ -59,6 +64,7 @@ services:
         condition: service_started
     networks:
       - kg-private
+      - kg-egress
 
   celery-beat:
     build:
@@ -83,3 +89,12 @@ services:
       - scheduler
     networks:
       - kg-private
+      - kg-egress
+
+networks:
+  kg-public:
+    name: kg-public
+  kg-private:
+    name: kg-private
+  kg-egress:
+    name: kg-egress

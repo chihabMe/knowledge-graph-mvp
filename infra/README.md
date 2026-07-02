@@ -26,6 +26,12 @@ Internal databases bind to localhost-only alternate ports by default to avoid co
 - SpiceDB gRPC: `15051 -> 50051`
 - SpiceDB HTTP: `18443 -> 8443`
 
+Network boundaries:
+
+- `kg-public`: ingress-facing services such as Traefik, Open WebUI, and Django.
+- `kg-private`: internal data plane for PostgreSQL, Redis, Neo4j, and SpiceDB. This network is marked `internal: true`.
+- `kg-egress`: outbound internet access for application containers that need external APIs such as Google Drive or OpenRouter.
+
 Use both compose files when running the application services:
 
 ```bash

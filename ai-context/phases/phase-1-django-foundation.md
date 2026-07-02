@@ -62,6 +62,9 @@ Required before Phase 1 is complete:
 - [x] Celery smoke task can be queued.
 - [x] `docker compose -f infra/compose.infrastructure.yml config`
 - [x] `docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml config`
+- [x] Docker healthcheck uses the HTTP health endpoint instead of only Django config checks.
+- [x] SpiceDB image is pinned instead of using `latest`.
+- [x] Private data-service network is internal, with a separate app egress network.
 
 ## Completion Status
 
