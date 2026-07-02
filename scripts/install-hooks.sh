@@ -8,6 +8,7 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 HOOKS_SOURCE="$REPO_ROOT/scripts/hooks"
 HOOKS_TARGET="$REPO_ROOT/.git/hooks"
+REVIEW_STAGED_SCRIPT="$REPO_ROOT/scripts/review-staged.sh"
 
 if [ ! -d "$HOOKS_SOURCE" ]; then
   echo "❌ scripts/hooks/ not found. Run from the repo root."
@@ -24,6 +25,11 @@ for hook in "$HOOKS_SOURCE"/*; do
   chmod +x "$target"
   echo "  ✅ Installed: $hook_name"
 done
+
+if [ -f "$REVIEW_STAGED_SCRIPT" ]; then
+  chmod +x "$REVIEW_STAGED_SCRIPT"
+  echo "  ✅ Ensured executable: scripts/review-staged.sh"
+fi
 
 echo ""
 echo "Done. Hooks will fire automatically on git operations."

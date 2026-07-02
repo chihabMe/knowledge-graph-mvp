@@ -2,7 +2,7 @@ COMPOSE = docker compose -f infra/compose.infrastructure.yml -f infra/compose.ap
 BACKEND_DIR = apps/backend
 CORE_SERVICES = postgres redis neo4j spicedb django celery-worker
 
-.PHONY: config up up-all down logs migrate django-check test lint format health smoke review review-branch install-hooks
+.PHONY: config up up-all down logs migrate django-check test lint format health smoke review-staged review review-branch install-hooks
 
 config:
 	docker compose -f infra/compose.infrastructure.yml config >/tmp/kg-infra-compose-check.txt
@@ -47,6 +47,11 @@ health:
 
 smoke:
 	$(COMPOSE) exec -T django python -c "import urllib.request; req=urllib.request.Request('http://127.0.0.1:8000/api/tasks/smoke-test/', method='POST'); print(urllib.request.urlopen(req).read().decode())"
+
+# Senior engineer review — reviews staged changes without creating a commit
+review-staged:
+	@chmod +x scripts/hooks/pre-commit scripts/review-staged.sh 2>/dev/null || true
+	bash scripts/review-staged.sh
 
 # Senior engineer review — reviews the last commit
 review:

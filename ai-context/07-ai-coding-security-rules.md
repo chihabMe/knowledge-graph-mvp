@@ -170,6 +170,15 @@ Later required tests:
 
 ## Validation Rules
 
+After making code changes, stage the intended change set and run the review gate:
+
+```bash
+make review-staged
+```
+
+Then read `REVIEW.md`, present the findings to the user, and wait for the user
+to choose whether Codex should fix the findings or ignore them for now.
+
 Before committing code, run the relevant subset:
 
 ```bash
@@ -234,4 +243,3 @@ Do not use extra-high effort for:
 - Neo4j Python driver manual: https://neo4j.com/docs/python-manual/current/
 - Twelve-Factor App config: https://12factor.net/config
 - Ruff configuration: https://docs.astral.sh/ruff/configuration/
-

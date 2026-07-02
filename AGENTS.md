@@ -14,6 +14,57 @@ Before making changes, read these files in order:
 8. `ai-context/07-ai-coding-security-rules.md`
 9. `AGENT_PROJECT_BRIEF.md`
 
+## Post-Change Review Workflow (Run After Code Changes)
+
+After Codex writes code, fixes a bug, or adds a feature, run the review workflow
+before presenting the work as done.
+
+1. Stage only the intended changes:
+
+```bash
+git add <changed-files>
+```
+
+If the review is abandoned or the staged set is wrong, unstage files with
+`git restore --staged <files>` before continuing.
+
+2. Run the two-stage review without creating a commit:
+
+```bash
+make review-staged
+```
+
+If `make review-staged` exits with an error before producing `REVIEW.md`,
+report the raw error output to the user and treat the review as incomplete.
+
+This writes `REVIEW.md` using:
+
+- **Stage 1:** offline static checks from `scripts/hooks/pre-commit`.
+- **Stage 2:** agy/Claude senior engineer review of the staged diff.
+
+3. Read `REVIEW.md` in full.
+
+4. Present the review results to the user:
+   - Critical issues.
+   - Warnings.
+   - AI review verdict.
+   - Proposed action items.
+
+5. Ask the user:
+
+```text
+Do you want me to fix these review findings, or ignore them for now?
+```
+
+6. Wait for the user's explicit answer.
+   - If the user says **fix** → apply the fixes, stage them, and run
+     `make review-staged` again.
+   - If the user says **ignore** → do not fix the findings. Note which review
+     findings remain open. Static critical blockers still cannot be committed
+     unless the user explicitly approves an override.
+
+**Critical rule: Codex must never silently fix or dismiss review findings.**
+
 ## Pre-Commit Review Workflow (Read This Before Every Commit)
 
 This repository has an offline pre-commit hook that acts as a senior engineer
