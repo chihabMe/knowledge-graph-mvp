@@ -2,7 +2,6 @@ services:
   django:
     build:
       context: ../apps/backend
-    container_name: kg-django
     restart: unless-stopped
     env_file:
       - ../.env
@@ -42,7 +41,6 @@ services:
   celery-worker:
     build:
       context: ../apps/backend
-    container_name: kg-celery-worker
     restart: unless-stopped
     env_file:
       - ../.env
@@ -65,7 +63,6 @@ services:
   celery-beat:
     build:
       context: ../apps/backend
-    container_name: kg-celery-beat
     restart: unless-stopped
     env_file:
       - ../.env
@@ -86,4 +83,3 @@ services:
       - scheduler
     networks:
       - kg-private
-

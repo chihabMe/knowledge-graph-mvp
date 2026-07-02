@@ -17,6 +17,15 @@ Use the infrastructure compose file to start supporting services first.
 docker compose -f infra/compose.infrastructure.yml up -d
 ```
 
+Internal databases bind to localhost-only alternate ports by default to avoid collisions with other local projects:
+
+- PostgreSQL: `15432 -> 5432`
+- Redis: `16379 -> 6379`
+- Neo4j HTTP: `17474 -> 7474`
+- Neo4j Bolt: `17687 -> 7687`
+- SpiceDB gRPC: `15051 -> 50051`
+- SpiceDB HTTP: `18443 -> 8443`
+
 Use both compose files when running the application services:
 
 ```bash

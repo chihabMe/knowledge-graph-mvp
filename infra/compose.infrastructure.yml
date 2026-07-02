@@ -3,7 +3,6 @@ name: knowledge-graph-infra
 services:
   traefik:
     image: traefik:v3.3
-    container_name: kg-traefik
     restart: unless-stopped
     command:
       - --providers.docker=true
@@ -26,14 +25,13 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: kg-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-knowledge_graph}
       POSTGRES_USER: ${POSTGRES_USER:-kg_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-postgres-password}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -41,11 +39,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: kg-redis
     restart: unless-stopped
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${REDIS_HOST_PORT:-16379}:6379"
     volumes:
       - redis-data:/data
     networks:
@@ -53,15 +50,14 @@ services:
 
   neo4j:
     image: neo4j:5-community
-    container_name: kg-neo4j
     restart: unless-stopped
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/change-this-neo4j-password}
       NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL:-512m}
       NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-1G}
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "127.0.0.1:${NEO4J_HTTP_HOST_PORT:-17474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_HOST_PORT:-17687}:7687"
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
@@ -70,7 +66,6 @@ services:
 
   spicedb:
     image: ghcr.io/authzed/spicedb:latest
-    container_name: kg-spicedb
     restart: unless-stopped
     command: serve
     depends_on:
@@ -81,14 +76,13 @@ services:
       SPICEDB_DATASTORE_ENGINE: postgres
       SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-kg_user}:${POSTGRES_PASSWORD:-change-this-postgres-password}@postgres:5432/${POSTGRES_DB:-knowledge_graph}?sslmode=disable
     ports:
-      - "50051:50051"
-      - "8443:8443"
+      - "127.0.0.1:${SPICEDB_GRPC_HOST_PORT:-15051}:50051"
+      - "127.0.0.1:${SPICEDB_HTTP_HOST_PORT:-18443}:8443"
     networks:
       - kg-private
 
   spicedb-migrate:
     image: ghcr.io/authzed/spicedb:latest
-    container_name: kg-spicedb-migrate
     restart: "no"
     command: migrate head
     depends_on:
@@ -101,7 +95,6 @@ services:
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: kg-open-webui
     restart: unless-stopped
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-this-webui-secret}
@@ -120,7 +113,6 @@ services:
 
   dozzle:
     image: amir20/dozzle:latest
-    container_name: kg-dozzle
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -136,7 +128,6 @@ services:
 
   uptime-kuma:
     image: louislam/uptime-kuma:1
-    container_name: kg-uptime-kuma
     restart: unless-stopped
     ports:
       - "3001:3001"
