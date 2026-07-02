@@ -1,0 +1,166 @@
+name: knowledge-graph-infra
+
+services:
+  traefik:
+    image: traefik:v3.3
+    container_name: kg-traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --api.dashboard=true
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8088:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-letsencrypt:/letsencrypt
+    networks:
+      - kg-public
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: kg-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-knowledge_graph}
+      POSTGRES_USER: ${POSTGRES_USER:-kg_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-postgres-password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - kg-private
+
+  redis:
+    image: redis:7-alpine
+    container_name: kg-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - kg-private
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: kg-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/change-this-neo4j-password}
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL:-512m}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-1G}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    networks:
+      - kg-private
+
+  spicedb:
+    image: ghcr.io/authzed/spicedb:latest
+    container_name: kg-spicedb
+    restart: unless-stopped
+    command: serve
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: ${SPICEDB_GRPC_PRESHARED_KEY:-change-this-spicedb-key}
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-kg_user}:${POSTGRES_PASSWORD:-change-this-postgres-password}@postgres:5432/${POSTGRES_DB:-knowledge_graph}?sslmode=disable
+    ports:
+      - "50051:50051"
+      - "8443:8443"
+    networks:
+      - kg-private
+
+  spicedb-migrate:
+    image: ghcr.io/authzed/spicedb:latest
+    container_name: kg-spicedb-migrate
+    restart: "no"
+    command: migrate head
+    depends_on:
+      - postgres
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-kg_user}:${POSTGRES_PASSWORD:-change-this-postgres-password}@postgres:5432/${POSTGRES_DB:-knowledge_graph}?sslmode=disable
+    networks:
+      - kg-private
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: kg-open-webui
+    restart: unless-stopped
+    environment:
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-this-webui-secret}
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    networks:
+      - kg-public
+      - kg-private
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.open-webui.rule=Host(`${OPEN_WEBUI_HOST:-ai.localhost}`)
+      - traefik.http.routers.open-webui.entrypoints=web
+      - traefik.http.services.open-webui.loadbalancer.server.port=8080
+
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: kg-dozzle
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "9999:8080"
+    networks:
+      - kg-public
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.dozzle.rule=Host(`${DOZZLE_HOST:-logs.localhost}`)
+      - traefik.http.routers.dozzle.entrypoints=web
+      - traefik.http.services.dozzle.loadbalancer.server.port=8080
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: kg-uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime-kuma-data:/app/data
+    networks:
+      - kg-public
+      - kg-private
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.uptime.rule=Host(`${UPTIME_KUMA_HOST:-uptime.localhost}`)
+      - traefik.http.routers.uptime.entrypoints=web
+      - traefik.http.services.uptime.loadbalancer.server.port=3001
+
+networks:
+  kg-public:
+  kg-private:
+    internal: false
+
+volumes:
+  traefik-letsencrypt:
+  postgres-data:
+  redis-data:
+  neo4j-data:
+  neo4j-logs:
+  open-webui-data:
+  uptime-kuma-data:

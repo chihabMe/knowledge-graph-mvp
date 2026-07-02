@@ -1,0 +1,54 @@
+name: knowledge-graph-app
+
+services:
+  django:
+    build:
+      context: ../backend
+    container_name: kg-django
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - postgres
+      - redis
+      - neo4j
+      - spicedb
+    networks:
+      - kg-public
+      - kg-private
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.django.rule=Host(`${DJANGO_HOST:-api.localhost}`)
+      - traefik.http.routers.django.entrypoints=web
+      - traefik.http.services.django.loadbalancer.server.port=8000
+
+  celery-worker:
+    build:
+      context: ../backend
+    container_name: kg-celery-worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    command: celery -A config worker --loglevel=INFO
+    depends_on:
+      - django
+      - redis
+      - postgres
+    networks:
+      - kg-private
+
+  celery-beat:
+    build:
+      context: ../backend
+    container_name: kg-celery-beat
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    command: celery -A config beat --loglevel=INFO
+    depends_on:
+      - django
+      - redis
+      - postgres
+    networks:
+      - kg-private
+
