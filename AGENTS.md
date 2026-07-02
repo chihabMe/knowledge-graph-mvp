@@ -10,7 +10,9 @@ Before making changes, read these files in order:
 4. `ai-context/03-implementation-rules.md`
 5. `ai-context/04-decisions.md`
 6. `ai-context/05-test-and-acceptance.md`
-7. `AGENT_PROJECT_BRIEF.md`
+7. `ai-context/06-phase-1-execution-plan.md`
+8. `ai-context/07-ai-coding-security-rules.md`
+9. `AGENT_PROJECT_BRIEF.md`
 
 ## Working Rules
 
@@ -30,15 +32,15 @@ Before making changes, read these files in order:
 - `ai-context/`: Canonical markdown files for AI agents.
 - `docs/`: Human-facing docs, API notes, and feature plans.
 - `infra/`: Docker, Traefik, monitoring, and deployment configuration.
-- `backend/`: Existing prototype backend. This is not the final Django backend yet.
+- `apps/backend/`: Target location for the Django backend once implementation starts.
 - `data/import/`: Local sample ingestion files for development and tests.
 - `AGENT_PROJECT_BRIEF.md`: Detailed project brief from the planning phase.
 
 ## Current Architecture Status
 
-The target architecture is Django-based, but the existing backend folder still contains an earlier FastAPI prototype. Do not extend that prototype as the final backend unless the user explicitly asks for a temporary proof of concept.
+The target architecture is Django-based. The previous FastAPI prototype has been removed so the project can start clean.
 
-The next implementation step should be a controlled migration to Django:
+The next implementation step should be a controlled Django foundation build:
 
 1. Create Django project/app structure.
 2. Add DRF APIs.
@@ -46,4 +48,3 @@ The next implementation step should be a controlled migration to Django:
 4. Add Celery tasks.
 5. Connect Neo4j and SpiceDB through service modules.
 6. Add tests around provenance and permission safety.
-
