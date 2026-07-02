@@ -90,7 +90,7 @@ REVIEW_CONTENT=""
 
 if command -v agy &> /dev/null; then
   echo "  Running agy review..."
-  REVIEW_CONTENT=$(agy --no-interactive < "$PROMPT_FILE" 2>/dev/null || echo "")
+  REVIEW_CONTENT=$(agy --print "$(cat "$PROMPT_FILE")" 2>/dev/null || echo "")
 fi
 
 # If agy failed or isn't available, write a manual-review placeholder

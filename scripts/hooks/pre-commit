@@ -55,6 +55,7 @@ add_good()     { GOOD_NOTES+=("$1");      pass "$1"; }
 STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
 STAGED_FILES=$(git diff --cached --name-only 2>/dev/null || true)
 STAGED_PY_FILES=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep '\.py$' || true)
+BACKEND_PY_FILES=$(printf '%s\n' "$STAGED_PY_FILES" | sed -n 's#^apps/backend/##p' || true)
 
 if [ -z "$STAGED_DIFF" ]; then
   echo "Nothing staged. Nothing to review."
@@ -71,17 +72,17 @@ echo -e "  ${CYAN}Files:${RESET} $(echo "$STAGED_FILES" | wc -l | tr -d ' ') sta
 # ─── Check 1: Lint ───────────────────────────────────────────────────────────
 
 section "Python Lint (Ruff)"
-if [ -z "$STAGED_PY_FILES" ]; then
+if [ -z "$BACKEND_PY_FILES" ]; then
   info "No Python files staged — skipping lint."
 else
   if [ -d "$BACKEND_DIR" ]; then
     cd "$BACKEND_DIR"
-    if uv run ruff check $STAGED_PY_FILES 2>&1; then
+    if uv run ruff check $BACKEND_PY_FILES 2>&1; then
       add_good "Ruff lint passed"
     else
       add_critical "Ruff lint failed — run: make lint"
     fi
-    if uv run ruff format --check $STAGED_PY_FILES 2>&1; then
+    if uv run ruff format --check $BACKEND_PY_FILES 2>&1; then
       add_good "Ruff format passed"
     else
       add_warning "Ruff format issues — run: make format"
@@ -213,7 +214,7 @@ fi
 section "Test Suite"
 if [ "${SKIP_TESTS:-0}" = "1" ]; then
   add_warning "Tests skipped (SKIP_TESTS=1) — run make test before merging"
-elif [ -d "$BACKEND_DIR" ] && [ -n "$STAGED_PY_FILES" ]; then
+elif [ -d "$BACKEND_DIR" ] && [ -n "$BACKEND_PY_FILES" ]; then
   cd "$BACKEND_DIR"
   if uv run pytest --tb=short -q 2>&1; then
     add_good "All tests passed"
@@ -300,7 +301,7 @@ APPROVE / APPROVE WITH NOTES / REQUEST CHANGES
 #### Proposed Action Items for Codex
 (numbered list, ordered by priority — these will be shown to the user for approval)"
 
-  AI_REVIEW_TEXT=$(echo "$AI_PROMPT" | agy --no-interactive 2>/dev/null || echo "")
+  AI_REVIEW_TEXT=$(agy --print "$AI_PROMPT" 2>/dev/null || echo "")
 
   if [ -n "$AI_REVIEW_TEXT" ]; then
     echo -e "  ${GREEN}✅ AI review complete${RESET}"
