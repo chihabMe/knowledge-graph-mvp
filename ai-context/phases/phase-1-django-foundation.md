@@ -46,8 +46,8 @@ This phase proves that the project can run as a real service:
 - [x] Add `/api/health/` endpoint. Effort: High.
 - [x] Add Celery smoke task and API endpoint. Effort: High.
 - [x] Add Makefile commands. Effort: Medium.
-- [ ] Run full validation. Effort: Medium.
-- [ ] Commit and push Phase 1 foundation. Effort: Medium.
+- [x] Run full validation. Effort: Medium.
+- [x] Commit and push Phase 1 foundation. Effort: Medium.
 
 ## Validation
 
@@ -60,9 +60,9 @@ Required before Phase 1 is complete:
 - [x] `make migrate`
 - [x] `GET /api/health/` returns controlled dependency status.
 - [x] Celery smoke task can be queued.
-- [ ] `docker compose -f infra/compose.infrastructure.yml config`
+- [x] `docker compose -f infra/compose.infrastructure.yml config`
 - [x] `docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml config`
 
 ## Completion Status
 
-Not started.
+Complete.
