@@ -1,0 +1,89 @@
+services:
+  django:
+    build:
+      context: ../apps/backend
+    container_name: kg-django
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    command:
+      - gunicorn
+      - config.wsgi:application
+      - --bind
+      - 0.0.0.0:8000
+      - --workers
+      - ${DJANGO_GUNICORN_WORKERS:-2}
+      - --timeout
+      - "120"
+    depends_on:
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      neo4j:
+        condition: service_started
+      spicedb:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - kg-public
+      - kg-private
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.django.rule=Host(`${DJANGO_HOST:-api.localhost}`)
+      - traefik.http.routers.django.entrypoints=web
+      - traefik.http.services.django.loadbalancer.server.port=8000
+
+  celery-worker:
+    build:
+      context: ../apps/backend
+    container_name: kg-celery-worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    command:
+      - celery
+      - -A
+      - config
+      - worker
+      - --loglevel=INFO
+    depends_on:
+      django:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_started
+    networks:
+      - kg-private
+
+  celery-beat:
+    build:
+      context: ../apps/backend
+    container_name: kg-celery-beat
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    command:
+      - celery
+      - -A
+      - config
+      - beat
+      - --loglevel=INFO
+    depends_on:
+      django:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_started
+    profiles:
+      - scheduler
+    networks:
+      - kg-private
+
