@@ -44,7 +44,7 @@ This phase proves that the project can run as a real service:
 - [x] Wire Django and Celery into app Compose file. Effort: High.
 - [x] Configure PostgreSQL for Django. Effort: High.
 - [x] Add `/api/health/` endpoint. Effort: High.
-- [ ] Add Celery smoke task and API endpoint. Effort: High.
+- [x] Add Celery smoke task and API endpoint. Effort: High.
 - [ ] Add Makefile commands. Effort: Medium.
 - [ ] Run full validation. Effort: Medium.
 - [ ] Commit and push Phase 1 foundation. Effort: Medium.
@@ -59,7 +59,7 @@ Required before Phase 1 is complete:
 - [ ] `make up`
 - [~] `make migrate`
 - [x] `GET /api/health/` returns controlled dependency status.
-- [ ] Celery smoke task can be queued.
+- [x] Celery smoke task can be queued.
 - [ ] `docker compose -f infra/compose.infrastructure.yml config`
 - [x] `docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml config`
 
