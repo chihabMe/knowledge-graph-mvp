@@ -30,6 +30,7 @@ Before making changes, read these files in order:
 ## Repository Map
 
 - `ai-context/`: Canonical markdown files for AI agents.
+- `ai-context/phases/`: Phase-by-phase implementation trackers with task status and recommended model effort.
 - `docs/`: Human-facing docs, API notes, and feature plans.
 - `infra/`: Docker, Traefik, monitoring, and deployment configuration.
 - `apps/backend/`: Target location for the Django backend once implementation starts.
