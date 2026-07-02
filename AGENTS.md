@@ -37,6 +37,27 @@ Before making changes, read these files in order:
 - `data/import/`: Local sample ingestion files for development and tests.
 - `AGENT_PROJECT_BRIEF.md`: Detailed project brief from the planning phase.
 
+## Graphify Usage
+
+Graphify is used as a local AI navigation tool, not as a runtime dependency.
+
+- Generated Graphify output is ignored by Git.
+- Backend code graph location: `apps/backend/graphify-out/`.
+- For backend architecture questions, run Graphify queries from `apps/backend/`:
+
+```bash
+graphify query "SmokeTaskView HealthView urlpatterns"
+```
+
+- To refresh the backend graph after meaningful backend changes:
+
+```bash
+graphify apps/backend
+graphify cluster-only apps/backend
+```
+
+- A full repository graph requires an LLM API key because the repo contains markdown documentation. Do not run full-repo semantic extraction over client data unless the user explicitly approves the model/backend.
+
 ## Current Architecture Status
 
 The target architecture is Django-based. The previous FastAPI prototype has been removed so the project can start clean.
