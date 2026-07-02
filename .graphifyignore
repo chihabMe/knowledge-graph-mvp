@@ -1,0 +1,13 @@
+.env
+*.env
+apps/backend/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+graphify-out/
+data/import/
+*.key
+*.pem
+*.crt
+*.p12
+service-account*.json

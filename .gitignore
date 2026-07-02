@@ -10,6 +10,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+graphify-out/
 data/import/*
 !data/import/.gitkeep
 neo4j-data/
