@@ -4,6 +4,8 @@
 
 | Layer | Technology | Role |
 | --- | --- | --- |
+| Host environment | Ubuntu VM | Single-customer deployment host |
+| Deployment | Docker Compose | Repeatable per-customer service stack |
 | Chat UI | Open WebUI | User-facing chat interface |
 | Backend | Django + Django REST Framework | API, admin, metadata, orchestration |
 | Background jobs | Celery + Celery Beat | Ingestion, permission sync, indexing, evaluation |
@@ -12,11 +14,11 @@
 | Knowledge graph | Neo4j | Graph entities, relationships, chunks, vector index |
 | Authorization | SpiceDB | Relationship-based permission engine |
 | SpiceDB datastore | PostgreSQL | Persistent SpiceDB datastore |
+| Extraction/indexing | neo4j-graphrag first, with Graphify/Graphiti evaluated behind an adapter | Text extraction, chunking, embeddings, graph extraction |
 | Model gateway | OpenRouter | LLM access |
 | Reverse proxy | Traefik | Routing, TLS, service exposure |
 | Logs | Dozzle | Live Docker logs |
 | Uptime | Uptime Kuma | Health and uptime checks |
-| Deployment | Docker Compose | Single-customer VM deployment |
 
 ## Main Services
 
@@ -113,6 +115,7 @@ User asks question in Open WebUI
 ```text
 Google Drive file/change detected
   -> Celery task downloads/exports content
+  -> Drive metadata, folder ancestry, and sharing metadata stored
   -> text conversion and chunking
   -> extraction into entities/relationships
   -> embeddings generated
@@ -135,4 +138,3 @@ Use Docker Compose for the first customer deployment:
 - `open-webui`
 - `dozzle`
 - `uptime-kuma`
-

@@ -60,9 +60,9 @@ Reason:
 
 Status: Accepted.
 
-## ADR-006: Treat Current FastAPI Backend As Prototype Only
+## ADR-006: FastAPI Prototype Is Not The Target Backend
 
-Decision: Do not extend the current FastAPI backend as the final implementation.
+Decision: The old FastAPI/local-file prototype is not the target implementation. Django + DRF is the canonical backend.
 
 Reason:
 
@@ -71,3 +71,14 @@ Reason:
 
 Status: Accepted.
 
+## ADR-007: Treat Graphify As A Helper, Not The Core Runtime
+
+Decision: Graphify can be evaluated as an extraction or AI-navigation helper, but it should not own the whole ingestion, permission, or retrieval architecture.
+
+Reason:
+
+- The hard part of this project is permission-safe Drive ingestion, provenance, re-indexing, and retrieval filtering.
+- Graphify may help create or inspect graph structure, but the backend must control Drive syncing, source provenance, SpiceDB checks, and Neo4j writes.
+- Keeping extraction behind an adapter lets the project compare `neo4j-graphrag`, Graphify, and Graphiti without locking the architecture too early.
+
+Status: Accepted.

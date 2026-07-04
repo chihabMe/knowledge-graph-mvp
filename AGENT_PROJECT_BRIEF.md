@@ -47,23 +47,25 @@ The business model is service-led:
 - Optional monthly maintenance
 - Client owns the deployment and can move it later
 
-## 3. Current Prototype Boundary
+## 3. Current POC Boundary
 
-The current repo started as a local-file MVP. It already has a FastAPI backend,
-Neo4j integration, local file ingestion, OpenRouter calls, and an
-OpenAI-compatible chat endpoint.
+The current repository is now a Django-based proof-of-concept foundation.
+Phase 0 and Phase 1 established the repository, Docker Compose infrastructure,
+Django + DRF backend, Celery worker, PostgreSQL, Redis, Neo4j, SpiceDB, health
+checks, and repeatable validation commands.
 
-The next real project direction is to evolve it toward the client scope:
+The next real project direction is Phase 2: controlled Google Drive ingestion:
 
 - Google Drive ingestion
+- Drive file, folder, owner/creator, and sharing metadata capture
 - Real provenance metadata
 - SpiceDB permission sync
 - Permission-safe retrieval
 - Open WebUI integration
 - Evaluation and leak tests
 
-Do not treat the current local-file ingestion as the final architecture. It is
-only a test harness and fallback path.
+Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
+DRF + Celery is the canonical backend direction.
 
 ## 4. Core Stack
 
@@ -71,17 +73,20 @@ Use these technologies unless the user explicitly changes the direction:
 
 | Layer | Tool | Purpose |
 | --- | --- | --- |
+| Host environment | Ubuntu VM | Single-customer deployment host |
+| Deployment | Docker Compose | Repeatable isolated service stack |
 | Chat UI | Open WebUI | User-facing chat interface |
 | User login | Google OAuth/OIDC in Open WebUI | User identity must match Google Drive identity |
 | Model gateway | OpenRouter | Hosted LLM access and model flexibility |
-| Backend | Python + FastAPI | Ingestion, retrieval, permission filtering, health endpoints |
+| Backend | Django + Django REST Framework | Ingestion, retrieval, permission filtering, health endpoints, admin, metadata |
+| Background jobs | Celery + Redis | Drive sync, extraction, permission sync, evaluation jobs |
+| App metadata | PostgreSQL | Django models, job state, integration records, evaluation records |
 | Graph store | Neo4j | Graph nodes, relationships, chunks, vector indexes |
 | Extraction/indexing | neo4j-graphrag first | Text extraction, chunking, embeddings, graph extraction |
-| Alternative extraction | Graphify / Graphiti | Consider later if better for incremental graph updates |
+| Alternative extraction/helper | Graphify / Graphiti | Evaluate behind an adapter; do not make either the core architecture by default |
 | Permission engine | SpiceDB | Relationship-based authorization |
 | Permission datastore | Postgres | Persistent SpiceDB datastore |
-| Deployment | Docker Compose | Single-customer isolated VM deployment |
-| Reverse proxy later | Caddy or Traefik | SSL and subdomains |
+| Reverse proxy | Traefik | TLS, routing, and subdomains |
 
 ## 5. High-Level Data Flow
 
@@ -433,94 +438,82 @@ If the answer is restricted or unavailable:
 
 Runs the fixed pilot evaluation set and leak tests.
 
-## 16. Development Phases
+## 16. Implementation Phases
 
-### Phase 0: Low-Budget Technical Prototype
+These are the repository phases tracked in `ai-context/phases/`.
 
-Use this if the budget is around `$900` for 4 weeks.
+### Phase 0: Repository And Infrastructure
 
-Goal:
+Status: complete.
 
-```text
-Prove the core idea, not a production-safe MVP.
-```
+Purpose: create the clean repository baseline, Docker Compose infrastructure,
+Traefik routing structure, monitoring services, and AI-agent documentation.
 
-Includes:
+### Phase 1: Django Backend Foundation
 
-- Docker stack
-- Local files or limited Drive ingestion
-- Basic Neo4j graph
-- Basic retrieval
-- OpenRouter answer generation
-- Simulated permissions
-- Small demo dataset
+Status: complete.
 
-Does not include:
+Purpose: prove the service foundation works before building high-risk Drive,
+graph, and permission features. This includes Django, DRF, PostgreSQL, Redis,
+Celery, Neo4j connectivity, health checks, tests, linting, and Makefile
+commands.
 
-- Production-grade Google Workspace delegation
-- Real full Drive permission inheritance
-- Robust SpiceDB integration
-- Change feed re-indexing
-- Guaranteed leak-proof behavior
-- Full handoff package
+### Phase 2: Google Drive Ingestion
 
-Call this a proof of concept, not the full MVP.
+Status: next.
 
-### Phase 1: Risky Core Prototype
+Purpose: ingest supported Google Drive files and metadata while preserving
+source identity and sync state. This phase must capture Drive file metadata,
+owner/creator metadata, folder ancestry, sharing metadata, source permissions
+version, modified time, and content hash.
 
-Goal:
+### Phase 3: Neo4j Graph And Provenance
 
-```text
-Can we read real Drive content into a graph and keep secrets safe?
-```
+Purpose: build the document, chunk, entity, relationship, and vector
+representation in Neo4j. Evaluate `neo4j-graphrag`, Graphify, and Graphiti
+behind an adapter, then choose based on provenance quality and maturity.
 
-Build:
+Minimum extraction bar: fact-level source attribution must identify which source
+document and chunk produced the fact. Document-level-only provenance is not
+sufficient for permission-safe retrieval unless the retrieval policy uses the
+strict rule requiring all source documents for a graph element to be visible.
 
-- Customer ontology
-- Google Drive connector
-- Neo4j graph extraction
-- Provenance metadata
-- SpiceDB permission model
-- Pre-retrieval permission filter
-- First leak tests
+### Phase 4: SpiceDB Permissions
 
-### Phase 2: Answer Quality Prototype
+Purpose: model Google Drive visibility in SpiceDB and expose allowed-document
+lookup for retrieval. Do not replace this with ad hoc PostgreSQL permission
+checks.
 
-Goal:
+If SpiceDB is unavailable or a document's SpiceDB relationships are not written
+and verified, retrieval must fail closed and return no context for that
+document.
 
-```text
-Can users ask useful questions through Open WebUI?
-```
+### Phase 5: Permission-Safe Retrieval
 
-Build:
+Purpose: answer questions using only Neo4j graph/vector context derived from
+documents the user may see. Restricted facts must not leak through graph paths,
+embeddings, citations, or prompt context.
 
-- Open WebUI integration
-- Hybrid retrieval
-- Source citations
-- OpenRouter answer flow
-- Refusal behavior
+### Phase 6: Open WebUI Integration
 
-### Phase 3: Current And Testable Prototype
+Purpose: expose the backend through Open WebUI and make sure the backend
+receives a trusted Google/OIDC user identity.
 
-Goal:
+### Phase 7: Change Feed And Evaluation
 
-```text
-Can the graph stay current and can we prove it is safe?
-```
+Purpose: keep graph data and permissions current through the Drive change feed,
+and prove safety with repeatable answer-quality and leak tests.
 
-Build:
+### Phase 8: Deployment Handoff
 
-- Drive change feed
-- Incremental re-indexing
-- Permission-only update handling
-- Evaluation runner
-- Handoff docs
-- Basic health checks
+Purpose: make the POC understandable, maintainable, recoverable, and reusable
+for future client implementations.
 
 ## 17. Pricing And Scope Notes
 
-A real permission-safe MVP is likely a 6-8 week build and should not be priced
-like a simple chatbot.
+A real permission-safe implementation is larger than a simple chatbot and
+should be priced according to security, ingestion, retrieval, evaluation, and
+handoff risk.
 
 Approximate client pricing guidance:
 
@@ -529,10 +522,10 @@ Approximate client pricing guidance:
 - Proper first implementation: `$25,000-$45,000`
 - Monthly maintenance: `$500-$1,500/month`
 
-If working with a `$900` budget, agents must keep scope narrow and avoid
-claiming production safety.
+If working with a `$900` budget, agents must keep scope narrow and call it a
+technical proof of concept, not a production-safe implementation.
 
-## 18. Non-Goals For The First MVP
+## 18. Non-Goals For The First POC
 
 Do not build these unless explicitly requested:
 

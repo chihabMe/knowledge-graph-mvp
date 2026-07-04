@@ -27,14 +27,14 @@ If a user cannot access the original document in Google Drive, the AI cannot use
 
 ## Product Boundary
 
-This is not a full SaaS product yet. The first production direction is a single-customer deployment package:
+This is not a full SaaS product yet. The current goal is a client-owned proof of concept deployed as a single-customer package:
 
 - One customer per VM/deployment.
 - No shared datastore across customers.
 - Client owns the deployment.
 - Monthly maintenance can be sold separately.
 
-## First MVP Success Criteria
+## First POC Success Criteria
 
 - Google Drive files can be ingested.
 - Neo4j contains provenance-rich graph data.
@@ -43,4 +43,3 @@ This is not a full SaaS product yet. The first production direction is a single-
 - Open WebUI can ask questions through the backend.
 - Source citations are returned.
 - Leak tests pass.
-

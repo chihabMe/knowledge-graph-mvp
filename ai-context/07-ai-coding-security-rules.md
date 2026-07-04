@@ -42,6 +42,7 @@ Security is not an add-on. Permission filtering and provenance are core product 
 
 - Use environment variables for `SECRET_KEY`, database settings, allowed hosts, debug mode, CORS, CSRF, external URLs, and credentials.
 - `DEBUG` must default to false outside local development.
+- Production and POC server environments must fail closed if `DEBUG=True` is accidentally configured.
 - Never expose stack traces in API responses.
 - Run Django checks during validation.
 - Before production deployment, run:
@@ -64,6 +65,7 @@ python manage.py check --deploy
 - Do not trust `user_email` from request JSON for protected endpoints once authentication is implemented.
 - Use authenticated identity from Google/OIDC/Open WebUI integration when available.
 - Return controlled error messages.
+- Never return stack traces, raw exception messages, service URLs, credentials, prompt context, or document contents in API responses.
 - Do not leak whether a restricted document exists.
 
 ## Celery Rules
@@ -71,11 +73,13 @@ python manage.py check --deploy
 - Tasks must be idempotent wherever possible.
 - Pass primitive IDs and small payloads to tasks.
 - Do not pass Django model instances to tasks.
+- Do not pass raw document text, credentials, API tokens, or full permission payloads through Celery task arguments.
+- Tasks that mutate Drive metadata, Neo4j, or SpiceDB must be safe to retry without duplicating graph facts or permission relationships.
 - Set retry limits for retryable external failures.
 - Use separate queues later for ingestion, permissions, extraction, retrieval, and evaluation if load requires it.
 - Do not store secrets in task payloads.
 - Do not log raw document contents.
-- Use Redis as broker/result backend for the MVP unless a later decision changes this.
+- Use Redis as broker/result backend for the POC unless a later decision changes this.
 
 ## Docker Rules
 
@@ -98,7 +102,8 @@ python manage.py check --deploy
 ## Neo4j Rules
 
 - Use Neo4j for graph data, document/chunk graph representation, entity relationships, graph traversal, and vector retrieval.
-- Every graph node and relationship derived from source material must include provenance.
+- Every graph node, relationship, and chunk derived from source material must include source provenance fields.
+- Required provenance fields are `source_documents`, `source_chunk_ids`, `extraction_run_id`, `confidence`, `created_at`, and `updated_at`.
 - Do not create graph facts without source document references.
 - Use transactions for multi-step graph writes.
 - Do not fetch large graph result sets all at once.
@@ -112,8 +117,21 @@ python manage.py check --deploy
 - Permission checks happen before retrieval.
 - Neo4j retrieval must be filtered to allowed source documents.
 - If provenance is incomplete, default to deny.
+- If SpiceDB is unavailable, retrieval must fail closed and return no graph context.
+- If a document has not been written and verified in SpiceDB, it is not eligible for retrieval.
 - If a graph fact comes from multiple source documents, require all required source documents to be visible unless a later documented policy says otherwise.
 - Add leak tests for every retrieval feature.
+
+## Fail-Closed Checklist
+
+- `DEBUG=True` outside local development -> block startup or deployment.
+- API exception -> return a controlled error response, never a stack trace.
+- SpiceDB unavailable -> return no retrieval context, not all context.
+- Missing source provenance -> exclude the graph record from retrieval.
+- Permission sync failed -> keep the last known safe permission state; do not clear permissions into an allow-all state.
+- Permission metadata exists but SpiceDB relationships are not verified -> document is not retrievable.
+- Partial permission sync failure -> every document touched by the run remains retrieval-ineligible until the run completes and all SpiceDB relationships are verified.
+- Shared-link/public visibility is unknown -> exclude the document from retrieval until explicitly modeled.
 
 ## Google Drive Rules
 
@@ -129,6 +147,7 @@ python manage.py check --deploy
   - Permissions version.
 - Separate content updates from permission-only updates.
 - Do not re-embed documents when only permissions changed.
+- Capture shared-link/domain visibility explicitly.
 - Never log downloaded document content.
 
 ## OpenRouter And LLM Rules

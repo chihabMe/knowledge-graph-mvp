@@ -33,7 +33,7 @@
 
 ## Scope Rules
 
-Do not build these in the first MVP unless explicitly requested:
+Do not build these in the first POC unless explicitly requested:
 
 - Multi-tenant SaaS billing.
 - Custom polished frontend.
@@ -42,4 +42,3 @@ Do not build these in the first MVP unless explicitly requested:
 - Complex custom admin dashboard.
 - Human graph editing UI.
 - Kubernetes deployment.
-

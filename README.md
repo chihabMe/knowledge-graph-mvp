@@ -1,8 +1,8 @@
-# Client-Owned AI Knowledge Graph MVP
+# Client-Owned AI Knowledge Graph POC
 
 This project is a client-owned organizational knowledge graph system.
 
-The target product lets users ask questions through Open WebUI, retrieves context from Google Drive content structured in Neo4j, and enforces source-document visibility before retrieval.
+The proof of concept lets users ask questions through Open WebUI, retrieves context from Google Drive content structured in Neo4j, and enforces source-document visibility before retrieval.
 
 The main success test is permission safety:
 
@@ -12,6 +12,8 @@ Users must not receive facts derived from Google Drive files they cannot access.
 
 ## Current Stack
 
+- Host: Ubuntu VM
+- Deployment: Docker Compose
 - Backend: Django + Django REST Framework
 - Background jobs: Celery
 - Broker/cache: Redis
@@ -111,15 +113,14 @@ Internal services bind to localhost-only alternate ports by default:
 
 ## Current Phase
 
-The project is in Phase 1: Django Backend Foundation.
+Phase 1 is complete. The next implementation phase is Phase 2: Google Drive Ingestion.
 
 Read:
 
-- `ai-context/phases/phase-1-django-foundation.md`
-- `ai-context/06-phase-1-execution-plan.md`
+- `ai-context/phases/phase-2-google-drive-ingestion.md`
+- `docs/google-drive-next.md`
 - `ai-context/07-ai-coding-security-rules.md`
 
 ## Important Rule
 
 Do not build retrieval features that bypass SpiceDB or source-document provenance.
-

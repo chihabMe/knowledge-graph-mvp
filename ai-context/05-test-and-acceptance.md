@@ -1,6 +1,6 @@
 # Test And Acceptance Plan
 
-## MVP Acceptance Criteria
+## POC Acceptance Criteria
 
 - Google Drive files are ingested.
 - Document metadata is stored in PostgreSQL.
@@ -62,4 +62,3 @@
 - PostgreSQL is reachable.
 - Neo4j is reachable.
 - SpiceDB is reachable.
-

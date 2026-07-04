@@ -1,8 +1,8 @@
-# MVP Project Plan
+# POC Project Plan
 
 ## Goal
 
-Build a repeatable client-owned AI knowledge graph system. The client should log into one chat interface, ask questions about their business knowledge, and receive answers grounded in their own documents.
+Build a repeatable client-owned AI knowledge graph proof of concept. The client should log into one chat interface, ask questions about their business knowledge, and receive answers grounded in their own documents.
 
 The critical product requirement is permission safety: users must not receive facts derived from Google Drive files they cannot access.
 
@@ -24,6 +24,8 @@ Google Drive
 
 ## Tech Stack
 
+- Host environment: Ubuntu VM
+- Deployment: Docker Compose
 - Interface: Open WebUI
 - Backend: Django + Django REST Framework
 - Background jobs: Celery
@@ -36,7 +38,7 @@ Google Drive
 - Reverse proxy: Traefik
 - First real ingestion path: Google Drive API
 
-## Version 1 Milestones
+## POC Milestones
 
 ### Milestone 1: Backend Foundation
 
@@ -53,7 +55,7 @@ Google Drive
 - Store Drive connection records.
 - Track sync runs.
 - List supported Drive files.
-- Store file metadata and content hashes in PostgreSQL.
+- Store file metadata, permission metadata, folder ancestry, and content hashes in PostgreSQL.
 
 ### Milestone 3: Content Extraction And Graph Build
 
@@ -62,6 +64,7 @@ Google Drive
 - Chunk documents.
 - Store documents and chunks in Neo4j.
 - Extract entities and relationships.
+- Build extraction behind an adapter boundary before committing to one engine.
 - Preserve provenance on every derived graph element.
 
 ### Milestone 4: SpiceDB Permission Sync
@@ -87,7 +90,7 @@ Google Drive
 - Add maintenance checklist.
 - Add migration docs for moving to another VM.
 
-## What Version 1 Should Not Include
+## What The POC Should Not Include
 
 - Billing.
 - Multi-tenant SaaS admin.

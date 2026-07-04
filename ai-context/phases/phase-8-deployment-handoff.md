@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Make the MVP understandable, maintainable, recoverable, and reusable for future client implementations.
+Make the POC understandable, maintainable, recoverable, and reusable for future client implementations.
 
 ## Scope
 
@@ -38,4 +38,3 @@ Make the MVP understandable, maintainable, recoverable, and reusable for future 
 ## Completion Status
 
 Not started.
-
