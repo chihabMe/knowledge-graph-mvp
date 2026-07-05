@@ -21,3 +21,10 @@ open-webui-data/
 postgres-data/
 redis-data/
 uptime-kuma-data/
+
+# Personal / client reference material - not part of the shared repo
+client-chat.txt
+chat-client.md
+output/
+tmp/
+private/
