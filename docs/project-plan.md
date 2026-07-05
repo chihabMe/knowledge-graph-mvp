@@ -90,6 +90,23 @@ Google Drive
 - Add maintenance checklist.
 - Add migration docs for moving to another VM.
 
+## Delivery Timeline
+
+4–6 week target. The build milestones above map to the 7 work packages defined in the developer scope doc (`output/pdf/organizational-knowledge-graph-developer-scope-v6.pdf`, WP1–WP7). Tracking against work packages directly, not a flattened set of phases, because collapsing them hides real prerequisites (WP6 must be decided before WP1 extraction is finalized) and distinct concerns (WP5 and WP7 are different problems that happen to land in the same week).
+
+- **Week 1 — Foundation + WP6 start (Ontology):** Finalize scope, stand up the backend/Docker foundation, confirm the Google Drive access approach, prepare data models. Begin WP6 — decide entity/relationship types and the provenance visibility rule (any-source-visible vs. all-sources-visible) before extraction is finalized. (Milestone 1, start of Milestone 2)
+- **Week 2 — WP1 (Document Intake & Graph Building), Drive connector half:** Google Drive ingestion — Docs, Sheets, PDFs, metadata, permissions metadata, sync tracking. (Milestone 2 complete)
+- **Week 3 — WP1 continued + WP6 finalized:** Neo4j graph/provenance layer; evaluate the best extraction approach (neo4j-graphrag vs. Graphify/Graphiti); provenance tagging on every node/relationship. Ontology (WP6) locked before this closes. (Milestone 3)
+- **Week 4 — WP4 (Identity & Permissions):** SpiceDB permission modeling (Part B: sync Drive sharing into SpiceDB relationships) and Google OAuth/OIDC login (Part A). Start of the permission pre-filter that WP2 depends on. (Milestone 4, start of Milestone 5)
+- **Week 5 — WP2 (Retrieval Middleware) + WP3 (Hybrid Retrieval + Embeddings):** Open WebUI/OpenRouter integration, permission pre-filter wired into retrieval, embeddings + vector index alongside graph traversal, citations, chat flow testing. (Milestone 5 complete)
+- **Week 6 — WP5 (Change-Driven Re-Indexing) + WP7 (Evaluation):** Two distinct packages, not one cleanup step. WP5: Drive change-feed triggered re-indexing, cheap permission-only refresh, folder/group blind spots closed. WP7: fixed test-question set, leak tests including graph-path probes (not just document probes) — this is what proves WP4 actually holds. Plus deployment/handoff docs. (Milestone 6)
+
+Grouped into 3 delivery phases only for payment tracking (see `private/client-agreement.md` for amounts) — the phase boundary is a billing convenience, the work package list above is the real plan:
+
+- **Phase 1 (Weeks 1–3):** Foundation, WP6 Ontology, WP1 Document Intake & Graph Building.
+- **Phase 2 (Weeks 4–5):** WP4 Identity & Permissions, WP2 Retrieval Middleware, WP3 Hybrid Retrieval + Embeddings.
+- **Phase 3 (Week 6):** WP5 Change-Driven Re-Indexing, WP7 Evaluation, deployment/handoff.
+
 ## What The POC Should Not Include
 
 - Billing.
