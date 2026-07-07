@@ -133,6 +133,19 @@ To reinstall the hook after a fresh clone:
 make install-hooks
 ```
 
+## Daily Report (Write Before Ending A Work Session)
+
+Before the final commit of a work session, write or update
+`docs/daily-reports/YYYY-MM-DD.md` (today's date). Keep it short and factual:
+
+- **What changed** — the commits/work of the day, one line each.
+- **Decisions** — anything a future agent or the client would need to know.
+- **Next steps** — where the next session should start.
+
+If a report for today already exists, append to it instead of overwriting.
+This is the running project journal; the phase trackers hold task status, the
+daily report holds the narrative.
+
 ## Working Rules
 
 - Do not treat this as a normal chatbot project. The core product is permission-safe retrieval over a Google Drive-backed knowledge graph.

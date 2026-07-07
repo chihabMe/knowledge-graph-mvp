@@ -22,6 +22,11 @@ by SpiceDB **before** any context reaches the LLM.
 Read `AGENTS.md` — it is the entry point for agents and defines the required
 reading order, the pre-commit review workflow, and the working rules.
 
+## End Of Session
+
+Before the final commit of a work session, write/update the daily report in
+`docs/daily-reports/YYYY-MM-DD.md` — format and rules are in `AGENTS.md`.
+
 ## Pointers (do not duplicate facts here)
 
 - Current phase status: `ai-context/phases/` trackers and `README.md`.
