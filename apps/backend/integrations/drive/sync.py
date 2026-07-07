@@ -97,9 +97,11 @@ def sync_drive_metadata(
         run.skipped_files = skipped_files
     except Exception as exc:
         run.status = DriveSyncRun.Status.FAILED
-        # Exception class + message only — safe to store (no Drive file
-        # contents, no credentials) and enough to debug an incident.
-        run.error_summary = f"{type(exc).__name__}: {exc}"[:512]
+        # Class name only. str(exc) is content-controlled (an HttpError can
+        # embed the request URI and response body, i.e. Drive metadata) and
+        # this row is a persistence sink, so the message must not be stored.
+        # The exception is re-raised — full detail stays with the caller.
+        run.error_summary = f"{type(exc).__module__}.{type(exc).__name__}"[:512]
         raise
     finally:
         run.finished_at = timezone.now()

@@ -72,23 +72,14 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# Test runs (pytest or manage.py test) fall back to SQLite unless the caller
-# explicitly exported DATABASE_URL. This is the single test-DB mechanism —
-# settings load before pytest conftest files, so a conftest cannot set it.
-if management_commands.intersection({"test", "pytest"}) and not database_url_from_environment:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "test.sqlite3",
-        }
-    }
-else:
-    DATABASES = {
-        "default": env.db(
-            "DATABASE_URL",
-            default="postgres://kg_user:change-this-postgres-password@postgres:5432/knowledge_graph",
-        )
-    }
+# Tests use config.settings_test (selected in pyproject.toml), which overrides
+# DATABASES with in-memory SQLite — no argv sniffing, no conftest env tricks.
+DATABASES = {
+    "default": env.db(
+        "DATABASE_URL",
+        default="postgres://kg_user:change-this-postgres-password@postgres:5432/knowledge_graph",
+    )
+}
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
