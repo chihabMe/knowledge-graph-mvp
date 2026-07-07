@@ -84,27 +84,36 @@ def sync_drive_metadata(
                     .first()
                 )
 
+                content_stage_active = content_exporter is not None and not exclusion_reason
+                defaults = {
+                    "title": file_metadata.title,
+                    "mime_type": file_metadata.mime_type,
+                    "drive_url": file_metadata.drive_url,
+                    "created_time": file_metadata.created_time,
+                    "modified_time": file_metadata.modified_time,
+                    "last_metadata_sync_time": timezone.now(),
+                    "content_hash": file_metadata.content_hash,
+                    "folder_path": file_metadata.folder_path,
+                    "parent_folder_ids": file_metadata.parent_folder_ids,
+                    "shared_drive_id": file_metadata.shared_drive_id,
+                    "owner_email": file_metadata.owner_email,
+                    "creator_email": file_metadata.creator_email,
+                    "source_permissions_version": permissions_version,
+                    "last_permission_sync_time": timezone.now(),
+                    "retrieval_eligible": False,
+                    "exclusion_reason": exclusion_reason,
+                }
+                if content_stage_active:
+                    # The content stage owns content_hash (sha256 of exported
+                    # bytes). Drive's md5Checksum is absent for Google-native
+                    # files, so writing it here would wipe the stored hash on
+                    # every re-sync of an unchanged Doc/Sheet.
+                    del defaults["content_hash"]
+
                 document, _created = SourceDocument.objects.update_or_create(
                     connection=connection,
                     drive_file_id=file_metadata.drive_file_id,
-                    defaults={
-                        "title": file_metadata.title,
-                        "mime_type": file_metadata.mime_type,
-                        "drive_url": file_metadata.drive_url,
-                        "created_time": file_metadata.created_time,
-                        "modified_time": file_metadata.modified_time,
-                        "last_metadata_sync_time": timezone.now(),
-                        "content_hash": file_metadata.content_hash,
-                        "folder_path": file_metadata.folder_path,
-                        "parent_folder_ids": file_metadata.parent_folder_ids,
-                        "shared_drive_id": file_metadata.shared_drive_id,
-                        "owner_email": file_metadata.owner_email,
-                        "creator_email": file_metadata.creator_email,
-                        "source_permissions_version": permissions_version,
-                        "last_permission_sync_time": timezone.now(),
-                        "retrieval_eligible": False,
-                        "exclusion_reason": exclusion_reason,
-                    },
+                    defaults=defaults,
                 )
                 DrivePermissionSnapshot.objects.update_or_create(
                     source_document=document,
@@ -117,7 +126,7 @@ def sync_drive_metadata(
                     },
                 )
 
-                if content_exporter is not None and not exclusion_reason:
+                if content_stage_active:
                     if _needs_content_refresh(document, previous_modified_time):
                         _store_content(document, file_metadata, content_exporter)
                         extraction_candidates.append(document.pk)
@@ -150,7 +159,9 @@ def sync_drive_metadata(
         )
 
     # Queue extraction only after the transaction committed, so a rolled-back
-    # sync can never leave queued jobs pointing at missing rows.
+    # sync can never leave queued jobs pointing at missing rows. A mid-batch
+    # failure cannot reach this line: the except block above re-raises, which
+    # exits the function before any queueing happens (covered by test).
     if queue_extraction is not None:
         for document_id in extraction_candidates:
             queue_extraction(document_id)

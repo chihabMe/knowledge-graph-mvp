@@ -19,17 +19,9 @@ def export_file_content(service, *, drive_file_id: str, mime_type: str) -> tuple
     """Return (content_bytes, effective_mime_type) for one Drive file."""
     export_mime = GOOGLE_EXPORT_MIME_TYPES.get(mime_type)
     if export_mime:
-        data = (
-            service.files()
-            .export(fileId=drive_file_id, mimeType=export_mime)
-            .execute()
-        )
+        data = service.files().export(fileId=drive_file_id, mimeType=export_mime).execute()
         return _as_bytes(data), export_mime
-    data = (
-        service.files()
-        .get_media(fileId=drive_file_id, supportsAllDrives=True)
-        .execute()
-    )
+    data = service.files().get_media(fileId=drive_file_id, supportsAllDrives=True).execute()
     return _as_bytes(data), mime_type
 
 
@@ -40,4 +32,9 @@ def content_sha256(data: bytes) -> str:
 def _as_bytes(data) -> bytes:
     if isinstance(data, bytes):
         return data
-    return str(data).encode("utf-8")
+    if isinstance(data, str):
+        return data.encode("utf-8")
+    # Fail closed: silently storing str(data) would poison the stored content
+    # and its hash. Type name only — the payload itself must never leak into
+    # an exception message.
+    raise TypeError(f"Unexpected Drive content payload type: {type(data).__name__}")

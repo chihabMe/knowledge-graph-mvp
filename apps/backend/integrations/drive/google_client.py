@@ -61,6 +61,10 @@ class GoogleDriveMetadataClient:
         root_name = self._folder_name(service, root_id, connection)
         pending_folders: list[tuple[str, str]] = [(root_id, f"/{root_name}")]
         seen_folders = {root_id}
+        # A multi-parented file is listed under each of its parents inside the
+        # scanned scope; emit it once (first path wins) so it is never stored,
+        # exported, or queued for extraction twice in one run.
+        seen_files: set[str] = set()
 
         while pending_folders:
             folder_id, folder_path = pending_folders.pop(0)
@@ -72,6 +76,9 @@ class GoogleDriveMetadataClient:
                             (entry["id"], f"{folder_path}/{entry.get('name', '')}")
                         )
                     continue
+                if entry["id"] in seen_files:
+                    continue
+                seen_files.add(entry["id"])
                 permissions = self._list_permissions(service, entry["id"])
                 files.append(self._to_metadata(entry, folder_path, permissions))
 

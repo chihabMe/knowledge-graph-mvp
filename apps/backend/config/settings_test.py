@@ -19,3 +19,10 @@ DATABASES = {
 # Tests must never reach live services: Celery tasks run inline and raise.
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
+
+# In-process cache so throttle tests never need a Redis instance.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    }
+}

@@ -19,6 +19,7 @@ from integrations.models import (
     SourceDocument,
     SourceDocumentContent,
 )
+from integrations.tasks import run_drive_sync
 
 
 class FakeDriveMetadataClient:
@@ -353,6 +354,20 @@ class GoogleDriveMetadataClientTests(TestCase):
             ["perm-1", "perm-2"],
         )
 
+    def test_multi_parented_files_are_emitted_once(self):
+        entry = _file_entry("file-1", "Shared.pdf", parents=["folder-root", "folder-sub"])
+        service = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [[_folder_entry("folder-sub", "Reports"), entry]],
+                "folder-sub": [[entry]],
+            },
+        )
+
+        files = GoogleDriveMetadataClient(service=service).list_files(self._folder_connection())
+
+        self.assertEqual([item.drive_file_id for item in files], ["file-1"])
+
     def test_shared_drive_scope_roots_the_walk_at_the_drive(self):
         connection = DriveConnection.objects.create(
             workspace_domain="example.com",
@@ -457,6 +472,12 @@ class ExportFileContentTests(SimpleTestCase):
         self.assertEqual(data, b"%PDF-1.7 fake")
         self.assertEqual(mime, "application/pdf")
 
+    def test_unexpected_payload_types_raise_instead_of_storing_a_repr(self):
+        service = FakeGoogleDriveService(media_data={"pdf-1": {"unexpected": "dict"}})
+
+        with self.assertRaises(TypeError):
+            export_file_content(service, drive_file_id="pdf-1", mime_type="application/pdf")
+
     def test_content_sha256_matches_hashlib(self):
         self.assertEqual(content_sha256(b"payload"), hashlib.sha256(b"payload").hexdigest())
 
@@ -554,6 +575,23 @@ class DriveContentSyncTests(TestCase):
 
         self.assertEqual(exporter.calls, ["drive-file-1", "drive-file-1"])
         self.assertEqual(len(queued), 2)
+
+    def test_second_sync_of_unchanged_doc_keeps_the_exported_content_hash(self):
+        # Google-native files carry no md5Checksum, so metadata upserts must
+        # not wipe the sha256 the content stage stored on the first sync.
+        exporter = FakeContentExporter()
+        client = FakeDriveMetadataClient([self._doc_metadata(datetime(2026, 7, 2, tzinfo=UTC))])
+        expected_hash = hashlib.sha256(b"exported-bytes").hexdigest()
+
+        for _ in range(2):
+            sync_drive_metadata(
+                connection=self.connection,
+                client=client,
+                content_exporter=exporter,
+                queue_extraction=lambda document_id: None,
+            )
+            document = SourceDocument.objects.get(drive_file_id="drive-file-1")
+            self.assertEqual(document.content_hash, expected_hash)
 
     def test_sync_never_exports_excluded_files(self):
         exporter = FakeContentExporter()
@@ -689,3 +727,74 @@ class DriveSyncApiTests(TestCase):
             self.assertEqual(self.client.post("/api/ingest/drive/sync/").status_code, 202)
 
         self.assertEqual(self.client.post("/api/ingest/drive/sync/").status_code, 429)
+
+
+class RunDriveSyncTaskTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-root",
+        )
+        self.run = DriveSyncRun.create_for_connection(self.connection)
+
+    @patch("integrations.tasks.build_drive_service")
+    def test_task_syncs_metadata_and_content_through_one_service(self, mock_build):
+        mock_build.return_value = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [
+                    [
+                        _file_entry(
+                            "doc-1",
+                            "Notes",
+                            parents=["folder-root"],
+                            mime_type="application/vnd.google-apps.document",
+                            modifiedTime="2026-07-02T11:30:00Z",
+                        )
+                    ]
+                ],
+            },
+            permission_pages={
+                "doc-1": [
+                    [
+                        {
+                            "id": "perm-1",
+                            "type": "user",
+                            "role": "reader",
+                            "emailAddress": "a@example.com",
+                        }
+                    ]
+                ],
+            },
+            export_data={"doc-1": "hello"},
+        )
+
+        result = run_drive_sync(self.run.pk)
+
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.status, DriveSyncRun.Status.SUCCEEDED)
+        self.assertEqual(self.run.stored_files, 1)
+        document = SourceDocument.objects.get(drive_file_id="doc-1")
+        self.assertEqual(bytes(document.content.content), b"hello")
+        self.assertFalse(document.retrieval_eligible)
+        self.assertEqual(result["status"], DriveSyncRun.Status.SUCCEEDED)
+
+    @patch("integrations.tasks.build_drive_service", side_effect=RuntimeError("boom"))
+    def test_setup_failure_marks_the_audit_run_failed(self, _mock_build):
+        with self.assertRaises(RuntimeError):
+            run_drive_sync(self.run.pk)
+
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.status, DriveSyncRun.Status.FAILED)
+        self.assertEqual(self.run.error_summary, "builtins.RuntimeError")
+        self.assertIsNotNone(self.run.finished_at)
+
+    @patch("integrations.tasks.build_drive_service")
+    def test_finished_runs_are_never_reexecuted(self, mock_build):
+        self.run.status = DriveSyncRun.Status.SUCCEEDED
+        self.run.save(update_fields=["status"])
+
+        result = run_drive_sync(self.run.pk)
+
+        mock_build.assert_not_called()
+        self.assertEqual(result["status"], DriveSyncRun.Status.SUCCEEDED)

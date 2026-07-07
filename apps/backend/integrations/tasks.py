@@ -1,4 +1,5 @@
 from celery import shared_task
+from django.utils import timezone
 
 from integrations.drive.export import export_file_content
 from integrations.drive.google_client import (
@@ -18,10 +19,23 @@ def run_drive_sync(run_id: int) -> dict[str, int | str]:
     its status/counters and stores only an exception class name on failure.
     """
     run = DriveSyncRun.objects.select_related("connection").get(pk=run_id)
+    if run.status != DriveSyncRun.Status.QUEUED:
+        # Celery redelivery or a duplicate dispatch must never re-execute a
+        # run and overwrite its audit counters/timestamps.
+        return {"run_id": run.pk, "status": run.status}
     connection = run.connection
 
-    # One authenticated service shared by the metadata walk and the exporter.
-    service = build_drive_service(connection)
+    try:
+        # One authenticated service shared by the metadata walk and the exporter.
+        service = build_drive_service(connection)
+    except Exception as exc:
+        # Without this, a bad credential file would leave the audit row
+        # stuck in QUEUED forever. Class name only, as everywhere else.
+        run.status = DriveSyncRun.Status.FAILED
+        run.error_summary = f"{type(exc).__module__}.{type(exc).__name__}"[:512]
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "error_summary", "finished_at"])
+        raise
     client = GoogleDriveMetadataClient(service=service)
 
     def content_exporter(file_metadata):
