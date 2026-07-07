@@ -103,6 +103,8 @@ class DrivePermissionSnapshot(models.Model):
         related_name="permission_snapshot",
     )
     source_permissions_version = models.CharField(max_length=64)
+    # SECURITY: contains the raw Drive permission entries, including client
+    # email addresses. Never expose via an API serializer and never log it.
     raw_permissions = models.JSONField(default=list, blank=True)
     has_public_link = models.BooleanField(default=False)
     has_domain_visibility = models.BooleanField(default=False)

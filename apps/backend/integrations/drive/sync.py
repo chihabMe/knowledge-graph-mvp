@@ -24,6 +24,8 @@ SUPPORTED_MIME_TYPES = {
 }
 
 
+# TODO: the future Celery task wrapper must accept connection_id (a primitive
+# int) and load the model itself — never pass model instances to tasks.
 def sync_drive_metadata(
     *,
     connection: DriveConnection,
@@ -93,9 +95,11 @@ def sync_drive_metadata(
         run.total_files = len(files)
         run.stored_files = stored_files
         run.skipped_files = skipped_files
-    except Exception:
+    except Exception as exc:
         run.status = DriveSyncRun.Status.FAILED
-        run.error_summary = "Drive metadata sync failed."
+        # Exception class + message only — safe to store (no Drive file
+        # contents, no credentials) and enough to debug an incident.
+        run.error_summary = f"{type(exc).__name__}: {exc}"[:512]
         raise
     finally:
         run.finished_at = timezone.now()

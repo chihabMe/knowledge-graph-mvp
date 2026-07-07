@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BASE_DIR.parent.parent
@@ -71,6 +72,9 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
+# Test runs (pytest or manage.py test) fall back to SQLite unless the caller
+# explicitly exported DATABASE_URL. This is the single test-DB mechanism —
+# settings load before pytest conftest files, so a conftest cannot set it.
 if management_commands.intersection({"test", "pytest"}) and not database_url_from_environment:
     DATABASES = {
         "default": {
@@ -126,5 +130,12 @@ GOOGLE_WORKSPACE_DOMAIN = env("GOOGLE_WORKSPACE_DOMAIN", default="")
 GOOGLE_SERVICE_ACCOUNT_FILE = env("GOOGLE_SERVICE_ACCOUNT_FILE", default="")
 GOOGLE_DRIVE_DELEGATED_SUBJECT = env("GOOGLE_DRIVE_DELEGATED_SUBJECT", default="")
 GOOGLE_DRIVE_SCOPE_TYPE = env("GOOGLE_DRIVE_SCOPE_TYPE", default="folder")
+# Must stay in sync with integrations.models.DriveConnection.ScopeType (models
+# can't be imported here). Fail at startup, not at the first model save.
+if GOOGLE_DRIVE_SCOPE_TYPE not in {"folder", "shared_drive"}:
+    raise ImproperlyConfigured(
+        f"GOOGLE_DRIVE_SCOPE_TYPE must be 'folder' or 'shared_drive', "
+        f"got {GOOGLE_DRIVE_SCOPE_TYPE!r}."
+    )
 GOOGLE_DRIVE_ROOT_ID = env("GOOGLE_DRIVE_ROOT_ID", default="")
 GOOGLE_SHARED_DRIVE_ID = env("GOOGLE_SHARED_DRIVE_ID", default="")
