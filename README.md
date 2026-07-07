@@ -115,7 +115,7 @@ Internal services bind to localhost-only alternate ports by default:
 
 ## Current Phase
 
-Phase 1 is complete. The next implementation phase is Phase 2: Google Drive Ingestion.
+Phase 1 is complete. Phase 2, Google Drive ingestion, is in progress.
 
 Read:
 

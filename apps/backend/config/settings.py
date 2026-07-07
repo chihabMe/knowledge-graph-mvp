@@ -1,5 +1,6 @@
 """Django settings for the knowledge graph backend."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ env = environ.Env(
 )
 
 env_file = REPO_ROOT / ".env"
+database_url_from_environment = "DATABASE_URL" in os.environ
 if env_file.exists():
     environ.Env.read_env(env_file)
 
@@ -69,12 +71,20 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {
-    "default": env.db(
-        "DATABASE_URL",
-        default="postgres://kg_user:change-this-postgres-password@postgres:5432/knowledge_graph",
-    )
-}
+if management_commands.intersection({"test", "pytest"}) and not database_url_from_environment:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "test.sqlite3",
+        }
+    }
+else:
+    DATABASES = {
+        "default": env.db(
+            "DATABASE_URL",
+            default="postgres://kg_user:change-this-postgres-password@postgres:5432/knowledge_graph",
+        )
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -111,3 +121,10 @@ CELERY_TIMEZONE = TIME_ZONE
 NEO4J_URI = env("NEO4J_URI", default="bolt://neo4j:7687")
 NEO4J_USER = env("NEO4J_USER", default="neo4j")
 NEO4J_PASSWORD = env("NEO4J_PASSWORD", default="change-this-neo4j-password")
+
+GOOGLE_WORKSPACE_DOMAIN = env("GOOGLE_WORKSPACE_DOMAIN", default="")
+GOOGLE_SERVICE_ACCOUNT_FILE = env("GOOGLE_SERVICE_ACCOUNT_FILE", default="")
+GOOGLE_DRIVE_DELEGATED_SUBJECT = env("GOOGLE_DRIVE_DELEGATED_SUBJECT", default="")
+GOOGLE_DRIVE_SCOPE_TYPE = env("GOOGLE_DRIVE_SCOPE_TYPE", default="folder")
+GOOGLE_DRIVE_ROOT_ID = env("GOOGLE_DRIVE_ROOT_ID", default="")
+GOOGLE_SHARED_DRIVE_ID = env("GOOGLE_SHARED_DRIVE_ID", default="")

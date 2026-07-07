@@ -54,7 +54,10 @@ Phase 0 and Phase 1 established the repository, Docker Compose infrastructure,
 Django + DRF backend, Celery worker, PostgreSQL, Redis, Neo4j, SpiceDB, health
 checks, and repeatable validation commands.
 
-The next real project direction is Phase 2: controlled Google Drive ingestion:
+Phase 2 is now in progress: controlled Google Drive ingestion. The current
+foundation includes Drive configuration settings, PostgreSQL metadata/sync
+models, source permission version hashing, and mocked metadata-sync tests.
+Remaining Phase 2 work includes:
 
 - Google Drive ingestion
 - Drive file, folder, owner/creator, and sharing metadata capture
@@ -460,12 +463,15 @@ commands.
 
 ### Phase 2: Google Drive Ingestion
 
-Status: next.
+Status: in progress.
 
 Purpose: ingest supported Google Drive files and metadata while preserving
 source identity and sync state. This phase must capture Drive file metadata,
 owner/creator metadata, folder ancestry, sharing metadata, source permissions
 version, modified time, and content hash.
+
+Current foundation: Drive configuration settings, PostgreSQL metadata/sync
+models, source permission version hashing, and mocked metadata-sync tests.
 
 ### Phase 3: Neo4j Graph And Provenance
 

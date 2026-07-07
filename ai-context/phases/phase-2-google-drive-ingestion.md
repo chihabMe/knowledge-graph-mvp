@@ -40,7 +40,7 @@ be detected without re-downloading or re-embedding file content.
 
 ## Tasks
 
-- [ ] Add Google Drive credential configuration. Effort: Extra High.
+- [~] Add Google Drive credential configuration. Effort: Extra High.
 - [ ] Build Drive folder scanner. Effort: High.
 - [ ] Fetch file metadata. Effort: High.
 - [ ] Fetch owner/creator metadata. Effort: High.
@@ -48,15 +48,15 @@ be detected without re-downloading or re-embedding file content.
 - [ ] Fetch raw sharing and permission metadata. Effort: Extra High.
 - [ ] Export Google Docs and Sheets. Effort: High.
 - [ ] Download PDFs and uploaded files. Effort: High.
-- [ ] Store document metadata in PostgreSQL. Effort: High.
-- [ ] Add `retrieval_eligible = False` default field to source document records. Effort: Extra High.
-- [ ] Store permission metadata and source permissions version. Effort: Extra High.
-- [ ] Store controlled exclusion reasons for shared-link/public files in Phase 2. Effort: High.
-- [ ] Track content hash and modified time. Effort: High.
+- [~] Store document metadata in PostgreSQL. Effort: High.
+- [x] Add `retrieval_eligible = False` default field to source document records. Effort: Extra High.
+- [~] Store permission metadata and source permissions version. Effort: Extra High.
+- [~] Store controlled exclusion reasons for shared-link/public files in Phase 2. Effort: High.
+- [~] Track content hash and modified time. Effort: High.
 - [ ] Queue extraction jobs. Effort: High.
 - [ ] Write audit record with user identity, timestamp, and configured scope whenever sync is triggered via API. Effort: High.
-- [ ] Add ingestion tests. Effort: High.
-- [ ] Add permission metadata storage and `source_permissions_version` tests. Effort: Extra High.
+- [~] Add ingestion tests. Effort: High.
+- [~] Add permission metadata storage and `source_permissions_version` tests. Effort: Extra High.
 - [ ] Add test that `POST /api/ingest/drive/sync/` ignores request-body Drive scope and uses server-side configuration only. Effort: Extra High.
 - [ ] Add test that unverified documents remain retrieval-ineligible. Effort: Extra High.
 
@@ -70,11 +70,14 @@ be detected without re-downloading or re-embedding file content.
 - [ ] Metadata includes owner/creator, folder ancestry, sharing metadata, and source permissions version.
 - [ ] Permission metadata can be refreshed without downloading or re-embedding file content.
 - [ ] `source_permissions_version` changes when Drive permissions change and stays stable when only fetch time changes.
-- [ ] Source documents default to `retrieval_eligible = False`.
-- [ ] Public/shared-link files are excluded from retrieval in Phase 2 with a stored reason.
+- [x] Source documents default to `retrieval_eligible = False`.
+- [~] Public/shared-link files are excluded from retrieval in Phase 2 with a stored reason.
 - [ ] Sync trigger audit records include actor identity, timestamp, and configured scope.
 - [ ] Ingestion API ignores Drive scope/folder values from request bodies.
 
 ## Completion Status
 
-Not started.
+In progress. Initial Drive configuration, PostgreSQL metadata/sync models,
+source permission version hashing, controlled public-link exclusion, and mocked
+metadata-sync tests are in place. Real Drive API calls, folder scanning,
+content export/download, API endpoints, and Celery queueing are still pending.
