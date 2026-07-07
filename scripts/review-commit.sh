@@ -126,6 +126,9 @@ fi
 
 if [ -z "$REVIEW_CONTENT" ] && command -v agy &> /dev/null; then
   echo "  Running agy review..."
+  # Mark the boundary so a reader of the stderr tail can tell the two engines'
+  # errors apart instead of seeing one blended blob.
+  [ -s "$AI_ERR_FILE" ] && printf '\n--- claude stderr above; agy stderr below ---\n' >> "$AI_ERR_FILE"
   set +e
   REVIEW_CONTENT=$(run_with_timeout agy --print "$(cat "$PROMPT_FILE")")
   AI_STATUS=$?

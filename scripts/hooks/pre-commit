@@ -365,6 +365,9 @@ APPROVE / APPROVE WITH NOTES / REQUEST CHANGES
   # If claude produced no usable output, fall back to agy before giving up.
   if [ -z "$AI_REVIEW_TEXT" ] && [ "$AI_ENGINE" = "claude" ] && command -v agy &> /dev/null; then
     echo -e "  ${YELLOW}⚠️  claude produced no usable output (exit $AI_STATUS) — falling back to agy...${RESET}"
+    # Mark the boundary so a reader of the stderr tail can tell the two engines'
+    # errors apart instead of seeing one blended blob.
+    printf '\n--- claude stderr above; agy stderr below ---\n' >> "$AI_ERR_FILE"
     AI_ENGINE="agy"
     set +e
     AI_REVIEW_TEXT=$(run_ai_engine "$AI_ENGINE" "$AI_PROMPT")
@@ -400,19 +403,25 @@ fi
 
 # Parse the AI verdict. Scope to the lines right after the Verdict heading —
 # grepping the whole review body would also match verdict strings quoted in the
-# reviewed diff itself. Lines with " / " are dropped so an echoed template line
-# ("APPROVE / APPROVE WITH NOTES / REQUEST CHANGES") can't be mistaken for a
-# verdict. The alternation is ordered so APPROVE WITH NOTES wins over its
-# APPROVE prefix.
+# reviewed diff itself. Lines that list every option — both the " / "-delimited
+# form ("APPROVE / APPROVE WITH NOTES / REQUEST CHANGES") and the " | "-delimited
+# form ("✅ APPROVE | 🔄 APPROVE WITH NOTES | ❌ REQUEST CHANGES") — are dropped so
+# an echoed template line can't be mistaken for a verdict. The alternation is
+# ordered so APPROVE WITH NOTES wins over its APPROVE prefix.
 AI_VERDICT=$(echo "$AI_REVIEW_TEXT" \
   | grep -A3 -m1 -iP '^#+\s*Verdict' \
-  | grep -v ' / ' \
+  | grep -vP ' / | \| ' \
   | grep -m1 -ioP 'REQUEST CHANGES|APPROVE WITH NOTES|APPROVE' \
   | tr '[:lower:]' '[:upper:]' \
   || true)
 # A completed review with no parseable verdict must not silently pass as clean.
 if [ "$AI_REVIEW_SUCCEEDED" = "1" ] && [ -z "$AI_VERDICT" ]; then
   add_warning "AI review ran but produced no parseable verdict — read Stage 2 and judge manually"
+  # Fail closed: if the operator opted into AI blocking, an unparseable verdict
+  # must block rather than silently pass — that is the whole point of the flag.
+  if [ "${REVIEW_AI_BLOCK:-0}" = "1" ]; then
+    add_critical "REVIEW_AI_BLOCK=1 but the AI verdict could not be parsed — blocking (fail closed). Read Stage 2 and commit with SKIP_REVIEW=1 only if you have judged it safe."
+  fi
 fi
 
 # ─── Write REVIEW.md ─────────────────────────────────────────────────────────
