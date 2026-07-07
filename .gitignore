@@ -13,6 +13,12 @@ __pycache__/
 graphify-out/
 data/import/*
 !data/import/.gitkeep
+
+# Evaluation dataset: keep the synthetic .example templates, ignore real client content
+data/eval/*.yaml
+!data/eval/*.example.yaml
+data/eval/*.yml
+!data/eval/*.example.yml
 # Auto-generated review file
 REVIEW.md
 
@@ -21,6 +27,10 @@ open-webui-data/
 postgres-data/
 redis-data/
 uptime-kuma-data/
+
+# Local Claude Code settings (permission allowlists, absolute paths) and their
+# crash/interrupt temp files — must never be committed
+.claude/settings.local.json*
 
 # Personal / client reference material - not part of the shared repo
 client-chat.txt

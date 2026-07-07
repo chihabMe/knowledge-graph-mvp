@@ -23,6 +23,7 @@ Build a graph representation of documents, chunks, entities, and relationships w
 ## Tasks
 
 - [ ] Define initial graph schema. Effort: High.
+- [ ] Ship the ontology as code: a constants module declaring the allowed entity and relationship types, plus a test that fails when extraction produces an undeclared type. Effort: High.
 - [ ] Evaluate `neo4j-graphrag`, Graphify, and Graphiti for provenance support. Effort: Extra High.
 - [ ] Create an extraction adapter boundary before committing to one engine. Effort: High.
 - [ ] Add Neo4j migration/setup command. Effort: High.
@@ -41,6 +42,7 @@ Build a graph representation of documents, chunks, entities, and relationships w
 - [ ] Queries can filter by allowed source document IDs.
 - [ ] Missing provenance defaults to unusable for retrieval.
 - [ ] Extraction engine choice documents fact-level vs document-level provenance support.
+- [ ] Extraction cannot introduce entity or relationship types outside the declared ontology without a failing test.
 - [ ] Fact-level source attribution includes source document and chunk IDs; document-level-only provenance is treated as insufficient for permission-safe retrieval unless strict document visibility is enforced.
 
 ## Completion Status

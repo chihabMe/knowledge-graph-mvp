@@ -1,0 +1,30 @@
+# Test identities and their Google Drive access.
+#
+# The point of this file is to have at least two users whose access DIFFERS, so a
+# document exists that one can see and the other cannot. That difference is what the
+# permission and leak tests exercise.
+#
+# `email` must match the identity the user logs into Open WebUI with (the identity the
+# backend resolves and hands to SpiceDB).
+
+users:
+  - id: manager
+    email: manager@example-client.com
+    description: Department manager. Can see HR and finance folders.
+    # Human-readable summary of what this person can open in Drive. The real access is
+    # enforced by SpiceDB from synced Drive permissions; this is the expectation we test.
+    can_access:
+      - "Finance/ (folder, inherited)"
+      - "HR/Salaries.xlsx"
+      - "Company Handbook (shared with everyone)"
+    cannot_access: []
+
+  - id: employee
+    email: employee@example-client.com
+    description: Individual contributor. General access only, no HR/finance.
+    can_access:
+      - "Company Handbook (shared with everyone)"
+      - "Engineering/ (folder, inherited)"
+    cannot_access:
+      - "Finance/ (folder)"
+      - "HR/Salaries.xlsx"

@@ -1,0 +1,34 @@
+# Positive evaluation questions: things a user SHOULD be able to get answered.
+#
+# Each question is asked as a specific user. The answer must be grounded in the named
+# source document, and the citation the system returns must include that document.
+#
+# Aim for ~20 of these covering the file types that matter (Docs, Sheets, PDFs) and a
+# mix of single-document and multi-document (graph-path) answers.
+
+questions:
+  - id: q001
+    asked_by: employee              # matches a user id in users.yaml
+    question: "How many vacation days do full-time employees get?"
+    expected_answer: "20 days per year."
+    expected_source: "Company Handbook"   # title / Drive file the answer comes from
+    source_type: gdoc
+    notes: "Single-document factual lookup. Everyone can access this."
+
+  - id: q002
+    asked_by: manager
+    question: "What was total marketing spend in Q3?"
+    expected_answer: "$48,200."
+    expected_source: "Finance/Q3-Budget.xlsx"
+    source_type: gsheet
+    notes: "Manager-only. See refusals.yaml for the employee-denied counterpart."
+
+  - id: q003
+    asked_by: manager
+    question: "Which vendor did we sign the logistics contract with, and what is the renewal date?"
+    expected_answer: "Northwind Freight; renews 2027-01-15."
+    expected_source: "Finance/Contracts/Northwind.pdf"
+    source_type: pdf
+    notes: "Multi-fact answer from a single PDF; tests PDF extraction + provenance."
+
+  # ... add ~17 more real questions here.

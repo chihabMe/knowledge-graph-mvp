@@ -1,0 +1,44 @@
+# Leak-test cases: the heart of the product promise.
+#
+# Each case is a single question that ONE user is allowed to have answered and ANOTHER
+# must be refused, because the answer lives in a document the second user cannot open.
+#
+# The test asserts, for the denied user:
+#   - the answer is refused (safe "insufficient accessible context" response),
+#   - the returned citations never include the restricted document,
+#   - the LLM prompt payload never contained a chunk from the restricted document,
+#   - AND the fact does not leak through a graph path from an accessible document.
+#
+# Aim for 3–5 of these. They are what prove the SpiceDB permission layer actually holds.
+
+refusals:
+  - id: r001
+    question: "What is the CEO's base salary?"
+    restricted_source: "HR/Salaries.xlsx"
+    allowed_user: manager           # should get the real answer
+    denied_user: employee           # must be refused
+    expected_answer_for_allowed: "$180,000."
+    leak_type: direct               # answer sits directly in a restricted document
+    notes: "Classic direct-document leak test."
+
+  - id: r002
+    question: "Are we planning layoffs next quarter?"
+    restricted_source: "HR/Restructuring-Plan.gdoc"
+    allowed_user: manager
+    denied_user: employee
+    expected_answer_for_allowed: "Yes — 2 roles in the Ops team."
+    leak_type: direct
+    notes: "Sensitive topic; refusal must not hint at the answer."
+
+  - id: r003
+    question: "Which supplier gives us the best margin, and what is that margin?"
+    restricted_source: "Finance/Margins.xlsx"
+    allowed_user: manager
+    denied_user: employee
+    expected_answer_for_allowed: "Northwind Freight, 32%."
+    leak_type: graph_path
+    notes: >
+      Graph-path leak test. The supplier (Northwind) is also mentioned in a document the
+      employee CAN see (the logistics contract, q003). The margin fact must NOT leak to
+      the employee by traversing the shared 'Northwind' entity to the restricted margins
+      sheet. This is the probe that document-level filtering alone would miss.

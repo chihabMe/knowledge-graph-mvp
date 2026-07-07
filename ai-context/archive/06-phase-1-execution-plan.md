@@ -1,5 +1,10 @@
 # Phase 1 Execution Plan
 
+> **ARCHIVED (2026-07-06).** Phase 1 is complete. This file is kept for
+> historical reference only — do not use it to plan work. Current phase
+> status lives in `ai-context/phases/` and the tracked plan in
+> `docs/project-plan.md`.
+
 This file defines the first implementation phase for AI agents.
 
 Phase 1 is not Google Drive ingestion, graph extraction, permissions, or Open WebUI chat.

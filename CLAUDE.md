@@ -1,0 +1,30 @@
+# CLAUDE.md
+
+This is a permission-safe AI knowledge layer POC: Google Drive content is
+structured into a Neo4j knowledge graph, Drive sharing permissions are synced
+into SpiceDB, and users ask questions through Open WebUI. Retrieval is filtered
+by SpiceDB **before** any context reaches the LLM.
+
+## Non-Negotiable Invariants
+
+1. **Permissions before retrieval.** Never send graph, chunk, or document
+   context to an LLM unless SpiceDB confirmed the requesting user may see every
+   source document it was derived from. A fact one graph-hop away from a
+   restricted file is still restricted.
+2. **Provenance or exclusion.** Every Neo4j node, relationship, and chunk must
+   carry source-document provenance. Anything missing provenance is excluded
+   from retrieval. Fail closed.
+3. **No ad hoc permission logic.** SpiceDB is the only authorization engine.
+   Do not replace or shortcut it with PostgreSQL checks or prompt instructions.
+
+## Before Making Changes
+
+Read `AGENTS.md` — it is the entry point for agents and defines the required
+reading order, the pre-commit review workflow, and the working rules.
+
+## Pointers (do not duplicate facts here)
+
+- Current phase status: `ai-context/phases/` trackers and `README.md`.
+- Canonical project brief (scope, stack, rules): `AGENT_PROJECT_BRIEF.md`.
+- Commands (`make up`, `make test`, `make lint`, `make health`): `Makefile`
+  and `README.md`.

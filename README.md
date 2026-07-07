@@ -29,7 +29,9 @@ Users must not receive facts derived from Google Drive files they cannot access.
 ## Repository Map
 
 - `AGENTS.md`: entry instructions for future AI agents.
+- `CLAUDE.md`: auto-loaded entry point for Claude Code; states the core invariants and points to `AGENTS.md`.
 - `ai-context/`: canonical project context for AI agents.
+- `ai-context/archive/`: completed-phase material kept for historical reference.
 - `ai-context/phases/`: phase-by-phase task trackers with completion status and model-effort level.
 - `apps/backend/`: Django backend.
 - `infra/`: Docker Compose and infrastructure configuration.

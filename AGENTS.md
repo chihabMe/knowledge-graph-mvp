@@ -2,17 +2,38 @@
 
 This file is the entry point for future AI agents working on this repository.
 
-Before making changes, read these files in order:
+## Required Reading
+
+Always read before making any change:
 
 1. `ai-context/00-project-overview.md`
-2. `ai-context/01-architecture.md`
-3. `ai-context/02-task-backlog.md`
-4. `ai-context/03-implementation-rules.md`
-5. `ai-context/04-decisions.md`
-6. `ai-context/05-test-and-acceptance.md`
-7. `ai-context/06-phase-1-execution-plan.md`
-8. `ai-context/07-ai-coding-security-rules.md`
-9. `AGENT_PROJECT_BRIEF.md`
+2. `ai-context/03-implementation-rules.md`
+3. The current phase tracker in `ai-context/phases/` (see `README.md` for
+   which phase is active).
+
+Read on demand, when the task touches that area:
+
+- `ai-context/01-architecture.md` — infrastructure, Docker, or service wiring.
+- `ai-context/02-task-backlog.md` — planning or reprioritizing work.
+- `ai-context/04-decisions.md` — before proposing a stack or design change.
+- `ai-context/05-test-and-acceptance.md` — writing or changing tests.
+- `ai-context/07-ai-coding-security-rules.md` — anything touching auth,
+  permissions, ingestion, retrieval, or secrets. When in doubt, read it.
+- `AGENT_PROJECT_BRIEF.md` — the full canonical brief; read for any
+  non-trivial feature work.
+
+Archived material lives in `ai-context/archive/` — historical reference only.
+
+## Source Of Truth
+
+`AGENT_PROJECT_BRIEF.md` is the canonical document for project scope, stack,
+data contracts, and rules. The `ai-context/` files, `README.md`, and
+`docs/project-plan.md` are working summaries of it.
+
+When a fact changes (stack, scope, phase status, a rule), update
+`AGENT_PROJECT_BRIEF.md` first, then update any summary file that repeats the
+fact. If two documents disagree, `AGENT_PROJECT_BRIEF.md` wins — and the
+disagreement itself is a bug: fix the stale copy in the same change.
 
 ## Post-Change Review Workflow (Run After Code Changes)
 
