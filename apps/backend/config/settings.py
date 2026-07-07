@@ -106,6 +106,9 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "drive-sync": env("DRIVE_SYNC_THROTTLE_RATE", default="10/hour"),
+    },
 }
 
 REDIS_URL = env("REDIS_URL", default="redis://redis:6379/0")

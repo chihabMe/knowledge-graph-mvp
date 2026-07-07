@@ -120,6 +120,32 @@ class DrivePermissionSnapshot(models.Model):
         return f"Permissions for {self.source_document_id}"
 
 
+class SourceDocumentContent(models.Model):
+    """Exported/downloaded document content, stored ahead of extraction.
+
+    Postgres is the Phase 2 content store for the pilot scope; revisit with
+    object storage if document volume outgrows it.
+    """
+
+    source_document = models.OneToOneField(
+        SourceDocument,
+        on_delete=models.CASCADE,
+        related_name="content",
+    )
+    # SECURITY: raw client document content. Never log it and never expose it
+    # through an API serializer.
+    content = models.BinaryField()
+    exported_mime_type = models.CharField(max_length=255)
+    content_hash = models.CharField(max_length=128)
+    exported_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [models.Index(fields=["content_hash"])]
+
+    def __str__(self) -> str:
+        return f"Content for {self.source_document_id}"
+
+
 class DriveSyncRun(models.Model):
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"

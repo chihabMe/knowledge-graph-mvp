@@ -1,9 +1,15 @@
+import hashlib
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
+from django.core.cache import cache
+from django.test import SimpleTestCase, TestCase, override_settings
+from rest_framework.throttling import ScopedRateThrottle
 
 from integrations.drive.client import DriveFileMetadata
+from integrations.drive.export import content_sha256, export_file_content
+from integrations.drive.google_client import GoogleDriveMetadataClient
 from integrations.drive.permissions import source_permissions_version
 from integrations.drive.sync import sync_drive_metadata
 from integrations.models import (
@@ -11,6 +17,7 @@ from integrations.models import (
     DrivePermissionSnapshot,
     DriveSyncRun,
     SourceDocument,
+    SourceDocumentContent,
 )
 
 
@@ -184,3 +191,501 @@ class DriveMetadataSyncTests(TestCase):
         self.assertEqual(run.total_files, 1)
         self.assertEqual(run.stored_files, 0)
         self.assertEqual(run.skipped_files, 1)
+
+
+class FakeApiCall:
+    def __init__(self, result):
+        self._result = result
+
+    def execute(self):
+        return self._result
+
+
+class FakeFilesResource:
+    def __init__(self, service):
+        self._service = service
+
+    def list(self, *, q, pageToken=None, **_kwargs):
+        folder_id = q.split("'")[1]
+        pages = self._service.children_pages[folder_id]
+        index = int(pageToken or 0)
+        page = {"files": pages[index]}
+        if index + 1 < len(pages):
+            page["nextPageToken"] = str(index + 1)
+        return FakeApiCall(page)
+
+    def get(self, *, fileId, **_kwargs):
+        return FakeApiCall({"id": fileId, "name": self._service.folder_names[fileId]})
+
+    def export(self, *, fileId, mimeType):
+        self._service.export_calls.append((fileId, mimeType))
+        return FakeApiCall(self._service.export_data[fileId])
+
+    def get_media(self, *, fileId, **_kwargs):
+        self._service.media_calls.append(fileId)
+        return FakeApiCall(self._service.media_data[fileId])
+
+
+class FakePermissionsResource:
+    def __init__(self, service):
+        self._service = service
+
+    def list(self, *, fileId, pageToken=None, **_kwargs):
+        pages = self._service.permission_pages.get(fileId, [[]])
+        index = int(pageToken or 0)
+        page = {"permissions": pages[index]}
+        if index + 1 < len(pages):
+            page["nextPageToken"] = str(index + 1)
+        return FakeApiCall(page)
+
+
+class FakeDrivesResource:
+    def __init__(self, service):
+        self._service = service
+
+    def get(self, *, driveId, **_kwargs):
+        return FakeApiCall({"id": driveId, "name": self._service.drive_names[driveId]})
+
+
+class FakeGoogleDriveService:
+    """Offline stand-in for the Drive v3 discovery client.
+
+    Children and permission listings are keyed by id and split into pages so
+    pagination is exercised the same way the real API paginates.
+    """
+
+    def __init__(
+        self,
+        *,
+        folder_names=None,
+        children_pages=None,
+        permission_pages=None,
+        drive_names=None,
+        export_data=None,
+        media_data=None,
+    ):
+        self.folder_names = folder_names or {}
+        self.children_pages = children_pages or {}
+        self.permission_pages = permission_pages or {}
+        self.drive_names = drive_names or {}
+        self.export_data = export_data or {}
+        self.media_data = media_data or {}
+        self.export_calls = []
+        self.media_calls = []
+
+    def files(self):
+        return FakeFilesResource(self)
+
+    def permissions(self):
+        return FakePermissionsResource(self)
+
+    def drives(self):
+        return FakeDrivesResource(self)
+
+
+def _folder_entry(folder_id, name):
+    return {
+        "id": folder_id,
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder",
+    }
+
+
+def _file_entry(file_id, name, *, parents, mime_type="application/pdf", **extra):
+    return {"id": file_id, "name": name, "mimeType": mime_type, "parents": parents, **extra}
+
+
+class GoogleDriveMetadataClientTests(TestCase):
+    def _folder_connection(self):
+        return DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-root",
+        )
+
+    def test_walks_nested_folders_and_builds_ancestry_paths(self):
+        service = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [
+                    [
+                        _folder_entry("folder-sub", "Reports"),
+                        _file_entry("file-1", "Overview.pdf", parents=["folder-root"]),
+                    ]
+                ],
+                "folder-sub": [
+                    [_file_entry("file-2", "Q2.pdf", parents=["folder-sub"])],
+                ],
+            },
+        )
+
+        files = GoogleDriveMetadataClient(service=service).list_files(self._folder_connection())
+
+        by_id = {item.drive_file_id: item for item in files}
+        self.assertEqual(set(by_id), {"file-1", "file-2"})
+        self.assertEqual(by_id["file-1"].folder_path, "/Pilot")
+        self.assertEqual(by_id["file-2"].folder_path, "/Pilot/Reports")
+        self.assertEqual(by_id["file-1"].parent_folder_ids, ["folder-root"])
+        self.assertEqual(by_id["file-2"].parent_folder_ids, ["folder-sub"])
+
+    def test_paginates_file_listings_and_permission_listings(self):
+        service = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [
+                    [_file_entry("file-1", "A.pdf", parents=["folder-root"])],
+                    [_file_entry("file-2", "B.pdf", parents=["folder-root"])],
+                ],
+            },
+            permission_pages={
+                "file-1": [
+                    [{"id": "perm-1", "type": "user", "role": "reader"}],
+                    [{"id": "perm-2", "type": "user", "role": "writer"}],
+                ],
+            },
+        )
+
+        files = GoogleDriveMetadataClient(service=service).list_files(self._folder_connection())
+
+        by_id = {item.drive_file_id: item for item in files}
+        self.assertEqual(set(by_id), {"file-1", "file-2"})
+        self.assertEqual(
+            [permission["id"] for permission in by_id["file-1"].permissions],
+            ["perm-1", "perm-2"],
+        )
+
+    def test_shared_drive_scope_roots_the_walk_at_the_drive(self):
+        connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            scope_type=DriveConnection.ScopeType.SHARED_DRIVE,
+            shared_drive_id="drive-9",
+        )
+        service = FakeGoogleDriveService(
+            drive_names={"drive-9": "Client Space"},
+            children_pages={
+                "drive-9": [
+                    [
+                        _file_entry(
+                            "file-1",
+                            "Brief.pdf",
+                            parents=["drive-9"],
+                            driveId="drive-9",
+                        )
+                    ]
+                ],
+            },
+        )
+
+        files = GoogleDriveMetadataClient(service=service).list_files(connection)
+
+        self.assertEqual(files[0].folder_path, "/Client Space")
+        self.assertEqual(files[0].shared_drive_id, "drive-9")
+
+    def test_maps_drive_fields_and_never_fabricates_creator(self):
+        service = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [
+                    [
+                        _file_entry(
+                            "file-1",
+                            "Notes",
+                            parents=["folder-root"],
+                            mime_type="application/vnd.google-apps.document",
+                            webViewLink="https://docs.google.com/document/d/file-1",
+                            createdTime="2026-07-01T10:00:00Z",
+                            modifiedTime="2026-07-02T11:30:00Z",
+                            md5Checksum="abc123",
+                            owners=[{"emailAddress": "owner@example.com"}],
+                        )
+                    ]
+                ],
+            },
+        )
+
+        files = GoogleDriveMetadataClient(service=service).list_files(self._folder_connection())
+
+        metadata = files[0]
+        self.assertEqual(metadata.title, "Notes")
+        self.assertEqual(metadata.drive_url, "https://docs.google.com/document/d/file-1")
+        self.assertEqual(metadata.created_time, datetime(2026, 7, 1, 10, 0, tzinfo=UTC))
+        self.assertEqual(metadata.modified_time, datetime(2026, 7, 2, 11, 30, tzinfo=UTC))
+        self.assertEqual(metadata.content_hash, "abc123")
+        self.assertEqual(metadata.owner_email, "owner@example.com")
+        # Drive v3 exposes no creator field; the client must leave it empty
+        # rather than guessing from owners or modifying users.
+        self.assertEqual(metadata.creator_email, "")
+
+
+class ExportFileContentTests(SimpleTestCase):
+    def test_google_doc_exports_to_plain_text(self):
+        service = FakeGoogleDriveService(export_data={"doc-1": "hello world"})
+
+        data, mime = export_file_content(
+            service,
+            drive_file_id="doc-1",
+            mime_type="application/vnd.google-apps.document",
+        )
+
+        self.assertEqual(service.export_calls, [("doc-1", "text/plain")])
+        self.assertEqual(data, b"hello world")
+        self.assertEqual(mime, "text/plain")
+
+    def test_google_sheet_exports_to_csv(self):
+        service = FakeGoogleDriveService(export_data={"sheet-1": b"a,b\n1,2\n"})
+
+        data, mime = export_file_content(
+            service,
+            drive_file_id="sheet-1",
+            mime_type="application/vnd.google-apps.spreadsheet",
+        )
+
+        self.assertEqual(service.export_calls, [("sheet-1", "text/csv")])
+        self.assertEqual(data, b"a,b\n1,2\n")
+        self.assertEqual(mime, "text/csv")
+
+    def test_uploaded_files_download_unchanged(self):
+        service = FakeGoogleDriveService(media_data={"pdf-1": b"%PDF-1.7 fake"})
+
+        data, mime = export_file_content(
+            service,
+            drive_file_id="pdf-1",
+            mime_type="application/pdf",
+        )
+
+        self.assertEqual(service.media_calls, ["pdf-1"])
+        self.assertEqual(service.export_calls, [])
+        self.assertEqual(data, b"%PDF-1.7 fake")
+        self.assertEqual(mime, "application/pdf")
+
+    def test_content_sha256_matches_hashlib(self):
+        self.assertEqual(content_sha256(b"payload"), hashlib.sha256(b"payload").hexdigest())
+
+
+class FakeContentExporter:
+    def __init__(self, payload=b"exported-bytes", mime="text/plain", error=None):
+        self.payload = payload
+        self.mime = mime
+        self.error = error
+        self.calls = []
+
+    def __call__(self, file_metadata):
+        self.calls.append(file_metadata.drive_file_id)
+        if self.error is not None:
+            raise self.error
+        return self.payload, self.mime
+
+
+class DriveContentSyncTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-123",
+        )
+
+    def _doc_metadata(self, modified_time):
+        return DriveFileMetadata(
+            drive_file_id="drive-file-1",
+            title="Pilot Notes",
+            mime_type="application/vnd.google-apps.document",
+            modified_time=modified_time,
+            permissions=[
+                {"id": "perm-1", "type": "user", "role": "reader", "emailAddress": "a@example.com"}
+            ],
+        )
+
+    def test_sync_stores_content_and_queues_extraction(self):
+        exporter = FakeContentExporter()
+        queued = []
+        client = FakeDriveMetadataClient([self._doc_metadata(datetime(2026, 7, 2, tzinfo=UTC))])
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=queued.append,
+        )
+
+        document = SourceDocument.objects.get(drive_file_id="drive-file-1")
+        content = SourceDocumentContent.objects.get(source_document=document)
+        self.assertEqual(bytes(content.content), b"exported-bytes")
+        self.assertEqual(content.exported_mime_type, "text/plain")
+        self.assertEqual(content.content_hash, hashlib.sha256(b"exported-bytes").hexdigest())
+        self.assertEqual(document.content_hash, content.content_hash)
+        self.assertEqual(queued, [document.pk])
+        # Content storage alone must never make a document retrievable —
+        # eligibility is granted later, once permissions are in SpiceDB.
+        self.assertFalse(document.retrieval_eligible)
+
+    def test_sync_skips_reexport_when_file_is_unchanged(self):
+        modified_time = datetime(2026, 7, 2, tzinfo=UTC)
+        exporter = FakeContentExporter()
+        queued = []
+        client = FakeDriveMetadataClient([self._doc_metadata(modified_time)])
+
+        for _ in range(2):
+            sync_drive_metadata(
+                connection=self.connection,
+                client=client,
+                content_exporter=exporter,
+                queue_extraction=queued.append,
+            )
+
+        self.assertEqual(exporter.calls, ["drive-file-1"])
+        self.assertEqual(len(queued), 1)
+
+    def test_sync_reexports_when_modified_time_changes(self):
+        exporter = FakeContentExporter()
+        queued = []
+        client = FakeDriveMetadataClient([self._doc_metadata(datetime(2026, 7, 2, tzinfo=UTC))])
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=queued.append,
+        )
+
+        client.files = [self._doc_metadata(datetime(2026, 7, 3, tzinfo=UTC))]
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=queued.append,
+        )
+
+        self.assertEqual(exporter.calls, ["drive-file-1", "drive-file-1"])
+        self.assertEqual(len(queued), 2)
+
+    def test_sync_never_exports_excluded_files(self):
+        exporter = FakeContentExporter()
+        client = FakeDriveMetadataClient(
+            [
+                DriveFileMetadata(
+                    drive_file_id="drive-file-2",
+                    title="Public Notes",
+                    mime_type="application/pdf",
+                    permissions=[{"id": "anyone", "type": "anyone", "role": "reader"}],
+                )
+            ]
+        )
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=lambda document_id: self.fail("must not queue excluded files"),
+        )
+
+        self.assertEqual(exporter.calls, [])
+        self.assertFalse(SourceDocumentContent.objects.exists())
+
+    def test_extraction_is_not_queued_when_the_sync_fails(self):
+        exporter = FakeContentExporter(error=RuntimeError("boom"))
+        queued = []
+        client = FakeDriveMetadataClient([self._doc_metadata(datetime(2026, 7, 2, tzinfo=UTC))])
+
+        with self.assertRaises(RuntimeError):
+            sync_drive_metadata(
+                connection=self.connection,
+                client=client,
+                content_exporter=exporter,
+                queue_extraction=queued.append,
+            )
+
+        self.assertEqual(queued, [])
+        run = DriveSyncRun.objects.get()
+        self.assertEqual(run.status, DriveSyncRun.Status.FAILED)
+        self.assertEqual(run.error_summary, "builtins.RuntimeError")
+
+
+class DriveSyncApiTests(TestCase):
+    def setUp(self):
+        # Throttle counters live in the shared cache; clear them so tests
+        # never rate-limit each other.
+        cache.clear()
+        self.admin = get_user_model().objects.create_user(
+            username="admin",
+            email="admin@example.com",
+            password="test-password",
+            is_staff=True,
+        )
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-123",
+        )
+
+    def test_anonymous_requests_are_rejected(self):
+        response = self.client.post("/api/ingest/drive/sync/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(DriveSyncRun.objects.exists())
+
+    def test_non_admin_users_are_rejected(self):
+        member = get_user_model().objects.create_user(
+            username="member",
+            email="member@example.com",
+            password="test-password",
+        )
+        self.client.force_login(member)
+
+        response = self.client.post("/api/ingest/drive/sync/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(DriveSyncRun.objects.exists())
+
+    @patch("integrations.views.run_drive_sync")
+    def test_admin_sync_creates_audit_run_and_dispatches_task(self, mock_task):
+        self.client.force_login(self.admin)
+
+        response = self.client.post("/api/ingest/drive/sync/")
+
+        self.assertEqual(response.status_code, 202)
+        run = DriveSyncRun.objects.get()
+        mock_task.delay.assert_called_once_with(run.pk)
+        self.assertEqual(run.triggered_by, self.admin)
+        self.assertEqual(run.actor_email, "admin@example.com")
+        self.assertEqual(run.status, DriveSyncRun.Status.QUEUED)
+        self.assertEqual(response.json()["run_id"], run.pk)
+
+    @patch("integrations.views.run_drive_sync")
+    def test_request_body_scope_is_ignored(self, mock_task):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/sync/",
+            data={
+                "scope_type": "shared_drive",
+                "root_folder_id": "attacker-folder",
+                "shared_drive_id": "attacker-drive",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        run = DriveSyncRun.objects.get()
+        self.assertEqual(run.scope_type, DriveConnection.ScopeType.FOLDER)
+        self.assertEqual(run.root_folder_id, "folder-123")
+        self.assertEqual(run.shared_drive_id, "")
+        self.assertEqual(response.json()["root_folder_id"], "folder-123")
+
+    def test_missing_enabled_connection_returns_conflict(self):
+        self.connection.enabled = False
+        self.connection.save(update_fields=["enabled"])
+        self.client.force_login(self.admin)
+
+        response = self.client.post("/api/ingest/drive/sync/")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(DriveSyncRun.objects.exists())
+
+    # DRF resolves DEFAULT_THROTTLE_RATES at import time (the dict lands on
+    # SimpleRateThrottle.THROTTLE_RATES), so override_settings can't reach it —
+    # the shared rates dict has to be patched directly.
+    @patch.dict(ScopedRateThrottle.THROTTLE_RATES, {"drive-sync": "2/hour"})
+    @patch("integrations.views.run_drive_sync")
+    def test_sync_endpoint_is_rate_limited(self, mock_task):
+        self.client.force_login(self.admin)
+
+        for _ in range(2):
+            self.assertEqual(self.client.post("/api/ingest/drive/sync/").status_code, 202)
+
+        self.assertEqual(self.client.post("/api/ingest/drive/sync/").status_code, 429)

@@ -40,44 +40,52 @@ be detected without re-downloading or re-embedding file content.
 
 ## Tasks
 
-- [~] Add Google Drive credential configuration. Effort: Extra High.
-- [ ] Build Drive folder scanner. Effort: High.
-- [ ] Fetch file metadata. Effort: High.
-- [ ] Fetch owner/creator metadata. Effort: High.
-- [ ] Fetch folder ancestry metadata. Effort: Extra High.
-- [ ] Fetch raw sharing and permission metadata. Effort: Extra High.
-- [ ] Export Google Docs and Sheets. Effort: High.
-- [ ] Download PDFs and uploaded files. Effort: High.
-- [~] Store document metadata in PostgreSQL. Effort: High.
+- [x] Add Google Drive credential configuration. Effort: Extra High.
+- [x] Build Drive folder scanner. Effort: High.
+- [x] Fetch file metadata. Effort: High.
+- [~] Fetch owner/creator metadata. Effort: High. (Owner captured; Drive v3
+  exposes no creator field — Revisions API follow-up, never fabricated.)
+- [x] Fetch folder ancestry metadata. Effort: Extra High.
+- [x] Fetch raw sharing and permission metadata. Effort: Extra High.
+- [x] Export Google Docs and Sheets. Effort: High.
+- [x] Download PDFs and uploaded files. Effort: High.
+- [x] Store document metadata in PostgreSQL. Effort: High.
 - [x] Add `retrieval_eligible = False` default field to source document records. Effort: Extra High.
-- [~] Store permission metadata and source permissions version. Effort: Extra High.
-- [~] Store controlled exclusion reasons for shared-link/public files in Phase 2. Effort: High.
-- [~] Track content hash and modified time. Effort: High.
-- [ ] Queue extraction jobs. Effort: High.
-- [ ] Write audit record with user identity, timestamp, and configured scope whenever sync is triggered via API. Effort: High.
-- [~] Add ingestion tests. Effort: High.
-- [~] Add permission metadata storage and `source_permissions_version` tests. Effort: Extra High.
-- [ ] Add test that `POST /api/ingest/drive/sync/` ignores request-body Drive scope and uses server-side configuration only. Effort: Extra High.
-- [ ] Add test that unverified documents remain retrieval-ineligible. Effort: Extra High.
+- [x] Store permission metadata and source permissions version. Effort: Extra High.
+- [x] Store controlled exclusion reasons for shared-link/public files in Phase 2. Effort: High.
+- [x] Track content hash and modified time. Effort: High.
+- [x] Queue extraction jobs. Effort: High. (Stub task; Phase 3 wires real extraction.)
+- [x] Write audit record with user identity, timestamp, and configured scope whenever sync is triggered via API. Effort: High.
+- [x] Add ingestion tests. Effort: High.
+- [x] Add permission metadata storage and `source_permissions_version` tests. Effort: Extra High.
+- [x] Add test that `POST /api/ingest/drive/sync/` ignores request-body Drive scope and uses server-side configuration only. Effort: Extra High.
+- [x] Add test that unverified documents remain retrieval-ineligible. Effort: Extra High.
 
 ## Validation
 
-- [ ] Test folder scan succeeds.
-- [ ] Supported files ingest.
-- [ ] Unsupported files are skipped safely.
-- [ ] No file contents or credentials appear in logs.
-- [ ] Metadata includes Drive file ID, URL, title, MIME type, modified time, content hash, and folder path.
-- [ ] Metadata includes owner/creator, folder ancestry, sharing metadata, and source permissions version.
-- [ ] Permission metadata can be refreshed without downloading or re-embedding file content.
-- [ ] `source_permissions_version` changes when Drive permissions change and stays stable when only fetch time changes.
+- [~] Test folder scan succeeds. (Passes against a fake Drive service; live
+  run blocked on Drake's service-account credentials.)
+- [~] Supported files ingest. (Offline tests pass; live run pending credentials.)
+- [x] Unsupported files are skipped safely.
+- [~] No file contents or credentials appear in logs. (Code review holds: no
+  content/credential logging paths, error rows store exception class only;
+  live log inspection pending credentials.)
+- [x] Metadata includes Drive file ID, URL, title, MIME type, modified time, content hash, and folder path.
+- [~] Metadata includes owner/creator, folder ancestry, sharing metadata, and source permissions version. (Creator intentionally empty — no Drive v3 creator field.)
+- [x] Permission metadata can be refreshed without downloading or re-embedding file content.
+- [x] `source_permissions_version` changes when Drive permissions change and stays stable when only fetch time changes.
 - [x] Source documents default to `retrieval_eligible = False`.
-- [~] Public/shared-link files are excluded from retrieval in Phase 2 with a stored reason.
-- [ ] Sync trigger audit records include actor identity, timestamp, and configured scope.
-- [ ] Ingestion API ignores Drive scope/folder values from request bodies.
+- [x] Public/shared-link files are excluded from retrieval in Phase 2 with a stored reason.
+- [x] Sync trigger audit records include actor identity, timestamp, and configured scope.
+- [x] Ingestion API ignores Drive scope/folder values from request bodies.
 
 ## Completion Status
 
-In progress. Initial Drive configuration, PostgreSQL metadata/sync models,
-source permission version hashing, controlled public-link exclusion, and mocked
-metadata-sync tests are in place. Real Drive API calls, folder scanning,
-content export/download, API endpoints, and Celery queueing are still pending.
+Code complete. Drive client (BFS folder/shared-drive scan, metadata,
+permissions), Docs/Sheets export + binary download, content storage with
+change detection, Celery sync task with post-commit extraction queueing
+(Phase 3 stub), and the admin-only, rate-limited, audited
+`POST /api/ingest/drive/sync/` endpoint are implemented with offline tests
+(fake Drive service — no network). Remaining: live validation against a real
+Drive once Drake provides the service-account credentials, and the creator
+metadata follow-up via the Revisions API.

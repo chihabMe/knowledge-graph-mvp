@@ -2,6 +2,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from integrations.drive.client import DriveMetadataClient
+from integrations.drive.export import content_sha256
 from integrations.drive.permissions import (
     has_domain_visibility,
     has_public_link,
@@ -12,6 +13,7 @@ from integrations.models import (
     DrivePermissionSnapshot,
     DriveSyncRun,
     SourceDocument,
+    SourceDocumentContent,
 )
 
 SUPPORTED_MIME_TYPES = {
@@ -31,17 +33,32 @@ def sync_drive_metadata(
     connection: DriveConnection,
     client: DriveMetadataClient,
     triggered_by=None,
+    run: DriveSyncRun | None = None,
+    content_exporter=None,
+    queue_extraction=None,
 ) -> DriveSyncRun:
-    run = DriveSyncRun.create_for_connection(connection, triggered_by=triggered_by)
+    """Sync Drive metadata (and optionally content) into PostgreSQL.
+
+    `run` lets a caller (the API view) pre-create the audit record before the
+    work is queued. `content_exporter(file_metadata) -> (bytes, mime)` enables
+    the content stage; `queue_extraction(document_id)` is called for every
+    document whose content was (re)stored.
+    """
+    if run is None:
+        run = DriveSyncRun.create_for_connection(connection, triggered_by=triggered_by)
     run.status = DriveSyncRun.Status.RUNNING
     run.started_at = timezone.now()
     run.save(update_fields=["status", "started_at"])
+
+    extraction_candidates: list[int] = []
 
     try:
         files = client.list_files(connection)
         stored_files = 0
         skipped_files = 0
 
+        # The pilot scope is small enough to keep one transaction around the
+        # whole batch; content export inside it is an accepted POC tradeoff.
         with transaction.atomic():
             for file_metadata in files:
                 permissions = file_metadata.permissions or []
@@ -57,6 +74,15 @@ def sync_drive_metadata(
                     skipped_files += 1
                 else:
                     stored_files += 1
+
+                previous_modified_time = (
+                    SourceDocument.objects.filter(
+                        connection=connection,
+                        drive_file_id=file_metadata.drive_file_id,
+                    )
+                    .values_list("modified_time", flat=True)
+                    .first()
+                )
 
                 document, _created = SourceDocument.objects.update_or_create(
                     connection=connection,
@@ -91,6 +117,11 @@ def sync_drive_metadata(
                     },
                 )
 
+                if content_exporter is not None and not exclusion_reason:
+                    if _needs_content_refresh(document, previous_modified_time):
+                        _store_content(document, file_metadata, content_exporter)
+                        extraction_candidates.append(document.pk)
+
         run.status = DriveSyncRun.Status.SUCCEEDED
         run.total_files = len(files)
         run.stored_files = stored_files
@@ -118,7 +149,37 @@ def sync_drive_metadata(
             ]
         )
 
+    # Queue extraction only after the transaction committed, so a rolled-back
+    # sync can never leave queued jobs pointing at missing rows.
+    if queue_extraction is not None:
+        for document_id in extraction_candidates:
+            queue_extraction(document_id)
+
     return run
+
+
+def _needs_content_refresh(document, previous_modified_time) -> bool:
+    if previous_modified_time is None or previous_modified_time != document.modified_time:
+        return True
+    return not SourceDocumentContent.objects.filter(source_document=document).exists()
+
+
+def _store_content(document, file_metadata, content_exporter) -> None:
+    data, effective_mime = content_exporter(file_metadata)
+    digest = content_sha256(data)
+    SourceDocumentContent.objects.update_or_create(
+        source_document=document,
+        defaults={
+            "content": data,
+            "exported_mime_type": effective_mime,
+            "content_hash": digest,
+            "exported_at": timezone.now(),
+        },
+    )
+    # The exported-bytes hash is authoritative: Google-native files have no
+    # md5Checksum in their metadata, so this keeps the field uniform.
+    document.content_hash = digest
+    document.save(update_fields=["content_hash"])
 
 
 def _exclusion_reason(*, mime_type: str, public_link: bool, domain_visibility: bool) -> str:
