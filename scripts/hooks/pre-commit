@@ -296,6 +296,18 @@ if [ -n "$AI_ENGINE" ]; then
   DIFF_STAT=$(git diff --cached --stat 2>/dev/null || true)
   COMMIT_MSG_HINT=$(git log -1 --pretty=format:"%s" 2>/dev/null || echo "(new commit)")
 
+  # Tell the reviewer when the diff is truncated — otherwise it flags files as
+  # "incomplete/truncated" that are complete on disk (happened with an 850-line
+  # commit: the reviewer called a passing test file a syntax error).
+  # Byte count, not ${#...} character count — head -c truncates at bytes, and
+  # multibyte UTF-8 (em-dashes in comments) would make the two disagree.
+  DIFF_TRUNCATION_NOTE=""
+  DIFF_BYTES=$(printf %s "$STAGED_DIFF" | wc -c)
+  if [ "$DIFF_BYTES" -gt 40000 ]; then
+    DIFF_TRUNCATION_NOTE="NOTE: the diff below is TRUNCATED at 40000 of ${DIFF_BYTES} bytes. Files may appear cut off mid-line because of this truncation — do NOT report files as incomplete or truncated; review only what is visible.
+"
+  fi
+
   AI_PROMPT="You are a senior engineer reviewing staged changes before they are committed to a permission-safe AI knowledge graph system.
 
 IMPORTANT: Review ONLY the diff provided below. Do not search files, run tools, or explore the repository — everything you need is in this prompt. Respond with the review text directly and nothing else (no preamble, no narration of what you are doing).
@@ -315,7 +327,7 @@ Previous commit context: $COMMIT_MSG_HINT
 Diff stat:
 $DIFF_STAT
 
-Full staged diff:
+${DIFF_TRUNCATION_NOTE}Full staged diff:
 \`\`\`diff
 $(echo "$STAGED_DIFF" | head -c 40000)
 \`\`\`

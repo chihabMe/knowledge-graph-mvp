@@ -101,6 +101,8 @@ def sync_drive_metadata(
         # embed the request URI and response body, i.e. Drive metadata) and
         # this row is a persistence sink, so the message must not be stored.
         # The exception is re-raised — full detail stays with the caller.
+        # [:512] fits the CharField — a DataError here would mask the original
+        # exception and leave the run row without its failure state.
         run.error_summary = f"{type(exc).__module__}.{type(exc).__name__}"[:512]
         raise
     finally:

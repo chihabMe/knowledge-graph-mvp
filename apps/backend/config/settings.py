@@ -72,8 +72,9 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# Tests use config.settings_test (selected in pyproject.toml), which overrides
-# DATABASES with in-memory SQLite — no argv sniffing, no conftest env tricks.
+# pytest (the supported runner) selects config.settings_test via pyproject.toml
+# for an in-memory SQLite DB. A bare `manage.py test` runs against these base
+# settings — pass --settings=config.settings_test if you must use it.
 DATABASES = {
     "default": env.db(
         "DATABASE_URL",
