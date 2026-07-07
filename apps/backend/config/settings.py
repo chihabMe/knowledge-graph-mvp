@@ -115,6 +115,8 @@ REDIS_URL = env("REDIS_URL", default="redis://redis:6379/0")
 
 # The DRF throttle counters live in this cache; it must be shared across
 # workers (Redis), otherwise rate limits are per-process and cosmetic.
+# If REDIS_URL is overridden to another host, set DJANGO_CACHE_URL alongside
+# it — this default does not follow REDIS_URL.
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",

@@ -5,6 +5,13 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    # The Google service-account key stays outside the repo on the host and
+    # is mounted read-only; the container-side path overrides the host path
+    # from .env. /dev/null keeps the stack bootable before the key exists.
+    volumes:
+      - ${GOOGLE_SERVICE_ACCOUNT_FILE:-/dev/null}:/run/secrets/google-service-account.json:ro
+    environment:
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
     command:
       - gunicorn
       - config.wsgi:application
@@ -49,6 +56,12 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    # The Drive sync task runs here, so the worker needs the same read-only
+    # key mount as the web container.
+    volumes:
+      - ${GOOGLE_SERVICE_ACCOUNT_FILE:-/dev/null}:/run/secrets/google-service-account.json:ro
+    environment:
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
     command:
       - celery
       - -A

@@ -13,7 +13,7 @@ class DriveFileMetadata:
     drive_url: str = ""
     created_time: datetime | None = None
     modified_time: datetime | None = None
-    content_hash: str = ""
+    md5_checksum: str = ""
     folder_path: str = ""
     parent_folder_ids: list[str] = field(default_factory=list)
     shared_drive_id: str = ""

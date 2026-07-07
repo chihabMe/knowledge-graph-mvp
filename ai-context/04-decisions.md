@@ -116,10 +116,62 @@ Reason:
 
 Status: Accepted.
 
+## ADR-008: Single-Tenant Deployment — One Self-Contained Compose Stack Per Client
+
+Decision: The product ships as one docker compose stack per client. Each
+deployment holds exactly one client's Postgres, Neo4j, SpiceDB, Redis, and
+Open WebUI. There is no shared multi-tenant instance.
+
+Reason:
+
+- Isolation *is* the product promise: one client's documents, graph, and
+  permission tuples never share a database or network with another client's.
+  Infrastructure-level isolation is stronger than any in-app namespacing.
+- It removes the Google restricted-scope verification burden (CASA) that a
+  public multi-tenant OAuth app would require.
+- Per-deployment `.env` + mounted secrets become the intended configuration
+  surface, not a shortcut.
+- Cost: ops effort grows linearly with clients (upgrades, monitoring,
+  backups). Phase 3+ still keys all graph/permission data by connection id so
+  consolidation into a shared control plane stays possible later.
+
+Status: Accepted (2026-07-08).
+
+## ADR-009: Drive Access Via Per-Client Service Account, Provisioned By Us; "Share To Connect" Folder Selection
+
+Decision: Each client deployment gets its own Google service account,
+created by us in our GCP project (exception: Drake's pilot uses an SA in his
+own project). Clients never touch GCP. Connecting Drive = the client shares
+a folder with the service account's email as Viewer — the same action as
+sharing with a person. Folder selection becomes dynamic later via a settings
+page that lists folders shared with the service account ("shared with me")
+and writes the chosen root into `DriveConnection`. No per-user OAuth tokens.
+
+Reason:
+
+- Zero technical work for non-technical clients; revocation is equally
+  non-technical (unshare the folder).
+- One SA per client bounds the blast radius of a leaked key to that client.
+  A single global SA for all clients was rejected for exactly this reason.
+- Per-user OAuth was rejected: tokens die with the employee who granted
+  them, grant broader access than the picked folder, and public-app
+  verification is expensive.
+- This resolves the previously open "domain-wide delegation vs. per-user
+  OAuth" question. Delegation remains the documented fallback for Workspace
+  domains that block external sharing or restrict permission-list reads
+  (the pilot's live validation will show whether viewer-level sharing
+  exposes full ACLs).
+
+Rule for the future folder-picker feature: changing the root folder is a
+re-scope operation — documents outside the new root must lose retrieval
+eligibility and their graph/SpiceDB footprint, otherwise switching roots
+silently widens what is answerable.
+
+Status: Accepted (2026-07-08). Folder-picker settings page: designed,
+deferred until after pilot validation.
+
 ## Open / Needs Explicit Confirmation
 
 Not yet decisions — flagged so they don't get silently locked in by omission:
-
-- **Service account with domain-wide delegation vs. per-user OAuth for Drive access.** The developer scope doc (`output/pdf/organizational-knowledge-graph-developer-scope-v6.pdf`, WP1) still lists this as unresolved, but `docs/project-plan.md` Milestone 2 already assumes domain-wide delegation. Confirm this with the client before WP1 implementation locks it in.
 - **Fact-level vs. document-level provenance granularity** — depends on whether the chosen extraction engine (neo4j-graphrag / Graphify / Graphiti) supports per-fact tagging. Decides how strict the WP6 visibility default must be. Deferred until extraction engine evaluation (Week 2–3).
 - **Freshness/recency scoring** (timestamp, importance, last-updated metadata influencing retrieval priority) — the client's own idea from 2026-05-02, not scoped into any current milestone or work package. Candidate for backlog, not part of this POC unless the client asks for it explicitly.

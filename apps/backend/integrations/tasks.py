@@ -18,10 +18,14 @@ def run_drive_sync(run_id: int) -> dict[str, int | str]:
     record the API view created before dispatch; sync_drive_metadata updates
     its status/counters and stores only an exception class name on failure.
     """
+    # Atomic claim: a read-then-check guard would let two workers holding
+    # duplicate deliveries both see QUEUED and both execute. Only the worker
+    # whose UPDATE actually transitions the row proceeds.
+    claimed = DriveSyncRun.objects.filter(pk=run_id, status=DriveSyncRun.Status.QUEUED).update(
+        status=DriveSyncRun.Status.RUNNING, started_at=timezone.now()
+    )
     run = DriveSyncRun.objects.select_related("connection").get(pk=run_id)
-    if run.status != DriveSyncRun.Status.QUEUED:
-        # Celery redelivery or a duplicate dispatch must never re-execute a
-        # run and overwrite its audit counters/timestamps.
+    if not claimed:
         return {"run_id": run.pk, "status": run.status}
     connection = run.connection
 

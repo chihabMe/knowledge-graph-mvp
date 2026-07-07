@@ -152,7 +152,7 @@ class GoogleDriveMetadataClient:
             drive_url=entry.get("webViewLink", ""),
             created_time=_parse_rfc3339(entry.get("createdTime")),
             modified_time=_parse_rfc3339(entry.get("modifiedTime")),
-            content_hash=entry.get("md5Checksum", ""),
+            md5_checksum=entry.get("md5Checksum", ""),
             folder_path=folder_path,
             parent_folder_ids=entry.get("parents") or [],
             shared_drive_id=entry.get("driveId", ""),

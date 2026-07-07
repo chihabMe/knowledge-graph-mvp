@@ -61,7 +61,12 @@ class SourceDocument(models.Model):
     created_time = models.DateTimeField(null=True, blank=True)
     modified_time = models.DateTimeField(null=True, blank=True)
     last_metadata_sync_time = models.DateTimeField(null=True, blank=True)
+    # Owned by the content stage: sha256 of the exported/downloaded bytes.
+    # Metadata syncs must never write it.
     content_hash = models.CharField(max_length=128, blank=True)
+    # Drive-reported md5 from file metadata; absent for Google-native files.
+    # Kept separate so the two hashes can never overwrite each other.
+    drive_md5_checksum = models.CharField(max_length=64, blank=True)
     folder_path = models.TextField(blank=True)
     parent_folder_ids = models.JSONField(default=list, blank=True)
     shared_drive_id = models.CharField(max_length=255, blank=True)

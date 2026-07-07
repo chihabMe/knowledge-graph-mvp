@@ -424,7 +424,7 @@ class GoogleDriveMetadataClientTests(TestCase):
         self.assertEqual(metadata.drive_url, "https://docs.google.com/document/d/file-1")
         self.assertEqual(metadata.created_time, datetime(2026, 7, 1, 10, 0, tzinfo=UTC))
         self.assertEqual(metadata.modified_time, datetime(2026, 7, 2, 11, 30, tzinfo=UTC))
-        self.assertEqual(metadata.content_hash, "abc123")
+        self.assertEqual(metadata.md5_checksum, "abc123")
         self.assertEqual(metadata.owner_email, "owner@example.com")
         # Drive v3 exposes no creator field; the client must leave it empty
         # rather than guessing from owners or modifying users.
@@ -593,6 +593,77 @@ class DriveContentSyncTests(TestCase):
             document = SourceDocument.objects.get(drive_file_id="drive-file-1")
             self.assertEqual(document.content_hash, expected_hash)
 
+    def test_metadata_only_sync_preserves_the_exported_content_hash(self):
+        exporter = FakeContentExporter()
+        client = FakeDriveMetadataClient([self._doc_metadata(datetime(2026, 7, 2, tzinfo=UTC))])
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=lambda document_id: None,
+        )
+
+        # A later metadata-only sync (no exporter) must not touch the hash.
+        sync_drive_metadata(connection=self.connection, client=client)
+
+        document = SourceDocument.objects.get(drive_file_id="drive-file-1")
+        self.assertEqual(document.content_hash, hashlib.sha256(b"exported-bytes").hexdigest())
+
+    def test_exclusion_round_trip_keeps_hash_and_content_consistent(self):
+        exporter = FakeContentExporter()
+        modified_time = datetime(2026, 7, 2, tzinfo=UTC)
+        private = self._doc_metadata(modified_time)
+        public = DriveFileMetadata(
+            drive_file_id=private.drive_file_id,
+            title=private.title,
+            mime_type=private.mime_type,
+            modified_time=modified_time,
+            permissions=[{"id": "anyone", "type": "anyone", "role": "reader"}],
+        )
+        client = FakeDriveMetadataClient([private])
+        expected_hash = hashlib.sha256(b"exported-bytes").hexdigest()
+
+        for files in ([private], [public], [private]):
+            client.files = files
+            sync_drive_metadata(
+                connection=self.connection,
+                client=client,
+                content_exporter=exporter,
+                queue_extraction=lambda document_id: None,
+            )
+
+        document = SourceDocument.objects.get(drive_file_id="drive-file-1")
+        content = SourceDocumentContent.objects.get(source_document=document)
+        self.assertEqual(document.content_hash, expected_hash)
+        self.assertEqual(content.content_hash, expected_hash)
+        self.assertEqual(bytes(content.content), b"exported-bytes")
+
+    def test_sync_stores_drive_md5_separately_from_content_hash(self):
+        exporter = FakeContentExporter()
+        client = FakeDriveMetadataClient(
+            [
+                DriveFileMetadata(
+                    drive_file_id="pdf-1",
+                    title="Upload.pdf",
+                    mime_type="application/pdf",
+                    md5_checksum="drive-md5",
+                    modified_time=datetime(2026, 7, 2, tzinfo=UTC),
+                    permissions=[{"id": "perm-1", "type": "user", "role": "reader"}],
+                )
+            ]
+        )
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=lambda document_id: None,
+        )
+
+        document = SourceDocument.objects.get(drive_file_id="pdf-1")
+        self.assertEqual(document.drive_md5_checksum, "drive-md5")
+        self.assertEqual(document.content_hash, hashlib.sha256(b"exported-bytes").hexdigest())
+
     def test_sync_never_exports_excluded_files(self):
         exporter = FakeContentExporter()
         client = FakeDriveMetadataClient(
@@ -637,9 +708,10 @@ class DriveContentSyncTests(TestCase):
 
 class DriveSyncApiTests(TestCase):
     def setUp(self):
-        # Throttle counters live in the shared cache; clear them so tests
-        # never rate-limit each other.
+        # Throttle counters live in the shared cache; clear them before AND
+        # after each test so the 429 test can't bleed into other classes.
         cache.clear()
+        self.addCleanup(cache.clear)
         self.admin = get_user_model().objects.create_user(
             username="admin",
             email="admin@example.com",
@@ -798,3 +870,15 @@ class RunDriveSyncTaskTests(TestCase):
 
         mock_build.assert_not_called()
         self.assertEqual(result["status"], DriveSyncRun.Status.SUCCEEDED)
+
+    @patch("integrations.tasks.build_drive_service")
+    def test_a_run_already_claimed_by_another_worker_is_not_reexecuted(self, mock_build):
+        # Simulates the duplicate-delivery race: the first worker's atomic
+        # claim moved the run to RUNNING, so the second worker must bail.
+        self.run.status = DriveSyncRun.Status.RUNNING
+        self.run.save(update_fields=["status"])
+
+        result = run_drive_sync(self.run.pk)
+
+        mock_build.assert_not_called()
+        self.assertEqual(result["status"], DriveSyncRun.Status.RUNNING)
