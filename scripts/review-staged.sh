@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs the same two-stage review gate as the pre-commit hook without creating a
-# commit. Use this after code changes so Codex can show REVIEW.md to the user
-# before deciding whether to fix or ignore review findings.
+# commit. Use this after code changes so the coding agent can show REVIEW.md to
+# the user before deciding whether to fix or ignore review findings.
 
 set -euo pipefail
 
@@ -29,7 +29,8 @@ fi
 set +e
 rm -f "$REVIEW_FILE"
 if command -v timeout >/dev/null 2>&1; then
-  timeout "$REVIEW_TIMEOUT" bash "$HOOK"
+  # -k 10: SIGKILL 10s after the deadline in case the hook ignores SIGTERM.
+  timeout -k 10 "$REVIEW_TIMEOUT" bash "$HOOK"
 else
   echo "WARNING: timeout command not found; running review without a time limit."
   bash "$HOOK"

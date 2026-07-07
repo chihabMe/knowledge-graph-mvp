@@ -3,17 +3,19 @@
 #
 # Two-stage pre-commit review gate:
 #   Stage 1 — Fast offline static checks (lint, secrets, patterns)
-#   Stage 2 — Deep AI review via agy/Claude (if agy is available)
+#   Stage 2 — Deep AI review (Claude Code CLI first, agy as fallback)
 #
 # Writes findings to REVIEW.md.
-# Codex MUST read REVIEW.md and present findings to the user for approval
-# before making any fixes. Codex must NOT fix issues silently.
+# The coding agent (Codex, Claude Code, ...) MUST read REVIEW.md and present
+# findings to the user for approval before making any fixes. Never fix silently.
 #
 # Environment overrides:
-#   SKIP_REVIEW=1      — skip entirely (emergency only, never use casually)
-#   SKIP_TESTS=1       — skip pytest (use when tests already passed this session)
-#   SKIP_AI_REVIEW=1   — skip the agy AI review stage (static checks still run)
-#   REVIEW_BLOCK=0     — allow commit even with critical issues (setup mode only)
+#   SKIP_REVIEW=1        — skip entirely (emergency only, never use casually)
+#   SKIP_TESTS=1         — skip pytest (use when tests already passed this session)
+#   SKIP_AI_REVIEW=1     — skip the AI review stage (static checks still run)
+#   REVIEW_BLOCK=0       — allow commit even with critical issues (setup mode only)
+#   AI_REVIEW_TIMEOUT=N  — seconds before the AI review call is killed (default 240)
+#   REVIEW_AI_BLOCK=1    — also block the commit when the AI verdict is REQUEST CHANGES
 
 set -euo pipefail
 
@@ -102,8 +104,12 @@ SECRET_PATTERNS=(
   'token\s*=\s*["\x27][^"\x27${}]'
   'preshared_key\s*=\s*["\x27][^"\x27${}]'
 )
+# Only scan ADDED lines — deleting a credential must not block the commit.
+# (?!\+\+) excludes the "+++ b/..." diff header lines.
+# Known tradeoff: a credential in unchanged CONTEXT lines of a moved/renamed
+# file is not scanned here — full-tree scanning belongs to a separate audit.
 for pattern in "${SECRET_PATTERNS[@]}"; do
-  if echo "$STAGED_DIFF" | grep -qiP "$pattern" 2>/dev/null; then
+  if echo "$STAGED_DIFF" | grep -qiP "^\+(?!\+\+).*${pattern}" 2>/dev/null; then
     add_critical "Possible hardcoded credential — pattern: $pattern"
     SECRET_FOUND=true
   fi
@@ -239,18 +245,60 @@ echo -e "  ${RED}❌ Critical:${RESET} ${#CRITICAL_ISSUES[@]}"
 # ─── Stage 2: AI deep review via agy ─────────────────────────────────────────
 
 AI_REVIEW_TEXT=""
+AI_ENGINE=""
+AI_VERDICT=""
+AI_REVIEW_SUCCEEDED=0
+AI_TIMEOUT="${AI_REVIEW_TIMEOUT:-240}"
 
-if [ "${SKIP_AI_REVIEW:-0}" != "1" ] && command -v agy &> /dev/null; then
+# Pick the review engine: Claude Code CLI first, agy as fallback.
+if [ "${SKIP_AI_REVIEW:-0}" != "1" ]; then
+  if command -v claude &> /dev/null; then
+    AI_ENGINE="claude"
+  elif command -v agy &> /dev/null; then
+    AI_ENGINE="agy"
+  fi
+fi
+
+# run_ai_engine <engine> <prompt> — prints review text, stderr goes to $AI_ERR_FILE.
+run_ai_engine() {
+  local engine="$1" prompt="$2"
+  local cmd
+  case "$engine" in
+    # --disallowedTools enforces the prompt's "do not run tools" rule so the
+    # reviewer can't wander the repo or stall on a permission prompt. Values are
+    # space-separated (the documented form) and include the read/search tools.
+    # The prompt is fed via stdin (no positional arg) so the staged diff never
+    # shows up in `ps` output and can't hit the ARG_MAX limit.
+    claude) cmd=(claude -p --disallowedTools \
+              "Bash" "Edit" "Write" "NotebookEdit" "WebFetch" "WebSearch" \
+              "Task" "Read" "Grep" "Glob") ;;
+    agy)    cmd=(agy --print "$prompt") ;;
+    *)      return 1 ;;
+  esac
+  # -k 10: SIGKILL 10s after the deadline in case the CLI ignores SIGTERM.
+  if command -v timeout &> /dev/null; then
+    cmd=(timeout -k 10 "$AI_TIMEOUT" "${cmd[@]}")
+  fi
+  if [ "$engine" = "claude" ]; then
+    printf '%s' "$prompt" | "${cmd[@]}" 2>>"$AI_ERR_FILE"
+  else
+    "${cmd[@]}" 2>>"$AI_ERR_FILE"
+  fi
+}
+
+if [ -n "$AI_ENGINE" ]; then
   echo ""
   echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-  echo -e "${BOLD}  🤖 Stage 2 — AI Deep Review (agy / Claude)${RESET}"
+  echo -e "${BOLD}  🤖 Stage 2 — AI Deep Review (engine: $AI_ENGINE)${RESET}"
   echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-  echo -e "  Running deep AI review on staged diff..."
+  echo -e "  Running deep AI review on staged diff (timeout: ${AI_TIMEOUT}s)..."
 
   DIFF_STAT=$(git diff --cached --stat 2>/dev/null || true)
   COMMIT_MSG_HINT=$(git log -1 --pretty=format:"%s" 2>/dev/null || echo "(new commit)")
 
   AI_PROMPT="You are a senior engineer reviewing staged changes before they are committed to a permission-safe AI knowledge graph system.
+
+IMPORTANT: Review ONLY the diff provided below. Do not search files, run tools, or explore the repository — everything you need is in this prompt. Respond with the review text directly and nothing else (no preamble, no narration of what you are doing).
 
 Project context:
 - Stack: Django + DRF + Celery + Neo4j + SpiceDB + Redis + Postgres
@@ -298,34 +346,90 @@ Provide a structured senior engineer code review. Be specific — reference file
 #### Verdict
 APPROVE / APPROVE WITH NOTES / REQUEST CHANGES
 
-#### Proposed Action Items for Codex
+#### Proposed Action Items For The Coding Agent
 (numbered list, ordered by priority — these will be shown to the user for approval)"
 
-  AI_REVIEW_TEXT=$(agy --print "$AI_PROMPT" 2>/dev/null || echo "")
+  AI_ERR_FILE=$(mktemp)
+  # Clean up on any exit path — set -e can bail before the explicit rm below.
+  trap 'rm -f "${AI_ERR_FILE:-}"' EXIT
+  set +e
+  AI_REVIEW_TEXT=$(run_ai_engine "$AI_ENGINE" "$AI_PROMPT")
+  AI_STATUS=$?
+  set -e
+  # A non-zero exit (timeout, crash) can leave truncated output — discard it so
+  # a half-written review can never masquerade as a completed one.
+  if [ "$AI_STATUS" -ne 0 ]; then
+    AI_REVIEW_TEXT=""
+  fi
+
+  # If claude produced no usable output, fall back to agy before giving up.
+  if [ -z "$AI_REVIEW_TEXT" ] && [ "$AI_ENGINE" = "claude" ] && command -v agy &> /dev/null; then
+    echo -e "  ${YELLOW}⚠️  claude produced no usable output (exit $AI_STATUS) — falling back to agy...${RESET}"
+    AI_ENGINE="agy"
+    set +e
+    AI_REVIEW_TEXT=$(run_ai_engine "$AI_ENGINE" "$AI_PROMPT")
+    AI_STATUS=$?
+    set -e
+    if [ "$AI_STATUS" -ne 0 ]; then
+      AI_REVIEW_TEXT=""
+    fi
+  fi
 
   if [ -n "$AI_REVIEW_TEXT" ]; then
-    echo -e "  ${GREEN}✅ AI review complete${RESET}"
+    AI_REVIEW_SUCCEEDED=1
+    echo -e "  ${GREEN}✅ AI review complete (engine: $AI_ENGINE)${RESET}"
   else
-    echo -e "  ${YELLOW}⚠️  AI review did not return output — static checks only${RESET}"
-    AI_REVIEW_TEXT="_(AI review unavailable — agy did not return output. Run manually: agy 'review the staged diff')_"
+    FAIL_REASON="returned no output (exit $AI_STATUS)"
+    [ "$AI_STATUS" -eq 124 ] && FAIL_REASON="timed out after ${AI_TIMEOUT}s (raise with AI_REVIEW_TIMEOUT=<seconds>)"
+    # Neutralize code fences in stderr so they can't break REVIEW.md formatting.
+    ERR_TAIL=$(tail -c 800 "$AI_ERR_FILE" 2>/dev/null | sed 's/```/~~~/g' || true)
+    echo -e "  ${YELLOW}⚠️  AI review failed via $AI_ENGINE — $FAIL_REASON. Static checks only.${RESET}"
+    AI_REVIEW_TEXT="_(AI review failed — engine \`$AI_ENGINE\` $FAIL_REASON.)_
+
+Stderr tail:
+\`\`\`
+${ERR_TAIL:-<empty>}
+\`\`\`"
   fi
+  rm -f "$AI_ERR_FILE"
 elif [ "${SKIP_AI_REVIEW:-0}" = "1" ]; then
   AI_REVIEW_TEXT="_(AI review skipped — SKIP_AI_REVIEW=1)_"
 else
-  AI_REVIEW_TEXT="_(AI review unavailable — agy not found. Install Antigravity CLI or run: agy 'review the staged diff')_"
+  AI_REVIEW_TEXT="_(AI review unavailable — neither \`claude\` nor \`agy\` CLI found on PATH.)_"
+fi
+
+# Parse the AI verdict. Scope to the lines right after the Verdict heading —
+# grepping the whole review body would also match verdict strings quoted in the
+# reviewed diff itself. Lines with " / " are dropped so an echoed template line
+# ("APPROVE / APPROVE WITH NOTES / REQUEST CHANGES") can't be mistaken for a
+# verdict. The alternation is ordered so APPROVE WITH NOTES wins over its
+# APPROVE prefix.
+AI_VERDICT=$(echo "$AI_REVIEW_TEXT" \
+  | grep -A3 -m1 -iP '^#+\s*Verdict' \
+  | grep -v ' / ' \
+  | grep -m1 -ioP 'REQUEST CHANGES|APPROVE WITH NOTES|APPROVE' \
+  | tr '[:lower:]' '[:upper:]' \
+  || true)
+# A completed review with no parseable verdict must not silently pass as clean.
+if [ "$AI_REVIEW_SUCCEEDED" = "1" ] && [ -z "$AI_VERDICT" ]; then
+  add_warning "AI review ran but produced no parseable verdict — read Stage 2 and judge manually"
 fi
 
 # ─── Write REVIEW.md ─────────────────────────────────────────────────────────
 
+# Overall status reflects BOTH stages — an AI "REQUEST CHANGES" or "APPROVE WITH
+# NOTES" must never be hidden behind a clean Stage 1 header.
 OVERALL_STATUS="✅ CLEAN — commit approved"
+[ "$AI_VERDICT" = "APPROVE WITH NOTES" ] && OVERALL_STATUS="⚠️ AI NOTES — commit passed, read Stage 2 notes"
 [ ${#WARNING_ISSUES[@]} -gt 0 ] && OVERALL_STATUS="⚠️ WARNINGS — commit passed, address in next task"
+[ "$AI_VERDICT" = "REQUEST CHANGES" ] && OVERALL_STATUS="🔶 AI REQUESTED CHANGES — read Stage 2 before proceeding"
 [ ${#CRITICAL_ISSUES[@]} -gt 0 ] && OVERALL_STATUS="❌ BLOCKED — fix critical issues before committing"
 
 {
 cat << HEADER
 <!-- AUTO-GENERATED by pre-commit hook — DO NOT EDIT MANUALLY -->
 <!--
-  CODEX INSTRUCTIONS — READ THIS BEFORE YOUR NEXT ACTION:
+  AGENT INSTRUCTIONS (Codex, Claude Code, any coding agent) — READ BEFORE YOUR NEXT ACTION:
 
   1. Read this entire file carefully.
   2. Present the findings to the user clearly.
@@ -340,6 +444,7 @@ cat << HEADER
 
 **Generated:** $TIMESTAMP
 **Status:** $OVERALL_STATUS
+**AI Verdict:** ${AI_VERDICT:-n/a} (engine: ${AI_ENGINE:-none})
 
 ---
 
@@ -376,7 +481,7 @@ HEADER
 
   echo "---"
   echo ""
-  echo "## Stage 2 — AI Deep Review (Claude / agy)"
+  echo "## Stage 2 — AI Deep Review (engine: ${AI_ENGINE:-none})"
   echo ""
   echo "$AI_REVIEW_TEXT"
   echo ""
@@ -389,7 +494,7 @@ HEADER
   echo ""
   echo "---"
   echo ""
-  echo "## ⚡ Codex — Next Steps"
+  echo "## ⚡ Agent — Next Steps"
   echo ""
   echo "> **Present these findings to the user. Ask for approval before fixing anything.**"
   echo ""
@@ -401,7 +506,14 @@ HEADER
     echo "The pre-commit review found critical issues and blocked the commit."
     echo "Here is the full review. Do you want me to fix these issues? (yes/no)"
     echo '```'
-  elif [ ${#WARNING_ISSUES[@]} -gt 0 ]; then
+  elif [ "$AI_VERDICT" = "REQUEST CHANGES" ]; then
+    echo "The AI reviewer requested changes. Tell the user:"
+    echo ""
+    echo '```'
+    echo "The AI deep review requested changes (see Stage 2 above)."
+    echo "Here is the full review. Do you want me to fix these issues? (yes/no)"
+    echo '```'
+  elif [ ${#WARNING_ISSUES[@]} -gt 0 ] || [ "$AI_VERDICT" = "APPROVE WITH NOTES" ]; then
     echo "The commit passed but has warnings. Tell the user:"
     echo ""
     echo '```'
@@ -419,10 +531,17 @@ echo -e "  ${CYAN}REVIEW.md${RESET} written."
 
 # ─── Block or pass ───────────────────────────────────────────────────────────
 
-if [ ${#CRITICAL_ISSUES[@]} -gt 0 ] && [ "${REVIEW_BLOCK:-1}" != "0" ]; then
+SHOULD_BLOCK=0
+[ ${#CRITICAL_ISSUES[@]} -gt 0 ] && SHOULD_BLOCK=1
+if [ "${REVIEW_AI_BLOCK:-0}" = "1" ] && [ "$AI_VERDICT" = "REQUEST CHANGES" ]; then
+  SHOULD_BLOCK=1
+fi
+
+if [ "$SHOULD_BLOCK" -eq 1 ] && [ "${REVIEW_BLOCK:-1}" != "0" ]; then
   echo ""
   echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
   echo -e "  ${RED}${BOLD}Commit BLOCKED.${RESET}"
+  [ "$AI_VERDICT" = "REQUEST CHANGES" ] && echo -e "  ${YELLOW}AI verdict: REQUEST CHANGES${RESET}"
   echo -e "  Read ${CYAN}REVIEW.md${RESET} and present findings to user for approval."
   echo -e "  Override (emergency only): ${YELLOW}SKIP_REVIEW=1 git commit${RESET}"
   echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

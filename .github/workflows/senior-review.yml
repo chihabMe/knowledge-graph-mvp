@@ -96,8 +96,8 @@ jobs:
           ### Verdict
           One of: ✅ APPROVE | 🔄 APPROVE WITH NOTES | ❌ REQUEST CHANGES
 
-          ### Codex Action Items
-          (numbered list for the Codex agent, ordered by priority)
+          ### Agent Action Items
+          (numbered list for the coding agent, ordered by priority)
           FORMAT_EOF
 
       - name: Run review via OpenRouter
@@ -105,6 +105,11 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::OPENROUTER_API_KEY secret is not set — cannot run the senior review."
+            exit 1
+          fi
+
           PROMPT=$(cat /tmp/review_prompt.md)
           ESCAPED_PROMPT=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
 
@@ -113,7 +118,7 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-Title: Knowledge Graph Senior Review" \
             -d "{
-              \"model\": \"anthropic/claude-sonnet-4-5\",
+              \"model\": \"anthropic/claude-sonnet-5\",
               \"messages\": [{\"role\": \"user\", \"content\": $ESCAPED_PROMPT}],
               \"max_tokens\": 4000
             }")
