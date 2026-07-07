@@ -367,7 +367,7 @@ APPROVE / APPROVE WITH NOTES / REQUEST CHANGES
     echo -e "  ${YELLOW}⚠️  claude produced no usable output (exit $AI_STATUS) — falling back to agy...${RESET}"
     # Mark the boundary so a reader of the stderr tail can tell the two engines'
     # errors apart instead of seeing one blended blob.
-    printf '\n--- claude stderr above; agy stderr below ---\n' >> "$AI_ERR_FILE"
+    [ -s "$AI_ERR_FILE" ] && printf '\n--- claude stderr above; agy stderr below ---\n' >> "$AI_ERR_FILE"
     AI_ENGINE="agy"
     set +e
     AI_REVIEW_TEXT=$(run_ai_engine "$AI_ENGINE" "$AI_PROMPT")
