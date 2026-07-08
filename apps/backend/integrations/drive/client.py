@@ -35,9 +35,26 @@ class DriveRootCandidate:
     shared_drive_id: str = ""
 
 
+@dataclass(frozen=True)
+class DrivePermissionAccessReport:
+    sampled_files: int
+    readable_files: int
+    unreadable_files: int
+    checked_all_available_files: bool
+    folder_listing_errors: int = 0
+
+
 class DriveMetadataClient(Protocol):
     def list_files(self, connection: DriveConnection) -> list[DriveFileMetadata]:
         """Return Drive file metadata for a configured connection."""
 
     def list_root_candidates(self, connection: DriveConnection) -> list[DriveRootCandidate]:
         """Return folder/shared-drive roots visible to the configured connection."""
+
+    def check_permission_access(
+        self,
+        connection: DriveConnection,
+        *,
+        max_files: int = 10,
+    ) -> DrivePermissionAccessReport:
+        """Sample selected-root files and report whether ACL metadata is readable."""

@@ -164,6 +164,7 @@ objects.
 ```http
 GET /api/ingest/drive/roots/
 POST /api/ingest/drive/connection/root/
+GET /api/ingest/drive/permissions/check/
 POST /api/ingest/drive/sync/
 POST /api/permissions/sync/
 GET /api/health/
@@ -177,6 +178,13 @@ from that visible list, then persists the selected ingestion scope in
 `DriveConnection`. When the selected root changes, existing documents for that
 connection are marked non-retrievable until the new scope is synced; the
 response includes `rescoped_document_count` for operator visibility.
+
+`GET /api/ingest/drive/permissions/check/` samples files under the selected
+root and returns only counts/status for Drive ACL readability and folder-listing
+failures. It is an operator diagnostic for validating whether the configured
+service account or delegated subject can call `permissions.list()` before
+content ingestion is trusted. It must not return raw permission entries,
+filenames, folder names, or document contents.
 
 `POST /api/ingest/drive/sync/` starts or resumes Drive ingestion for the
 configured pilot scope. The Drive scope, folder ID, or shared drive ID must be

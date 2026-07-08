@@ -13,12 +13,17 @@ from typing import Any
 
 from django.conf import settings
 
-from integrations.drive.client import DriveFileMetadata, DriveRootCandidate
+from integrations.drive.client import (
+    DriveFileMetadata,
+    DrivePermissionAccessReport,
+    DriveRootCandidate,
+)
 from integrations.models import DriveConnection
 
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 PAGE_SIZE = 100
+PERMISSION_CHECK_SAMPLE_SIZE = 10
 FILE_LIST_FIELDS = (
     "nextPageToken, files(id, name, mimeType, webViewLink, createdTime, "
     "modifiedTime, md5Checksum, parents, driveId, owners(emailAddress))"
@@ -188,6 +193,22 @@ class GoogleDriveMetadataClient:
             ),
         )
 
+    def check_permission_access(
+        self,
+        connection: DriveConnection,
+        *,
+        max_files: int = PERMISSION_CHECK_SAMPLE_SIZE,
+    ) -> DrivePermissionAccessReport:
+        try:
+            service = self._service or build_drive_service(connection)
+            return self._check_permission_access(service, connection, max_files=max_files)
+        except MissingServiceAccountKeyError:
+            raise
+        except DRIVE_API_ERRORS as exc:
+            raise GoogleDriveApiError(
+                "Google Drive API request failed while checking Drive permission metadata access."
+            ) from exc
+
     def _root_id(self, connection: DriveConnection) -> str:
         if connection.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
             return connection.shared_drive_id
@@ -297,6 +318,60 @@ class GoogleDriveMetadataClient:
             page_token = response.get("nextPageToken")
             if not page_token:
                 return permissions
+
+    def _check_permission_access(
+        self,
+        service,
+        connection: DriveConnection,
+        *,
+        max_files: int,
+    ) -> DrivePermissionAccessReport:
+        max_files = max(1, max_files)
+        root_id = self._root_id(connection)
+        pending_folders: list[str] = [root_id]
+        seen_folders = {root_id}
+        seen_files: set[str] = set()
+        sampled_files = 0
+        readable_files = 0
+        unreadable_files = 0
+        folder_listing_errors = 0
+
+        while pending_folders:
+            folder_id = pending_folders.pop(0)
+            try:
+                for entry in self._list_children(service, connection, folder_id):
+                    if entry.get("mimeType") == FOLDER_MIME_TYPE:
+                        if entry["id"] not in seen_folders:
+                            seen_folders.add(entry["id"])
+                            pending_folders.append(entry["id"])
+                        continue
+                    if entry["id"] in seen_files:
+                        continue
+                    seen_files.add(entry["id"])
+                    sampled_files += 1
+                    try:
+                        self._list_permissions(service, entry["id"])
+                        readable_files += 1
+                    except DRIVE_API_ERRORS:
+                        unreadable_files += 1
+                    if sampled_files >= max_files:
+                        return DrivePermissionAccessReport(
+                            sampled_files=sampled_files,
+                            readable_files=readable_files,
+                            unreadable_files=unreadable_files,
+                            checked_all_available_files=False,
+                            folder_listing_errors=folder_listing_errors,
+                        )
+            except DRIVE_API_ERRORS:
+                folder_listing_errors += 1
+
+        return DrivePermissionAccessReport(
+            sampled_files=sampled_files,
+            readable_files=readable_files,
+            unreadable_files=unreadable_files,
+            checked_all_available_files=folder_listing_errors == 0,
+            folder_listing_errors=folder_listing_errors,
+        )
 
     def _to_metadata(
         self,

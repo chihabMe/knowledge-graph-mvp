@@ -66,6 +66,24 @@ def _connection_has_selected_root(connection: DriveConnection) -> bool:
     return bool(connection.root_folder_id)
 
 
+def _selected_root_payload(connection: DriveConnection) -> dict[str, str]:
+    return {
+        "scope_type": connection.scope_type,
+        "root_folder_id": connection.root_folder_id,
+        "shared_drive_id": connection.shared_drive_id,
+    }
+
+
+def _permission_metadata_access_status(report) -> str:
+    if report.sampled_files == 0 and report.folder_listing_errors == 0:
+        return "no_files"
+    if report.unreadable_files == 0 and report.folder_listing_errors == 0:
+        return "ok"
+    if report.readable_files == 0:
+        return "blocked"
+    return "partial"
+
+
 class DriveRootListView(APIView):
     permission_classes = [IsAdminUser]
     throttle_classes = [ScopedRateThrottle]
@@ -157,6 +175,40 @@ class DriveRootSelectionView(APIView):
                 "connection_id": connection.pk,
                 "selected_root": _root_candidate_payload(selected),
                 "rescoped_document_count": rescoped_document_count,
+            }
+        )
+
+
+class DrivePermissionCheckView(APIView):
+    permission_classes = [IsAdminUser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "drive-roots"
+
+    def get(self, request):
+        connection = _active_or_bootstrap_connection()
+        if not _connection_has_selected_root(connection):
+            return Response(
+                {"detail": "No Drive root has been selected for this connection."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        try:
+            report = GoogleDriveMetadataClient().check_permission_access(connection)
+        except MissingServiceAccountKeyError as exc:
+            return _root_candidate_error_response(exc)
+        except GoogleDriveApiError as exc:
+            return _drive_api_error_response(exc)
+
+        return Response(
+            {
+                "connection_id": connection.pk,
+                "selected_root": _selected_root_payload(connection),
+                "permission_metadata_access": _permission_metadata_access_status(report),
+                "sampled_files": report.sampled_files,
+                "permissions_readable": report.readable_files,
+                "permissions_unreadable": report.unreadable_files,
+                "folder_listing_errors": report.folder_listing_errors,
+                "checked_all_available_files": report.checked_all_available_files,
             }
         )
 

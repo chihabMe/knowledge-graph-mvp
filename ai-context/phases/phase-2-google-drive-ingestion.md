@@ -65,6 +65,7 @@ be detected without re-downloading or re-embedding file content.
 - [x] Add permission metadata storage and `source_permissions_version` tests. Effort: Extra High.
 - [x] Add test that `POST /api/ingest/drive/sync/` ignores request-body Drive scope and uses server-side configuration only. Effort: Extra High.
 - [x] Add test that unverified documents remain retrieval-ineligible. Effort: Extra High.
+- [x] Add admin diagnostic for selected-root permission metadata readability. Effort: High.
 
 ## Validation
 
@@ -94,6 +95,8 @@ be detected without re-downloading or re-embedding file content.
 - [x] Ingestion API ignores Drive scope/folder values from request bodies.
 - [x] Admin can choose the ingestion root through a controlled backend flow;
   manual `.env` root IDs are only a bootstrap/developer fallback.
+- [x] Admin can check whether the selected root's sampled files expose Drive
+  permission metadata before relying on content ingestion.
 
 ## Completion Status
 

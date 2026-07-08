@@ -9,7 +9,11 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from google.auth.exceptions import RefreshError
 from rest_framework.throttling import ScopedRateThrottle
 
-from integrations.drive.client import DriveFileMetadata, DriveRootCandidate
+from integrations.drive.client import (
+    DriveFileMetadata,
+    DrivePermissionAccessReport,
+    DriveRootCandidate,
+)
 from integrations.drive.export import content_sha256, export_file_content
 from integrations.drive.google_client import (
     GoogleDriveApiError,
@@ -50,6 +54,17 @@ class FakeDriveRootClient:
         if self.error is not None:
             raise self.error
         return self.candidates
+
+    def check_permission_access(self, connection):
+        self.connections.append(connection)
+        if self.error is not None:
+            raise self.error
+        return DrivePermissionAccessReport(
+            sampled_files=3,
+            readable_files=2,
+            unreadable_files=1,
+            checked_all_available_files=True,
+        )
 
 
 class DriveIngestionModelTests(TestCase):
@@ -271,6 +286,8 @@ class FakeFilesResource:
             pages = self._service.shared_folder_pages
         else:
             folder_id = q.split("'")[1]
+            if folder_id in self._service.children_errors:
+                return FakeApiCall(self._service.children_errors[folder_id])
             pages = self._service.children_pages[folder_id]
         index = int(pageToken or 0)
         page = {"files": pages[index]}
@@ -333,6 +350,7 @@ class FakeGoogleDriveService:
         *,
         folder_names=None,
         children_pages=None,
+        children_errors=None,
         permission_pages=None,
         permission_errors=None,
         drive_names=None,
@@ -343,6 +361,7 @@ class FakeGoogleDriveService:
     ):
         self.folder_names = folder_names or {}
         self.children_pages = children_pages or {}
+        self.children_errors = children_errors or {}
         self.permission_pages = permission_pages or {}
         self.permission_errors = permission_errors or {}
         self.drive_names = drive_names or {}
@@ -465,6 +484,84 @@ class GoogleDriveMetadataClientTests(TestCase):
             [permission["id"] for permission in by_id["file-2"].permissions],
             ["perm-1"],
         )
+
+    def test_permission_access_check_counts_unreadable_acl_samples(self):
+        service = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [
+                    [
+                        _file_entry("file-1", "Restricted.pdf", parents=["folder-root"]),
+                        _file_entry("file-2", "Readable.pdf", parents=["folder-root"]),
+                    ],
+                ],
+            },
+            permission_pages={
+                "file-2": [[{"id": "perm-1", "type": "user", "role": "reader"}]],
+            },
+            permission_errors={"file-1": TimeoutError("network timeout")},
+        )
+
+        report = GoogleDriveMetadataClient(service=service).check_permission_access(
+            self._folder_connection()
+        )
+
+        self.assertEqual(report.sampled_files, 2)
+        self.assertEqual(report.readable_files, 1)
+        self.assertEqual(report.unreadable_files, 1)
+        self.assertTrue(report.checked_all_available_files)
+
+    def test_permission_access_check_stops_after_sample_limit(self):
+        service = FakeGoogleDriveService(
+            children_pages={
+                "folder-root": [
+                    [
+                        _file_entry("file-1", "A.pdf", parents=["folder-root"]),
+                        _file_entry("file-2", "B.pdf", parents=["folder-root"]),
+                    ],
+                ],
+            },
+            permission_pages={
+                "file-1": [[{"id": "perm-1", "type": "user", "role": "reader"}]],
+                "file-2": [[{"id": "perm-2", "type": "user", "role": "reader"}]],
+            },
+        )
+
+        report = GoogleDriveMetadataClient(service=service).check_permission_access(
+            self._folder_connection(),
+            max_files=1,
+        )
+
+        self.assertEqual(report.sampled_files, 1)
+        self.assertEqual(report.readable_files, 1)
+        self.assertEqual(report.unreadable_files, 0)
+        self.assertFalse(report.checked_all_available_files)
+
+    def test_permission_access_check_degrades_folder_listing_errors(self):
+        service = FakeGoogleDriveService(
+            children_pages={
+                "folder-root": [
+                    [
+                        _folder_entry("folder-sub", "Restricted Folder"),
+                        _file_entry("file-1", "Readable.pdf", parents=["folder-root"]),
+                    ],
+                ],
+            },
+            children_errors={"folder-sub": TimeoutError("network timeout")},
+            permission_pages={
+                "file-1": [[{"id": "perm-1", "type": "user", "role": "reader"}]],
+            },
+        )
+
+        report = GoogleDriveMetadataClient(service=service).check_permission_access(
+            self._folder_connection()
+        )
+
+        self.assertEqual(report.sampled_files, 1)
+        self.assertEqual(report.readable_files, 1)
+        self.assertEqual(report.unreadable_files, 0)
+        self.assertEqual(report.folder_listing_errors, 1)
+        self.assertFalse(report.checked_all_available_files)
 
     def test_multi_parented_files_are_emitted_once(self):
         entry = _file_entry("file-1", "Shared.pdf", parents=["folder-root", "folder-sub"])
@@ -995,6 +1092,18 @@ class DriveRootApiTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_permission_check_rejects_anonymous_requests(self):
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_permission_check_rejects_non_admin_users(self):
+        self._login_member()
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 403)
+
     def test_root_selection_rejects_anonymous_requests(self):
         response = self.client.post(
             "/api/ingest/drive/connection/root/",
@@ -1222,6 +1331,166 @@ class DriveRootApiTests(TestCase):
         self.assertEqual(
             response.json(),
             {"detail": "Google Drive API request failed while listing Drive roots."},
+        )
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_admin_can_check_permission_metadata_access(self, mock_client_class):
+        fake_client = FakeDriveRootClient(self._candidates())
+        mock_client_class.return_value = fake_client
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "connection_id": self.connection.pk,
+                "selected_root": {
+                    "scope_type": "folder",
+                    "root_folder_id": "folder-old",
+                    "shared_drive_id": "",
+                },
+                "permission_metadata_access": "partial",
+                "sampled_files": 3,
+                "permissions_readable": 2,
+                "permissions_unreadable": 1,
+                "folder_listing_errors": 0,
+                "checked_all_available_files": True,
+            },
+        )
+        self.assertEqual(fake_client.connections, [self.connection])
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_permission_check_reports_ok_when_all_acl_samples_are_readable(self, mock_client_class):
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        mock_client_class.return_value.check_permission_access = lambda connection: (
+            DrivePermissionAccessReport(
+                sampled_files=2,
+                readable_files=2,
+                unreadable_files=0,
+                checked_all_available_files=True,
+            )
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["permission_metadata_access"], "ok")
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_permission_check_reports_no_files_for_empty_selected_root(self, mock_client_class):
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        mock_client_class.return_value.check_permission_access = lambda connection: (
+            DrivePermissionAccessReport(
+                sampled_files=0,
+                readable_files=0,
+                unreadable_files=0,
+                checked_all_available_files=True,
+            )
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["permission_metadata_access"], "no_files")
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_permission_check_reports_blocked_when_no_acl_sample_is_readable(
+        self, mock_client_class
+    ):
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        mock_client_class.return_value.check_permission_access = lambda connection: (
+            DrivePermissionAccessReport(
+                sampled_files=2,
+                readable_files=0,
+                unreadable_files=2,
+                checked_all_available_files=True,
+            )
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["permission_metadata_access"], "blocked")
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_permission_check_reports_blocked_when_only_folder_listing_fails(
+        self, mock_client_class
+    ):
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        mock_client_class.return_value.check_permission_access = lambda connection: (
+            DrivePermissionAccessReport(
+                sampled_files=0,
+                readable_files=0,
+                unreadable_files=0,
+                checked_all_available_files=False,
+                folder_listing_errors=1,
+            )
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["permission_metadata_access"], "blocked")
+        self.assertEqual(response.json()["folder_listing_errors"], 1)
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_permission_check_requires_selected_root(self, mock_client_class):
+        self.connection.root_folder_id = ""
+        self.connection.save(update_fields=["root_folder_id"])
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json(),
+            {"detail": "No Drive root has been selected for this connection."},
+        )
+        mock_client_class.assert_not_called()
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_permission_check_missing_service_account_key_returns_conflict(self, mock_client_class):
+        mock_client_class.return_value = FakeDriveRootClient(
+            error=MissingServiceAccountKeyError("GOOGLE_SERVICE_ACCOUNT_FILE is not configured.")
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json(),
+            {"detail": "GOOGLE_SERVICE_ACCOUNT_FILE is not configured."},
+        )
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_permission_check_drive_api_errors_return_controlled_bad_gateway(
+        self, mock_client_class
+    ):
+        mock_client_class.return_value = FakeDriveRootClient(
+            error=GoogleDriveApiError(
+                "Google Drive API request failed while checking Drive permission metadata access."
+            )
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.json(),
+            {
+                "detail": (
+                    "Google Drive API request failed while checking Drive permission "
+                    "metadata access."
+                )
+            },
         )
 
 

@@ -391,6 +391,21 @@ Drive connection.
 Persists the admin-selected Drive ingestion root after matching it against
 the visible candidate list.
 
+### `GET /ingest/drive/permissions/check`
+
+Samples files under the selected Drive root and reports whether the configured
+connection can read Drive permission metadata for them.
+
+Expected behavior:
+
+- Admin-only.
+- Reads the selected root from server-side `DriveConnection` state.
+- Returns counts of sampled files with readable/unreadable ACL metadata and
+  folder-listing failures.
+- Does not return raw permission payloads or document content.
+- Used to validate service-account vs. domain-wide delegation readiness before
+  relying on content ingestion.
+
 ### `POST /ingest/drive/sync`
 
 Starts or resumes Google Drive ingestion.
