@@ -61,7 +61,9 @@ report the raw error output to the user and treat the review as incomplete.
 This writes `REVIEW.md` using:
 
 - **Stage 1:** offline static checks from `scripts/hooks/pre-commit`.
-- **Stage 2:** agy/Claude senior engineer review of the staged diff.
+- **Stage 2:** Claude Code CLI senior engineer review of the staged diff, when
+  available. If Claude is unavailable or fails, `REVIEW.md` records that the
+  result is static-check-only.
 
 3. Read `REVIEW.md` in full.
 
@@ -110,7 +112,7 @@ an explicit override.
      - Celery task model-passing check.
      - Docker Compose validation.
      - pytest (skip with `SKIP_TESTS=1 git commit ...`).
-   - **Stage 2 — AI deep review** (calls agy/Claude, requires CLI):
+   - **Stage 2 — AI deep review** (calls Claude Code CLI when available):
      - Reads the staged diff and produces a structured senior engineer review.
      - Supplements the static checks with reasoning about design and correctness.
    - Writes all findings to `REVIEW.md`.

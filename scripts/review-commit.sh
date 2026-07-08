@@ -91,9 +91,9 @@ One of: ✅ APPROVE | 🔄 APPROVE WITH NOTES | ❌ REQUEST CHANGES
 (numbered list of concrete tasks for the coding agent to work through, ordered by priority)
 PROMPT
 
-# Run the review — Claude Code CLI first, agy as fallback, else a placeholder.
+# Run the review — Claude Code CLI only, else a placeholder.
 # Same failure handling as the pre-commit hook: stderr captured, non-zero exit
-# treated as failure (partial stdout discarded), fallback on failure too.
+# treated as failure (partial stdout discarded).
 REVIEW_CONTENT=""
 AI_TIMEOUT="${AI_REVIEW_TIMEOUT:-240}"
 AI_ERR_FILE=$(mktemp)
@@ -124,29 +124,14 @@ if command -v claude &> /dev/null; then
   fi
 fi
 
-if [ -z "$REVIEW_CONTENT" ] && command -v agy &> /dev/null; then
-  echo "  Running agy review..."
-  # Mark the boundary so a reader of the stderr tail can tell the two engines'
-  # errors apart instead of seeing one blended blob.
-  [ -s "$AI_ERR_FILE" ] && printf '\n--- claude stderr above; agy stderr below ---\n' >> "$AI_ERR_FILE"
-  set +e
-  REVIEW_CONTENT=$(run_with_timeout agy --print "$(cat "$PROMPT_FILE")")
-  AI_STATUS=$?
-  set -e
-  if [ "$AI_STATUS" -ne 0 ]; then
-    echo "  ⚠️  agy review failed (exit $AI_STATUS) — discarding partial output."
-    REVIEW_CONTENT=""
-  fi
-fi
-
-# If both engines failed or aren't available, write a manual-review placeholder
+# If Claude failed or isn't available, write a manual-review placeholder.
 if [ -z "$REVIEW_CONTENT" ]; then
-  if ! command -v claude &> /dev/null && ! command -v agy &> /dev/null; then
-    FAIL_REASON="neither the claude nor the agy CLI is installed"
+  if ! command -v claude &> /dev/null; then
+    FAIL_REASON="the claude CLI is not installed"
   elif [ "$AI_STATUS" -eq 124 ]; then
     FAIL_REASON="review timed out after ${AI_TIMEOUT}s (raise with AI_REVIEW_TIMEOUT=<seconds>)"
   else
-    FAIL_REASON="the available engines ran but produced no review (last exit: $AI_STATUS)"
+    FAIL_REASON="the claude CLI ran but produced no review (exit: $AI_STATUS)"
   fi
   # Neutralize code fences in stderr so they can't break REVIEW.md formatting.
   ERR_TAIL=$(tail -c 800 "$AI_ERR_FILE" 2>/dev/null | sed 's/```/~~~/g' || true)
@@ -156,7 +141,7 @@ if [ -z "$REVIEW_CONTENT" ]; then
 **Author:** $AUTHOR
 
 > ⚠️ Automated review could not run — $FAIL_REASON.
-> Run \`claude -p\` or \`agy\` manually with the prompt in \`/tmp/review-prompt.*.md\` or use \`make review\`.
+> Run \`claude -p\` manually with the prompt in \`/tmp/review-prompt.*.md\` or use \`make review\`.
 
 Stderr tail:
 \`\`\`

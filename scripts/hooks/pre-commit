@@ -3,7 +3,7 @@
 #
 # Two-stage pre-commit review gate:
 #   Stage 1 — Fast offline static checks (lint, secrets, patterns)
-#   Stage 2 — Deep AI review (Claude Code CLI first, agy as fallback)
+#   Stage 2 — Deep AI review (Claude Code CLI when available)
 #
 # Writes findings to REVIEW.md.
 # The coding agent (Codex, Claude Code, ...) MUST read REVIEW.md and present
@@ -247,7 +247,7 @@ echo -e "  ${GREEN}✅ Passed:${RESET}   ${#GOOD_NOTES[@]}"
 echo -e "  ${YELLOW}⚠️  Warnings:${RESET} ${#WARNING_ISSUES[@]}"
 echo -e "  ${RED}❌ Critical:${RESET} ${#CRITICAL_ISSUES[@]}"
 
-# ─── Stage 2: AI deep review via agy ─────────────────────────────────────────
+# ─── Stage 2: AI deep review via Claude Code CLI ─────────────────────────────
 
 AI_REVIEW_TEXT=""
 AI_ENGINE=""
@@ -255,12 +255,11 @@ AI_VERDICT=""
 AI_REVIEW_SUCCEEDED=0
 AI_TIMEOUT="${AI_REVIEW_TIMEOUT:-240}"
 
-# Pick the review engine: Claude Code CLI first, agy as fallback.
+# Pick the review engine: Claude Code CLI only. If Claude is unavailable or
+# fails, REVIEW.md records a static-check-only review.
 if [ "${SKIP_AI_REVIEW:-0}" != "1" ]; then
   if command -v claude &> /dev/null; then
     AI_ENGINE="claude"
-  elif command -v agy &> /dev/null; then
-    AI_ENGINE="agy"
   fi
 fi
 
@@ -277,7 +276,6 @@ run_ai_engine() {
     claude) cmd=(claude -p --disallowedTools \
               "Bash" "Edit" "Write" "NotebookEdit" "WebFetch" "WebSearch" \
               "Task" "Read" "Grep" "Glob") ;;
-    agy)    cmd=(agy --print "$prompt") ;;
     *)      return 1 ;;
   esac
   # -k 10: SIGKILL 10s after the deadline in case the CLI ignores SIGTERM.
@@ -379,22 +377,6 @@ APPROVE / APPROVE WITH NOTES / REQUEST CHANGES
     AI_REVIEW_TEXT=""
   fi
 
-  # If claude produced no usable output, fall back to agy before giving up.
-  if [ -z "$AI_REVIEW_TEXT" ] && [ "$AI_ENGINE" = "claude" ] && command -v agy &> /dev/null; then
-    echo -e "  ${YELLOW}⚠️  claude produced no usable output (exit $AI_STATUS) — falling back to agy...${RESET}"
-    # Mark the boundary so a reader of the stderr tail can tell the two engines'
-    # errors apart instead of seeing one blended blob.
-    [ -s "$AI_ERR_FILE" ] && printf '\n--- claude stderr above; agy stderr below ---\n' >> "$AI_ERR_FILE"
-    AI_ENGINE="agy"
-    set +e
-    AI_REVIEW_TEXT=$(run_ai_engine "$AI_ENGINE" "$AI_PROMPT")
-    AI_STATUS=$?
-    set -e
-    if [ "$AI_STATUS" -ne 0 ]; then
-      AI_REVIEW_TEXT=""
-    fi
-  fi
-
   if [ -n "$AI_REVIEW_TEXT" ]; then
     AI_REVIEW_SUCCEEDED=1
     echo -e "  ${GREEN}✅ AI review complete (engine: $AI_ENGINE)${RESET}"
@@ -415,7 +397,7 @@ ${ERR_TAIL:-<empty>}
 elif [ "${SKIP_AI_REVIEW:-0}" = "1" ]; then
   AI_REVIEW_TEXT="_(AI review skipped — SKIP_AI_REVIEW=1)_"
 else
-  AI_REVIEW_TEXT="_(AI review unavailable — neither \`claude\` nor \`agy\` CLI found on PATH.)_"
+  AI_REVIEW_TEXT="_(AI review unavailable — \`claude\` CLI not found on PATH.)_"
 fi
 
 # Parse the AI verdict. Scope to the lines right after the Verdict heading —
