@@ -1124,6 +1124,143 @@ class DriveRootApiTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_delegated_subject_rejects_anonymous_requests(self):
+        response = self.client.post(
+            "/api/ingest/drive/connection/delegated-subject/",
+            data={"delegated_subject_email": "admin@example.com"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_delegated_subject_rejects_non_admin_users(self):
+        self._login_member()
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/delegated-subject/",
+            data={"delegated_subject_email": "admin@example.com"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_set_delegated_subject_and_invalidate_retrievable_documents(self):
+        other_connection = DriveConnection.objects.create(
+            workspace_domain="other.example.com",
+            root_folder_id="other-folder",
+        )
+        stale_document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="drive-file-1",
+            title="Old Delegation Notes",
+            mime_type="application/pdf",
+            retrieval_eligible=True,
+        )
+        unrelated_document = SourceDocument.objects.create(
+            connection=other_connection,
+            drive_file_id="drive-file-2",
+            title="Other Client Notes",
+            mime_type="application/pdf",
+            retrieval_eligible=True,
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/delegated-subject/",
+            data={"delegated_subject_email": "delegated-admin@example.com"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "connection_id": self.connection.pk,
+                "delegated_subject_email": "delegated-admin@example.com",
+                "invalidated_document_count": 1,
+            },
+        )
+        self.connection.refresh_from_db()
+        stale_document.refresh_from_db()
+        unrelated_document.refresh_from_db()
+        self.assertEqual(self.connection.delegated_subject_email, "delegated-admin@example.com")
+        self.assertFalse(stale_document.retrieval_eligible)
+        self.assertTrue(unrelated_document.retrieval_eligible)
+
+    def test_admin_can_clear_delegated_subject(self):
+        self.connection.delegated_subject_email = "delegated-admin@example.com"
+        self.connection.save(update_fields=["delegated_subject_email"])
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/delegated-subject/",
+            data={"delegated_subject_email": ""},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["delegated_subject_email"], "")
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.delegated_subject_email, "")
+
+    def test_reposting_same_delegated_subject_does_not_invalidate_documents(self):
+        self.connection.delegated_subject_email = "delegated-admin@example.com"
+        self.connection.save(update_fields=["delegated_subject_email"])
+        document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="drive-file-1",
+            title="Current Delegation Notes",
+            mime_type="application/pdf",
+            retrieval_eligible=True,
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/delegated-subject/",
+            data={"delegated_subject_email": "delegated-admin@example.com"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["invalidated_document_count"], 0)
+        document.refresh_from_db()
+        self.assertTrue(document.retrieval_eligible)
+
+    def test_invalid_delegated_subject_email_is_rejected(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/delegated-subject/",
+            data={"delegated_subject_email": "not-an-email"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("delegated_subject_email", response.json())
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.delegated_subject_email, "")
+
+    def test_delegated_subject_endpoint_ignores_drive_scope_fields(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/delegated-subject/",
+            data={
+                "delegated_subject_email": "delegated-admin@example.com",
+                "scope_type": "shared_drive",
+                "root_id": "drive-123",
+                "root_folder_id": "attacker-folder",
+                "shared_drive_id": "attacker-drive",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.scope_type, DriveConnection.ScopeType.FOLDER)
+        self.assertEqual(self.connection.root_folder_id, "folder-old")
+        self.assertEqual(self.connection.shared_drive_id, "")
+
     @patch("integrations.views.GoogleDriveMetadataClient")
     def test_admin_can_list_visible_drive_roots(self, mock_client_class):
         fake_client = FakeDriveRootClient(self._candidates())

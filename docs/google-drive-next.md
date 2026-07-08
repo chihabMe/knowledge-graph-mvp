@@ -164,6 +164,7 @@ objects.
 ```http
 GET /api/ingest/drive/roots/
 POST /api/ingest/drive/connection/root/
+POST /api/ingest/drive/connection/delegated-subject/
 GET /api/ingest/drive/permissions/check/
 POST /api/ingest/drive/sync/
 POST /api/permissions/sync/
@@ -178,6 +179,14 @@ from that visible list, then persists the selected ingestion scope in
 `DriveConnection`. When the selected root changes, existing documents for that
 connection are marked non-retrievable until the new scope is synced; the
 response includes `rescoped_document_count` for operator visibility.
+
+`POST /api/ingest/drive/connection/delegated-subject/` accepts a single
+`delegated_subject_email` value. A valid email configures the Workspace user
+used for domain-wide delegation; an empty string clears it. When the value
+changes, retrievable documents for that connection are marked non-retrievable
+until permissions are refreshed under the new identity. The endpoint is
+admin-only, rate limited, and ignores any Drive root/scope fields in the
+request body.
 
 `GET /api/ingest/drive/permissions/check/` samples files under the selected
 root and returns only counts/status for Drive ACL readability and folder-listing

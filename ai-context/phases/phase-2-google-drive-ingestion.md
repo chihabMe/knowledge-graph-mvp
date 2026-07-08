@@ -66,6 +66,8 @@ be detected without re-downloading or re-embedding file content.
 - [x] Add test that `POST /api/ingest/drive/sync/` ignores request-body Drive scope and uses server-side configuration only. Effort: Extra High.
 - [x] Add test that unverified documents remain retrieval-ineligible. Effort: Extra High.
 - [x] Add admin diagnostic for selected-root permission metadata readability. Effort: High.
+- [x] Add admin endpoint to set or clear the optional delegated Workspace
+  subject for domain-wide delegation testing. Effort: High.
 
 ## Validation
 
@@ -97,6 +99,8 @@ be detected without re-downloading or re-embedding file content.
   manual `.env` root IDs are only a bootstrap/developer fallback.
 - [x] Admin can check whether the selected root's sampled files expose Drive
   permission metadata before relying on content ingestion.
+- [x] Admin can set or clear the optional domain-wide delegated subject through
+  a controlled backend endpoint without accepting Drive scope changes.
 
 ## Completion Status
 
@@ -105,7 +109,10 @@ permissions), Docs/Sheets export + binary download, content storage with
 change detection, Celery sync task with post-commit extraction queueing
 (Phase 3 stub), admin root list/select endpoints, and the admin-only,
 rate-limited, audited `POST /api/ingest/drive/sync/` endpoint are implemented
-with offline tests (fake Drive service — no network). Remaining before live
-client onboarding: share the pilot folder/shared drive with the service
-account, choose it through the backend flow, then run live validation against
-real Drive data. Creator metadata remains a follow-up via the Revisions API.
+with offline tests (fake Drive service — no network). The admin connection flow
+also includes controlled domain-wide delegated-subject configuration for the
+fallback case where folder sharing cannot expose permission metadata. Remaining
+before live client onboarding: share the pilot folder/shared drive with the
+service account, choose it through the backend flow, then run live validation
+against real Drive data. Creator metadata remains a follow-up via the Revisions
+API.

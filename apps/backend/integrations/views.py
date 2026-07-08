@@ -14,7 +14,7 @@ from integrations.drive.google_client import (
     MissingServiceAccountKeyError,
 )
 from integrations.models import DriveConnection, DriveSyncRun, SourceDocument
-from integrations.serializers import DriveRootSelectionSerializer
+from integrations.serializers import DriveDelegatedSubjectSerializer, DriveRootSelectionSerializer
 from integrations.tasks import run_drive_sync
 
 
@@ -175,6 +175,40 @@ class DriveRootSelectionView(APIView):
                 "connection_id": connection.pk,
                 "selected_root": _root_candidate_payload(selected),
                 "rescoped_document_count": rescoped_document_count,
+            }
+        )
+
+
+class DriveDelegatedSubjectView(APIView):
+    permission_classes = [IsAdminUser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "drive-roots"
+
+    def post(self, request):
+        serializer = DriveDelegatedSubjectSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        delegated_subject_email = serializer.validated_data["delegated_subject_email"]
+
+        connection = _active_or_bootstrap_connection()
+        invalidated_document_count = 0
+        with transaction.atomic():
+            connection = DriveConnection.objects.select_for_update().get(pk=connection.pk)
+            if connection.delegated_subject_email != delegated_subject_email:
+                connection.delegated_subject_email = delegated_subject_email
+                connection.save(update_fields=["delegated_subject_email", "updated_at"])
+                invalidated_document_count = SourceDocument.objects.filter(
+                    connection=connection,
+                    retrieval_eligible=True,
+                ).update(
+                    retrieval_eligible=False,
+                    updated_at=timezone.now(),
+                )
+
+        return Response(
+            {
+                "connection_id": connection.pk,
+                "delegated_subject_email": connection.delegated_subject_email,
+                "invalidated_document_count": invalidated_document_count,
             }
         )
 

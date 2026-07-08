@@ -391,6 +391,20 @@ Drive connection.
 Persists the admin-selected Drive ingestion root after matching it against
 the visible candidate list.
 
+### `POST /ingest/drive/connection/delegated-subject`
+
+Sets or clears the optional delegated Workspace user used for domain-wide
+delegation.
+
+Expected behavior:
+
+- Admin-only.
+- Accepts only `delegated_subject_email`; an empty string clears the override.
+- Validates non-empty values as email addresses.
+- Does not accept Drive root or scope changes.
+- When the value changes, marks retrievable documents for that connection
+  non-retrievable until permissions are refreshed under the new identity.
+
 ### `GET /ingest/drive/permissions/check`
 
 Samples files under the selected Drive root and reports whether the configured
