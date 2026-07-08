@@ -199,8 +199,11 @@ After making code changes, stage the intended change set and run the review gate
 make review-staged
 ```
 
-Then read `REVIEW.md`, present the findings to the user, and wait for the user
-to choose whether Codex should fix the findings or ignore them for now.
+The default gate is deterministic local validation only. Claude/AI review is
+opt-in (`ENABLE_AI_REVIEW=1 make review-staged`) and must not run
+automatically. Then read `REVIEW.md`, present any static findings to the user,
+and wait for the user to choose whether Codex should fix the findings or ignore
+them for now.
 
 Before committing code, run the relevant subset:
 

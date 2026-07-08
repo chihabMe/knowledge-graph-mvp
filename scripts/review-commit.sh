@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # review-commit.sh
-# Runs a structured senior-engineer review of recent commits and writes
-# findings to REVIEW.md so the coding agent can read and act on them.
+# Runs an opt-in AI review of recent commits and writes findings to REVIEW.md.
+# By default this script does not call Claude; set ENABLE_AI_REVIEW=1 when a
+# human operator explicitly wants that review.
 #
 # Usage:
 #   ./scripts/review-commit.sh              # reviews last commit vs HEAD~1
@@ -91,7 +92,8 @@ One of: ✅ APPROVE | 🔄 APPROVE WITH NOTES | ❌ REQUEST CHANGES
 (numbered list of concrete tasks for the coding agent to work through, ordered by priority)
 PROMPT
 
-# Run the review — Claude Code CLI only, else a placeholder.
+# Run the review only when explicitly enabled — Claude Code CLI only, else a
+# placeholder.
 # Same failure handling as the pre-commit hook: stderr captured, non-zero exit
 # treated as failure (partial stdout discarded).
 REVIEW_CONTENT=""
@@ -108,7 +110,7 @@ run_with_timeout() {
   fi
 }
 
-if command -v claude &> /dev/null; then
+if [ "${ENABLE_AI_REVIEW:-0}" = "1" ] && command -v claude &> /dev/null; then
   echo "  Running Claude review..."
   set +e
   # --disallowedTools keeps the reviewer from wandering the repo; the prompt is
@@ -126,7 +128,9 @@ fi
 
 # If Claude failed or isn't available, write a manual-review placeholder.
 if [ -z "$REVIEW_CONTENT" ]; then
-  if ! command -v claude &> /dev/null; then
+  if [ "${ENABLE_AI_REVIEW:-0}" != "1" ]; then
+    FAIL_REASON="AI review is disabled by default; set ENABLE_AI_REVIEW=1 to run Claude explicitly"
+  elif ! command -v claude &> /dev/null; then
     FAIL_REASON="the claude CLI is not installed"
   elif [ "$AI_STATUS" -eq 124 ]; then
     FAIL_REASON="review timed out after ${AI_TIMEOUT}s (raise with AI_REVIEW_TIMEOUT=<seconds>)"
@@ -140,8 +144,7 @@ if [ -z "$REVIEW_CONTENT" ]; then
 **Commits:** $COMMIT_MSG
 **Author:** $AUTHOR
 
-> ⚠️ Automated review could not run — $FAIL_REASON.
-> Run \`claude -p\` manually with the prompt in \`/tmp/review-prompt.*.md\` or use \`make review\`.
+> ⚠️ Automated AI review did not run — $FAIL_REASON.
 
 Stderr tail:
 \`\`\`

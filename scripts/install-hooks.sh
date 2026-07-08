@@ -33,4 +33,4 @@ fi
 
 echo ""
 echo "Done. Hooks will fire automatically on git operations."
-echo "To skip a review on a specific commit: SKIP_REVIEW=1 git commit ..."
+echo "To skip all hook checks on a specific commit: SKIP_REVIEW=1 git commit ..."

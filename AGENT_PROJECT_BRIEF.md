@@ -573,6 +573,9 @@ When asked to build a feature:
 6. Add tests for permission behavior when touching retrieval or ingestion.
 7. Add or update docs when changing public endpoints or data contracts.
 8. Avoid building UI polish before the core Drive/graph/permission loop works.
+9. Automated validation gates should run deterministic local checks by default.
+   Claude/AI review is opt-in only (`ENABLE_AI_REVIEW=1`) and must not run
+   automatically during normal staged review or commits.
 
 ## 20. Definition Of Done
 

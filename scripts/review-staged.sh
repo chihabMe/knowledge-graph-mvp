@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs the same two-stage review gate as the pre-commit hook without creating a
-# commit. Use this after code changes so the coding agent can show REVIEW.md to
-# the user before deciding whether to fix or ignore review findings.
+# Runs the same deterministic staged checks as the pre-commit hook without
+# creating a commit. AI review is disabled by default; set ENABLE_AI_REVIEW=1
+# only when a human operator explicitly wants Claude review.
 
 set -euo pipefail
 

@@ -53,16 +53,16 @@ health:
 smoke:
 	$(COMPOSE) exec -T django python manage.py shell -c "from core.tasks import smoke_test; print('queued:', smoke_test.delay().id)"
 
-# Senior engineer review — reviews staged changes without creating a commit
+# Deterministic staged checks without creating a commit.
 review-staged:
 	@chmod +x scripts/hooks/pre-commit scripts/review-staged.sh 2>/dev/null || true
 	bash scripts/review-staged.sh
 
-# Senior engineer review — reviews the last commit
+# Optional AI review helper; set ENABLE_AI_REVIEW=1 to call Claude.
 review:
 	bash scripts/review-commit.sh HEAD~1 HEAD
 
-# Reviews everything on the current branch vs main
+# Optional branch AI review helper; set ENABLE_AI_REVIEW=1 to call Claude.
 review-branch:
 	bash scripts/review-commit.sh origin/main HEAD
 

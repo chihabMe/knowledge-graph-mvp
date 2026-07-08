@@ -61,16 +61,15 @@ report the raw error output to the user and treat the review as incomplete.
 This writes `REVIEW.md` using:
 
 - **Stage 1:** offline static checks from `scripts/hooks/pre-commit`.
-- **Stage 2:** Claude Code CLI senior engineer review of the staged diff, when
-  available. If Claude is unavailable or fails, `REVIEW.md` records that the
-  result is static-check-only.
+- **Stage 2:** AI review is disabled by default. It runs only when a human
+  operator explicitly opts in with `ENABLE_AI_REVIEW=1`.
 
 3. Read `REVIEW.md` in full.
 
 4. Present the review results to the user:
    - Critical issues.
    - Warnings.
-   - AI review verdict.
+   - AI review verdict, only if AI review was explicitly enabled.
    - Proposed action items.
 
 5. Ask the user:
@@ -112,9 +111,10 @@ an explicit override.
      - Celery task model-passing check.
      - Docker Compose validation.
      - pytest (skip with `SKIP_TESTS=1 git commit ...`).
-   - **Stage 2 — AI deep review** (calls Claude Code CLI when available):
-     - Reads the staged diff and produces a structured senior engineer review.
-     - Supplements the static checks with reasoning about design and correctness.
+   - **Stage 2 — AI deep review** is disabled by default:
+     - It runs only when a human operator explicitly sets
+       `ENABLE_AI_REVIEW=1`.
+     - Do not enable it automatically during normal agent work.
    - Writes all findings to `REVIEW.md`.
    - **Blocks the commit** if any critical issue is found.
 

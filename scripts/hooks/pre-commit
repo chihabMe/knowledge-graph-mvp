@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # scripts/hooks/pre-commit
 #
-# Two-stage pre-commit review gate:
+# Pre-commit gate:
 #   Stage 1 — Fast offline static checks (lint, secrets, patterns)
-#   Stage 2 — Deep AI review (Claude Code CLI when available)
+#   Stage 2 — AI review is disabled by default; opt in manually when needed.
 #
 # Writes findings to REVIEW.md.
 # The coding agent (Codex, Claude Code, ...) MUST read REVIEW.md and present
@@ -12,7 +12,8 @@
 # Environment overrides:
 #   SKIP_REVIEW=1        — skip entirely (emergency only, never use casually)
 #   SKIP_TESTS=1         — skip pytest (use when tests already passed this session)
-#   SKIP_AI_REVIEW=1     — skip the AI review stage (static checks still run)
+#   ENABLE_AI_REVIEW=1   — opt into the Claude AI review stage
+#   SKIP_AI_REVIEW=1     — legacy alias to force-skip the AI review stage
 #   REVIEW_BLOCK=0       — allow commit even with critical issues (setup mode only)
 #   AI_REVIEW_TIMEOUT=N  — seconds before the AI review call is killed (default 240)
 #   REVIEW_AI_BLOCK=1    — also block the commit when the AI verdict is REQUEST CHANGES
@@ -247,7 +248,7 @@ echo -e "  ${GREEN}✅ Passed:${RESET}   ${#GOOD_NOTES[@]}"
 echo -e "  ${YELLOW}⚠️  Warnings:${RESET} ${#WARNING_ISSUES[@]}"
 echo -e "  ${RED}❌ Critical:${RESET} ${#CRITICAL_ISSUES[@]}"
 
-# ─── Stage 2: AI deep review via Claude Code CLI ─────────────────────────────
+# ─── Stage 2: AI deep review via Claude Code CLI (opt-in only) ───────────────
 
 AI_REVIEW_TEXT=""
 AI_ENGINE=""
@@ -255,9 +256,9 @@ AI_VERDICT=""
 AI_REVIEW_SUCCEEDED=0
 AI_TIMEOUT="${AI_REVIEW_TIMEOUT:-240}"
 
-# Pick the review engine: Claude Code CLI only. If Claude is unavailable or
-# fails, REVIEW.md records a static-check-only review.
-if [ "${SKIP_AI_REVIEW:-0}" != "1" ]; then
+# Pick the review engine only when explicitly requested. If Claude is
+# unavailable or fails, REVIEW.md records a static-check-only review.
+if [ "${ENABLE_AI_REVIEW:-0}" = "1" ] && [ "${SKIP_AI_REVIEW:-0}" != "1" ]; then
   if command -v claude &> /dev/null; then
     AI_ENGINE="claude"
   fi
@@ -396,6 +397,8 @@ ${ERR_TAIL:-<empty>}
   rm -f "$AI_ERR_FILE"
 elif [ "${SKIP_AI_REVIEW:-0}" = "1" ]; then
   AI_REVIEW_TEXT="_(AI review skipped — SKIP_AI_REVIEW=1)_"
+elif [ "${ENABLE_AI_REVIEW:-0}" != "1" ]; then
+  AI_REVIEW_TEXT="_(AI review disabled — set ENABLE_AI_REVIEW=1 to run it explicitly.)_"
 else
   AI_REVIEW_TEXT="_(AI review unavailable — \`claude\` CLI not found on PATH.)_"
 fi
