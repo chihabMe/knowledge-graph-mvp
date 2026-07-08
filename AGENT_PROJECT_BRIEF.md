@@ -214,12 +214,17 @@ needs a new type, update the ontology documentation and tests.
 
 ## 9. Google Drive Ingestion Requirements
 
-The first real pilot assumes service-account access with Google Workspace
-domain-wide delegation.
+The first real pilot assumes a per-client Google service account, with
+domain-wide delegation only as a fallback when Workspace policy blocks the
+share-to-connect path.
 
 The Drive connector should:
 
-- Connect to one configured Drive folder or shared drive scope.
+- Let an admin connect Google Drive, list eligible root folders/shared drives,
+  choose the ingestion root dynamically, and persist that scope in
+  `DriveConnection`.
+- Treat manually supplied root IDs as a bootstrap/developer fallback, not the
+  client-facing setup path.
 - List supported files.
 - Export Google Docs to text or Markdown.
 - Export Google Sheets to CSV/text summaries.
@@ -376,13 +381,24 @@ Reports health for:
 - Drive connector
 - OpenRouter configuration
 
+### `GET /ingest/drive/roots`
+
+Lists eligible root folders/shared drives visible to the configured Google
+Drive connection.
+
+### `POST /ingest/drive/connection/root`
+
+Persists the admin-selected Drive ingestion root after matching it against
+the visible candidate list.
+
 ### `POST /ingest/drive/sync`
 
 Starts or resumes Google Drive ingestion.
 
 Expected behavior:
 
-- Scan configured folder/shared drive.
+- Scan the folder/shared-drive scope currently stored on the enabled
+  `DriveConnection`.
 - Pull changed content.
 - Update Neo4j.
 - Return counts for scanned, ingested, skipped, failed.

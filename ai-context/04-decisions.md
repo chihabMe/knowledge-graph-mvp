@@ -137,15 +137,17 @@ Reason:
 
 Status: Accepted (2026-07-08).
 
-## ADR-009: Drive Access Via Per-Client Service Account, Provisioned By Us; "Share To Connect" Folder Selection
+## ADR-009: Drive Access Via Per-Client Service Account, Provisioned By Us; Dynamic "Share To Connect" Folder Selection
 
 Decision: Each client deployment gets its own Google service account,
 created by us in our GCP project (exception: Drake's pilot uses an SA in his
 own project). Clients never touch GCP. Connecting Drive = the client shares
 a folder with the service account's email as Viewer — the same action as
-sharing with a person. Folder selection becomes dynamic later via a settings
-page that lists folders shared with the service account ("shared with me")
-and writes the chosen root into `DriveConnection`. No per-user OAuth tokens.
+sharing with a person. The current Drive-ingestion work must include an admin
+connection/settings flow that lists folders shared with the service account
+("shared with me"), lets the admin choose the ingestion root, and writes the
+chosen folder/shared-drive scope into `DriveConnection`. No per-user OAuth
+tokens.
 
 Reason:
 
@@ -153,7 +155,7 @@ Reason:
   non-technical (unshare the folder).
 - One SA per client bounds the blast radius of a leaked key to that client.
   A single global SA for all clients was rejected for exactly this reason.
-- Per-user OAuth was rejected: tokens die with the employee who granted
+- Per-user OAuth is not the default: tokens die with the employee who granted
   them, grant broader access than the picked folder, and public-app
   verification is expensive.
 - This resolves the previously open "domain-wide delegation vs. per-user
@@ -162,13 +164,14 @@ Reason:
   (the pilot's live validation will show whether viewer-level sharing
   exposes full ACLs).
 
-Rule for the future folder-picker feature: changing the root folder is a
-re-scope operation — documents outside the new root must lose retrieval
-eligibility and their graph/SpiceDB footprint, otherwise switching roots
-silently widens what is answerable.
+Rule for root changes: changing the root folder/shared drive is a re-scope
+operation — documents outside the new root must lose retrieval eligibility and
+their graph/SpiceDB footprint, otherwise switching roots silently widens what
+is answerable.
 
-Status: Accepted (2026-07-08). Folder-picker settings page: designed,
-deferred until after pilot validation.
+Status: Accepted (2026-07-08). Updated 2026-07-08: dynamic folder/shared-drive
+selection is no longer deferred; it is the next Phase 2 product path before
+asking the client to provide manual root IDs.
 
 ## Open / Needs Explicit Confirmation
 

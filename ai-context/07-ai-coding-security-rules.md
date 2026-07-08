@@ -135,7 +135,11 @@ python manage.py check --deploy
 
 ## Google Drive Rules
 
-- First pilot assumes Google Workspace service-account access with domain-wide delegation.
+- First pilot defaults to a per-client Google service account and controlled
+  admin folder/shared-drive selection. Domain-wide delegation is a fallback,
+  not the default.
+- Manual Drive root IDs in `.env` are a bootstrap/developer fallback. The
+  client-facing path must persist the selected root in `DriveConnection`.
 - Store Drive metadata needed for provenance and sync:
   - Drive file ID.
   - URL.

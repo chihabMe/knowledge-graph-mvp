@@ -194,10 +194,12 @@ graphify cluster-only apps/backend
 
 The backend foundation has been built with Django + Django REST Framework.
 
-The next implementation step should be controlled Google Drive ingestion work:
+The next implementation step should be controlled Google Drive onboarding work:
 
-1. Add PostgreSQL-backed Drive connection and sync models.
-2. Add Google Drive credential configuration.
-3. Add mocked Drive API client tests before real API calls.
-4. Store Drive metadata before downloading content.
-5. Preserve future permission/provenance requirements in every model.
+1. Add the admin flow that lists eligible Drive folders/shared drives available
+   to the configured service account.
+2. Persist the selected root scope in `DriveConnection`; manual root IDs are
+   only a bootstrap/developer fallback.
+3. Keep sync triggers server-side and audited; never accept arbitrary Drive
+   scope changes from untrusted request bodies.
+4. Preserve future permission/provenance requirements in every model.

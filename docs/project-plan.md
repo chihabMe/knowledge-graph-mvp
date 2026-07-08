@@ -51,7 +51,9 @@ Google Drive
 
 ### Milestone 2: Google Drive Metadata Ingestion
 
-- Configure service-account domain-wide delegation.
+- Configure a per-client Google service account, with domain-wide delegation
+  only as a fallback.
+- Add controlled admin folder/shared-drive selection before live sync.
 - Store Drive connection records.
 - Track sync runs.
 - List supported Drive files.

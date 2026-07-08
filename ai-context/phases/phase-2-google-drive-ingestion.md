@@ -6,7 +6,10 @@ Ingest supported Google Drive content and metadata into the system while preserv
 
 ## Scope
 
-- Google Workspace service-account domain-wide delegation.
+- Per-client Google service-account connection, with domain-wide delegation
+  only as a fallback.
+- Admin-selectable Drive root folder/shared-drive scope persisted in
+  `DriveConnection`.
 - Drive folder/shared-drive scanning.
 - Google Docs export.
 - Google Sheets export.
@@ -41,6 +44,8 @@ be detected without re-downloading or re-embedding file content.
 ## Tasks
 
 - [x] Add Google Drive credential configuration. Effort: Extra High.
+- [x] Add admin Drive connection flow that lists eligible folders/shared drives
+  and persists the selected root scope. Effort: Extra High.
 - [x] Build Drive folder scanner. Effort: High.
 - [x] Fetch file metadata. Effort: High.
 - [~] Fetch owner/creator metadata. Effort: High. (Owner captured; Drive v3
@@ -78,14 +83,17 @@ be detected without re-downloading or re-embedding file content.
 - [x] Public/shared-link files are excluded from retrieval in Phase 2 with a stored reason.
 - [x] Sync trigger audit records include actor identity, timestamp, and configured scope.
 - [x] Ingestion API ignores Drive scope/folder values from request bodies.
+- [x] Admin can choose the ingestion root through a controlled backend flow;
+  manual `.env` root IDs are only a bootstrap/developer fallback.
 
 ## Completion Status
 
 Code complete. Drive client (BFS folder/shared-drive scan, metadata,
 permissions), Docs/Sheets export + binary download, content storage with
 change detection, Celery sync task with post-commit extraction queueing
-(Phase 3 stub), and the admin-only, rate-limited, audited
-`POST /api/ingest/drive/sync/` endpoint are implemented with offline tests
-(fake Drive service — no network). Remaining: live validation against a real
-Drive once Drake provides the service-account credentials, and the creator
-metadata follow-up via the Revisions API.
+(Phase 3 stub), admin root list/select endpoints, and the admin-only,
+rate-limited, audited `POST /api/ingest/drive/sync/` endpoint are implemented
+with offline tests (fake Drive service — no network). Remaining before live
+client onboarding: share the pilot folder/shared drive with the service
+account, choose it through the backend flow, then run live validation against
+real Drive data. Creator metadata remains a follow-up via the Revisions API.

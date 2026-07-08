@@ -26,6 +26,8 @@ This backlog is ordered by dependency and risk.
 ## Phase 2: Google Drive Ingestion
 
 - Add Google service-account credentials handling.
+- Add admin Drive connection/folder-selection flow that lists eligible folders
+  and shared drives, then writes the selected root into `DriveConnection`.
 - Add Drive folder/shared-drive scanner.
 - Export Google Docs.
 - Export Google Sheets.

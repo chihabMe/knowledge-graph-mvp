@@ -13,7 +13,7 @@ from typing import Any
 
 from django.conf import settings
 
-from integrations.drive.client import DriveFileMetadata
+from integrations.drive.client import DriveFileMetadata, DriveRootCandidate
 from integrations.models import DriveConnection
 
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
@@ -23,9 +23,14 @@ FILE_LIST_FIELDS = (
     "nextPageToken, files(id, name, mimeType, webViewLink, createdTime, "
     "modifiedTime, md5Checksum, parents, driveId, owners(emailAddress))"
 )
+ROOT_FOLDER_LIST_FIELDS = "nextPageToken, files(id, name, webViewLink, driveId)"
+SHARED_DRIVE_LIST_FIELDS = "nextPageToken, drives(id, name)"
 PERMISSION_FIELDS = (
     "nextPageToken, permissions(id, type, role, emailAddress, domain, "
     "allowFileDiscovery, deleted, pendingOwner)"
+)
+ROOT_FOLDER_QUERY = (
+    "sharedWithMe and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
 )
 
 
@@ -103,6 +108,25 @@ class GoogleDriveMetadataClient:
 
         return files
 
+    def list_root_candidates(self, connection: DriveConnection) -> list[DriveRootCandidate]:
+        service = self._service or build_drive_service(connection)
+        candidates = [
+            *self._list_shared_folders(service),
+            *self._list_shared_drives(service),
+        ]
+        by_scope_and_id: dict[tuple[str, str], DriveRootCandidate] = {}
+        for candidate in candidates:
+            by_scope_and_id.setdefault((candidate.scope_type, candidate.root_id), candidate)
+
+        return sorted(
+            by_scope_and_id.values(),
+            key=lambda candidate: (
+                candidate.scope_type,
+                candidate.name.lower(),
+                candidate.root_id,
+            ),
+        )
+
     def _root_id(self, connection: DriveConnection) -> str:
         if connection.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
             return connection.shared_drive_id
@@ -132,6 +156,62 @@ class GoogleDriveMetadataClient:
             )
             response = request.execute()
             yield from response.get("files", [])
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return
+
+    def _list_shared_folders(self, service):
+        page_token = None
+        while True:
+            response = (
+                service.files()
+                .list(
+                    q=ROOT_FOLDER_QUERY,
+                    fields=ROOT_FOLDER_LIST_FIELDS,
+                    pageSize=PAGE_SIZE,
+                    pageToken=page_token,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                )
+                .execute()
+            )
+            for entry in response.get("files", []):
+                root_id = entry.get("id", "")
+                if not root_id:
+                    continue
+                yield DriveRootCandidate(
+                    scope_type=DriveConnection.ScopeType.FOLDER,
+                    root_id=root_id,
+                    name=entry.get("name", ""),
+                    drive_url=entry.get("webViewLink", ""),
+                    shared_drive_id=entry.get("driveId", ""),
+                )
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return
+
+    def _list_shared_drives(self, service):
+        page_token = None
+        while True:
+            response = (
+                service.drives()
+                .list(
+                    fields=SHARED_DRIVE_LIST_FIELDS,
+                    pageSize=PAGE_SIZE,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            for entry in response.get("drives", []):
+                root_id = entry.get("id", "")
+                if not root_id:
+                    continue
+                yield DriveRootCandidate(
+                    scope_type=DriveConnection.ScopeType.SHARED_DRIVE,
+                    root_id=root_id,
+                    name=entry.get("name", ""),
+                    shared_drive_id=root_id,
+                )
             page_token = response.get("nextPageToken")
             if not page_token:
                 return

@@ -11,7 +11,8 @@ The system should ingest an organization's Google Drive documents, structure the
 ## What The Software Should Do
 
 - Connect to a customer's Google Workspace / Google Drive.
-- Read supported files from a configured Drive folder or shared drive.
+- Let an admin choose the Drive root folder or shared drive to ingest.
+- Read supported files from the selected Drive folder or shared drive.
 - Extract document text, chunks, entities, relationships, and metadata.
 - Store graph facts and source provenance in Neo4j.
 - Sync Drive permissions into SpiceDB.

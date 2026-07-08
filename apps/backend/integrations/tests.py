@@ -7,7 +7,7 @@ from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.throttling import ScopedRateThrottle
 
-from integrations.drive.client import DriveFileMetadata
+from integrations.drive.client import DriveFileMetadata, DriveRootCandidate
 from integrations.drive.export import content_sha256, export_file_content
 from integrations.drive.google_client import (
     GoogleDriveMetadataClient,
@@ -34,6 +34,16 @@ class FakeDriveMetadataClient:
     def list_files(self, connection):
         self.connections.append(connection)
         return self.files
+
+
+class FakeDriveRootClient:
+    def __init__(self, candidates):
+        self.candidates = candidates
+        self.connections = []
+
+    def list_root_candidates(self, connection):
+        self.connections.append(connection)
+        return self.candidates
 
 
 class DriveIngestionModelTests(TestCase):
@@ -211,8 +221,11 @@ class FakeFilesResource:
         self._service = service
 
     def list(self, *, q, pageToken=None, **_kwargs):
-        folder_id = q.split("'")[1]
-        pages = self._service.children_pages[folder_id]
+        if "sharedWithMe" in q:
+            pages = self._service.shared_folder_pages
+        else:
+            folder_id = q.split("'")[1]
+            pages = self._service.children_pages[folder_id]
         index = int(pageToken or 0)
         page = {"files": pages[index]}
         if index + 1 < len(pages):
@@ -251,6 +264,14 @@ class FakeDrivesResource:
     def get(self, *, driveId, **_kwargs):
         return FakeApiCall({"id": driveId, "name": self._service.drive_names[driveId]})
 
+    def list(self, *, pageToken=None, **_kwargs):
+        pages = self._service.shared_drive_pages
+        index = int(pageToken or 0)
+        page = {"drives": pages[index]}
+        if index + 1 < len(pages):
+            page["nextPageToken"] = str(index + 1)
+        return FakeApiCall(page)
+
 
 class FakeGoogleDriveService:
     """Offline stand-in for the Drive v3 discovery client.
@@ -266,6 +287,8 @@ class FakeGoogleDriveService:
         children_pages=None,
         permission_pages=None,
         drive_names=None,
+        shared_folder_pages=None,
+        shared_drive_pages=None,
         export_data=None,
         media_data=None,
     ):
@@ -273,6 +296,8 @@ class FakeGoogleDriveService:
         self.children_pages = children_pages or {}
         self.permission_pages = permission_pages or {}
         self.drive_names = drive_names or {}
+        self.shared_folder_pages = shared_folder_pages or [[]]
+        self.shared_drive_pages = shared_drive_pages or [[]]
         self.export_data = export_data or {}
         self.media_data = media_data or {}
         self.export_calls = []
@@ -433,6 +458,81 @@ class GoogleDriveMetadataClientTests(TestCase):
         # Drive v3 exposes no creator field; the client must leave it empty
         # rather than guessing from owners or modifying users.
         self.assertEqual(metadata.creator_email, "")
+
+    def test_lists_visible_root_folders_and_shared_drives(self):
+        service = FakeGoogleDriveService(
+            shared_folder_pages=[
+                [
+                    {
+                        "id": "folder-b",
+                        "name": "Beta",
+                        "webViewLink": "https://drive.google.com/folders/folder-b",
+                    }
+                ],
+                [
+                    {
+                        "id": "folder-a",
+                        "name": "Alpha",
+                        "webViewLink": "https://drive.google.com/folders/folder-a",
+                        "driveId": "drive-1",
+                    }
+                ],
+            ],
+            shared_drive_pages=[
+                [{"id": "drive-2", "name": "Client Space"}],
+            ],
+        )
+
+        candidates = GoogleDriveMetadataClient(service=service).list_root_candidates(
+            self._folder_connection()
+        )
+
+        self.assertEqual(
+            [(candidate.scope_type, candidate.root_id, candidate.name) for candidate in candidates],
+            [
+                (DriveConnection.ScopeType.FOLDER, "folder-a", "Alpha"),
+                (DriveConnection.ScopeType.FOLDER, "folder-b", "Beta"),
+                (DriveConnection.ScopeType.SHARED_DRIVE, "drive-2", "Client Space"),
+            ],
+        )
+        self.assertEqual(candidates[0].drive_url, "https://drive.google.com/folders/folder-a")
+        self.assertEqual(candidates[0].shared_drive_id, "drive-1")
+
+    def test_root_candidates_are_deduplicated_by_scope_and_id(self):
+        service = FakeGoogleDriveService(
+            shared_folder_pages=[
+                [
+                    {
+                        "id": "folder-a",
+                        "name": "Alpha",
+                        "webViewLink": "https://drive.google.com/folders/folder-a",
+                    },
+                    {
+                        "id": "folder-a",
+                        "name": "Alpha duplicate",
+                        "webViewLink": "https://drive.google.com/folders/folder-a",
+                    },
+                ]
+            ],
+            shared_drive_pages=[
+                [
+                    {"id": "drive-1", "name": "Client Space"},
+                    {"id": "drive-1", "name": "Client Space duplicate"},
+                ]
+            ],
+        )
+
+        candidates = GoogleDriveMetadataClient(service=service).list_root_candidates(
+            self._folder_connection()
+        )
+
+        self.assertEqual(
+            [(candidate.scope_type, candidate.root_id) for candidate in candidates],
+            [
+                (DriveConnection.ScopeType.FOLDER, "folder-a"),
+                (DriveConnection.ScopeType.SHARED_DRIVE, "drive-1"),
+            ],
+        )
 
 
 class BuildDriveServiceTests(SimpleTestCase):
@@ -725,6 +825,155 @@ class DriveContentSyncTests(TestCase):
         self.assertEqual(run.error_summary, "builtins.RuntimeError")
 
 
+class DriveRootApiTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.admin = get_user_model().objects.create_user(
+            username="admin",
+            email="admin@example.com",
+            password="test-password",
+            is_staff=True,
+        )
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-old",
+        )
+
+    def _candidates(self):
+        return [
+            DriveRootCandidate(
+                scope_type=DriveConnection.ScopeType.FOLDER,
+                root_id="folder-123",
+                name="Client Folder",
+                drive_url="https://drive.google.com/folders/folder-123",
+            ),
+            DriveRootCandidate(
+                scope_type=DriveConnection.ScopeType.SHARED_DRIVE,
+                root_id="drive-123",
+                name="Client Shared Drive",
+                shared_drive_id="drive-123",
+            ),
+        ]
+
+    def test_root_endpoints_require_admin_user(self):
+        response = self.client.get("/api/ingest/drive/roots/")
+
+        self.assertEqual(response.status_code, 403)
+
+        member = get_user_model().objects.create_user(
+            username="member",
+            email="member@example.com",
+            password="test-password",
+        )
+        self.client.force_login(member)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "folder", "root_id": "folder-123"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_admin_can_list_visible_drive_roots(self, mock_client_class):
+        fake_client = FakeDriveRootClient(self._candidates())
+        mock_client_class.return_value = fake_client
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/roots/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["connection_id"], self.connection.pk)
+        self.assertEqual(
+            [(root["scope_type"], root["root_id"], root["name"]) for root in payload["roots"]],
+            [
+                ("folder", "folder-123", "Client Folder"),
+                ("shared_drive", "drive-123", "Client Shared Drive"),
+            ],
+        )
+        self.assertEqual(fake_client.connections, [self.connection])
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_admin_can_select_visible_folder_root(self, mock_client_class):
+        self.connection.scope_type = DriveConnection.ScopeType.SHARED_DRIVE
+        self.connection.shared_drive_id = "drive-old"
+        self.connection.save(update_fields=["scope_type", "shared_drive_id"])
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "folder", "root_id": "folder-123"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.scope_type, DriveConnection.ScopeType.FOLDER)
+        self.assertEqual(self.connection.root_folder_id, "folder-123")
+        self.assertEqual(self.connection.shared_drive_id, "")
+        self.assertEqual(response.json()["selected_root"]["name"], "Client Folder")
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_admin_can_select_visible_shared_drive_root(self, mock_client_class):
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "shared_drive", "root_id": "drive-123"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.scope_type, DriveConnection.ScopeType.SHARED_DRIVE)
+        self.assertEqual(self.connection.root_folder_id, "")
+        self.assertEqual(self.connection.shared_drive_id, "drive-123")
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_unknown_root_selection_is_rejected(self, mock_client_class):
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "folder", "root_id": "attacker-folder"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.scope_type, DriveConnection.ScopeType.FOLDER)
+        self.assertEqual(self.connection.root_folder_id, "folder-old")
+
+    @override_settings(
+        GOOGLE_WORKSPACE_DOMAIN="example.com",
+        GOOGLE_DRIVE_DELEGATED_SUBJECT="admin@example.com",
+        GOOGLE_DRIVE_SCOPE_TYPE="folder",
+        GOOGLE_DRIVE_ROOT_ID="",
+        GOOGLE_SHARED_DRIVE_ID="",
+    )
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_root_listing_bootstraps_connection_when_none_exists(self, mock_client_class):
+        self.connection.delete()
+        fake_client = FakeDriveRootClient(self._candidates())
+        mock_client_class.return_value = fake_client
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/roots/")
+
+        self.assertEqual(response.status_code, 200)
+        connection = DriveConnection.objects.get()
+        self.assertEqual(connection.workspace_domain, "example.com")
+        self.assertEqual(connection.delegated_subject_email, "admin@example.com")
+        self.assertEqual(connection.credential_reference, "GOOGLE_SERVICE_ACCOUNT_FILE")
+        self.assertEqual(fake_client.connections, [connection])
+
+
 class DriveSyncApiTests(TestCase):
     def setUp(self):
         # Throttle counters live in the shared cache; clear them before AND
@@ -799,6 +1048,16 @@ class DriveSyncApiTests(TestCase):
     def test_missing_enabled_connection_returns_conflict(self):
         self.connection.enabled = False
         self.connection.save(update_fields=["enabled"])
+        self.client.force_login(self.admin)
+
+        response = self.client.post("/api/ingest/drive/sync/")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(DriveSyncRun.objects.exists())
+
+    def test_sync_without_selected_root_returns_conflict(self):
+        self.connection.root_folder_id = ""
+        self.connection.save(update_fields=["root_folder_id"])
         self.client.force_login(self.admin)
 
         response = self.client.post("/api/ingest/drive/sync/")

@@ -22,6 +22,18 @@ class DriveFileMetadata:
     permissions: list[dict] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class DriveRootCandidate:
+    scope_type: str
+    root_id: str
+    name: str
+    drive_url: str = ""
+    shared_drive_id: str = ""
+
+
 class DriveMetadataClient(Protocol):
     def list_files(self, connection: DriveConnection) -> list[DriveFileMetadata]:
         """Return Drive file metadata for a configured connection."""
+
+    def list_root_candidates(self, connection: DriveConnection) -> list[DriveRootCandidate]:
+        """Return folder/shared-drive roots visible to the configured connection."""

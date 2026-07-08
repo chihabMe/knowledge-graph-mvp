@@ -7,27 +7,33 @@ source data.
 
 ## Default Access Model
 
-The first pilot assumes Google Workspace service-account access with
-domain-wide delegation.
+The first pilot should use a per-client Google service account and a
+share-to-connect setup flow: the client shares the intended folder or shared
+drive with the service account, then an admin chooses that root from the
+backend connection/settings flow.
 
-Per-user OAuth can be evaluated later if a customer cannot support domain-wide
-delegation, but it should not be the default for the first POC because it makes
-bulk ingestion, scheduled sync, and permission refresh harder.
+Domain-wide delegation remains a fallback when a customer's Workspace policy
+blocks external sharing or permission metadata is incomplete through simple
+folder sharing. Per-user OAuth is not the default for the first POC because it
+makes bulk ingestion, scheduled sync, and permission refresh harder.
 
 ## Phase 2 Flow
 
 1. Configure Google Cloud project and Drive API access.
-2. Configure service account with Workspace domain-wide delegation.
+2. Create/provision the per-client service account.
 3. Store service-account configuration as backend secrets, never in source.
-4. Configure one allowed folder or shared drive scope for the pilot.
-5. Start a Drive sync run from the Django backend.
-6. Celery lists files in the configured scope.
-7. For each file, store metadata in PostgreSQL before content extraction.
-8. Capture permission-related metadata for later SpiceDB sync.
-9. Export or download supported content types.
-10. Compute a SHA-256 content hash and compare modified time/checksum.
-11. Queue extraction/indexing work only when content changed.
-12. Allow permission-only refreshes without re-downloading or re-embedding content.
+4. Let the client share the intended folder/shared drive with the service
+   account.
+5. In the backend admin connection flow, list eligible folders/shared drives.
+6. Persist the admin's selected root scope in `DriveConnection`.
+7. Start a Drive sync run from the Django backend.
+8. Celery lists files in the selected scope.
+9. For each file, store metadata in PostgreSQL before content extraction.
+10. Capture permission-related metadata for later SpiceDB sync.
+11. Export or download supported content types.
+12. Compute a SHA-256 content hash and compare modified time/checksum.
+13. Queue extraction/indexing work only when content changed.
+14. Allow permission-only refreshes without re-downloading or re-embedding content.
 
 ## Retrieval Eligibility Gate
 
@@ -156,10 +162,19 @@ objects.
 ## Suggested API Endpoints
 
 ```http
+GET /api/ingest/drive/roots/
+POST /api/ingest/drive/connection/root/
 POST /api/ingest/drive/sync/
 POST /api/permissions/sync/
 GET /api/health/
 ```
+
+`GET /api/ingest/drive/roots/` lists root folders and shared drives visible to
+the configured Google Drive connection.
+
+`POST /api/ingest/drive/connection/root/` accepts a `scope_type` and `root_id`
+from that visible list, then persists the selected ingestion scope in
+`DriveConnection`.
 
 `POST /api/ingest/drive/sync/` starts or resumes Drive ingestion for the
 configured pilot scope. The Drive scope, folder ID, or shared drive ID must be
@@ -179,7 +194,8 @@ request bodies.
 
 ## Validation
 
-- A configured folder/shared drive can be scanned.
+- The backend can list eligible folders/shared drives for an admin to choose.
+- The selected folder/shared drive is persisted and scanned.
 - Google Docs, Sheets, and PDFs are detected.
 - Supported files are exported or downloaded.
 - Unsupported files are skipped without crashing the sync.
