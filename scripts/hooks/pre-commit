@@ -109,9 +109,10 @@ SECRET_PATTERNS=(
 # Known tradeoff: a credential in unchanged CONTEXT lines of a moved/renamed
 # file is not scanned here — full-tree scanning belongs to a separate audit.
 # Allowlist: the exact literal "test-password" is the project's fixture
-# convention for create_user() in tests. Only that literal is exempt — any
-# other quoted value still trips the scan, including in test files.
-SECRET_SCAN_DIFF=$(echo "$STAGED_DIFF" | grep -vF 'test-password')
+# convention for create_user() in tests. Strip only the literal itself (not
+# the whole line) so any other credential sharing a line still trips the
+# scan — password="test-password" becomes password="" which matches nothing.
+SECRET_SCAN_DIFF=$(echo "$STAGED_DIFF" | sed 's/test-password//g')
 for pattern in "${SECRET_PATTERNS[@]}"; do
   if echo "$SECRET_SCAN_DIFF" | grep -qiP "^\+(?!\+\+).*${pattern}" 2>/dev/null; then
     add_critical "Possible hardcoded credential — pattern: $pattern"
