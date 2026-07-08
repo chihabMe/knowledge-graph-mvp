@@ -30,6 +30,22 @@ if DEBUG or management_commands.intersection({"test", "pytest"}):
 else:
     SECRET_KEY = env("DJANGO_SECRET_KEY")
 
+    # Traefik guards the ops UIs (Dozzle, Uptime Kuma) with this basicauth
+    # credential. Django never uses it, but it is the one process guaranteed
+    # to boot from the same .env, so it enforces what Traefik cannot check
+    # itself: the documented local default (admin/password) must never reach
+    # production. "H6uskkkW" is that default hash's salt — it must match the
+    # TRAEFIK_OPS_BASIC_AUTH_USERS default in .env.example and
+    # infra/compose.infrastructure.yml; update all three together.
+    _ops_auth_users = env("TRAEFIK_OPS_BASIC_AUTH_USERS", default="")
+    if not _ops_auth_users or "H6uskkkW" in _ops_auth_users:
+        raise ImproperlyConfigured(
+            "TRAEFIK_OPS_BASIC_AUTH_USERS is unset or still the local-dev "
+            "default (admin/password). Generate a real credential with "
+            "`htpasswd -nB <user>` (escape every $ as $$ in .env) before "
+            "deploying."
+        )
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",

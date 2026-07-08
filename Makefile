@@ -1,11 +1,15 @@
-COMPOSE = docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml
+# Compose resolves ${...} interpolation from the .env next to the first -f
+# file (infra/), NOT the repo root — without --env-file the service-account
+# key mount silently degrades to its /dev/null bootstrap default.
+COMPOSE_ENV_FLAG = $(if $(wildcard .env),--env-file .env)
+COMPOSE = docker compose $(COMPOSE_ENV_FLAG) -f infra/compose.infrastructure.yml -f infra/compose.app.yml
 BACKEND_DIR = apps/backend
 CORE_SERVICES = postgres redis neo4j spicedb django celery-worker
 
 .PHONY: config up up-all down logs migrate django-check test lint format health smoke review-staged review review-branch install-hooks
 
 config:
-	docker compose -f infra/compose.infrastructure.yml config >/tmp/kg-infra-compose-check.txt
+	docker compose $(COMPOSE_ENV_FLAG) -f infra/compose.infrastructure.yml config >/tmp/kg-infra-compose-check.txt
 	$(COMPOSE) config >/tmp/kg-combined-compose-check.txt
 
 up:
@@ -45,8 +49,9 @@ health:
 	done; \
 	exit 1
 
+# The HTTP endpoint is admin-only now, so the smoke check enqueues directly.
 smoke:
-	$(COMPOSE) exec -T django python -c "import urllib.request; req=urllib.request.Request('http://127.0.0.1:8000/api/tasks/smoke-test/', method='POST'); print(urllib.request.urlopen(req).read().decode())"
+	$(COMPOSE) exec -T django python manage.py shell -c "from core.tasks import smoke_test; print('queued:', smoke_test.delay().id)"
 
 # Senior engineer review — reviews staged changes without creating a commit
 review-staged:

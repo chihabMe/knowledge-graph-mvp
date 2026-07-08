@@ -46,9 +46,13 @@ def sync_drive_metadata(
     """
     if run is None:
         run = DriveSyncRun.create_for_connection(connection, triggered_by=triggered_by)
-    run.status = DriveSyncRun.Status.RUNNING
-    run.started_at = timezone.now()
-    run.save(update_fields=["status", "started_at"])
+    # The Celery task claims QUEUED→RUNNING atomically before calling in;
+    # only transition here for direct callers, so the claim's started_at
+    # (the real claim moment) is never overwritten with a later one.
+    if run.status != DriveSyncRun.Status.RUNNING:
+        run.status = DriveSyncRun.Status.RUNNING
+        run.started_at = timezone.now()
+        run.save(update_fields=["status", "started_at"])
 
     extraction_candidates: list[int] = []
 

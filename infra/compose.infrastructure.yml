@@ -15,7 +15,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8088:8080"
+      # Dashboard has no auth of its own — never publish it beyond localhost.
+      - "127.0.0.1:${TRAEFIK_DASHBOARD_HOST_PORT:-8088}:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
@@ -111,8 +112,9 @@ services:
     restart: unless-stopped
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-this-webui-secret}
+    # Public access goes through Traefik; the direct port is local-dev only.
     ports:
-      - "3000:8080"
+      - "127.0.0.1:${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - open-webui-data:/app/backend/data
     networks:
@@ -129,8 +131,11 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    # The direct port bypasses the ops-auth middleware below (it exposes every
+    # container's logs), so it must stay bound to localhost. Remote access
+    # goes through Traefik, which enforces basicauth.
     ports:
-      - "9999:8080"
+      - "127.0.0.1:${DOZZLE_HOST_PORT:-9999}:8080"
     networks:
       - kg-public
     labels:
@@ -144,8 +149,9 @@ services:
   uptime-kuma:
     image: louislam/uptime-kuma:1
     restart: unless-stopped
+    # Same rule as dozzle: the direct port skips ops-auth, localhost only.
     ports:
-      - "3001:3001"
+      - "127.0.0.1:${UPTIME_KUMA_HOST_PORT:-3001}:3001"
     volumes:
       - uptime-kuma-data:/app/data
     networks:

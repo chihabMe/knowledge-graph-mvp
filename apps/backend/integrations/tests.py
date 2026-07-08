@@ -9,7 +9,11 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from integrations.drive.client import DriveFileMetadata
 from integrations.drive.export import content_sha256, export_file_content
-from integrations.drive.google_client import GoogleDriveMetadataClient
+from integrations.drive.google_client import (
+    GoogleDriveMetadataClient,
+    MissingServiceAccountKeyError,
+    build_drive_service,
+)
 from integrations.drive.permissions import source_permissions_version
 from integrations.drive.sync import sync_drive_metadata
 from integrations.models import (
@@ -429,6 +433,21 @@ class GoogleDriveMetadataClientTests(TestCase):
         # Drive v3 exposes no creator field; the client must leave it empty
         # rather than guessing from owners or modifying users.
         self.assertEqual(metadata.creator_email, "")
+
+
+class BuildDriveServiceTests(SimpleTestCase):
+    # connection=None works only because the key check runs before anything
+    # touches the connection — these tests deliberately pin that ordering.
+    @override_settings(GOOGLE_SERVICE_ACCOUNT_FILE="")
+    def test_unconfigured_key_fails_with_a_named_error(self):
+        with self.assertRaises(MissingServiceAccountKeyError):
+            build_drive_service(connection=None)
+
+    def test_empty_key_file_fails_with_a_named_error(self):
+        # /dev/null is what the compose bootstrap default actually mounts.
+        with override_settings(GOOGLE_SERVICE_ACCOUNT_FILE="/dev/null"):
+            with self.assertRaises(MissingServiceAccountKeyError):
+                build_drive_service(connection=None)
 
 
 class ExportFileContentTests(SimpleTestCase):

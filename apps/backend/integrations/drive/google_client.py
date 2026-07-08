@@ -7,6 +7,7 @@ information only — content export lives in integrations.drive.export.
 The Drive service object is injectable so tests never touch the network.
 """
 
+import os
 from datetime import datetime
 from typing import Any
 
@@ -28,15 +29,33 @@ PERMISSION_FIELDS = (
 )
 
 
+class MissingServiceAccountKeyError(RuntimeError):
+    """GOOGLE_SERVICE_ACCOUNT_FILE is unset, missing, or an empty file.
+
+    The compose stack mounts /dev/null when no host key path is configured,
+    so "empty file" means the key was never mounted. This class name is what
+    lands in DriveSyncRun.error_summary, so it must say the problem on its
+    own — the alternative is an opaque credential parse error mid-sync.
+    """
+
+
 def build_drive_service(connection: DriveConnection):
     """Build an authenticated Drive v3 service for a connection."""
+    key_path = settings.GOOGLE_SERVICE_ACCOUNT_FILE
+    if not key_path or not os.path.exists(key_path) or os.path.getsize(key_path) == 0:
+        raise MissingServiceAccountKeyError(
+            "GOOGLE_SERVICE_ACCOUNT_FILE is not configured or points at an "
+            "empty file (the /dev/null bootstrap mount). Set the host path "
+            "in .env and restart the stack."
+        )
+
     # Imported lazily so tests that inject a fake service never need
     # Google credentials or the discovery cache.
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
 
     credentials = service_account.Credentials.from_service_account_file(
-        settings.GOOGLE_SERVICE_ACCOUNT_FILE,
+        key_path,
         scopes=[DRIVE_READONLY_SCOPE],
     )
     subject = connection.delegated_subject_email or settings.GOOGLE_DRIVE_DELEGATED_SUBJECT
