@@ -213,6 +213,44 @@ class DriveMetadataSyncTests(TestCase):
         self.assertEqual(run.stored_files, 0)
         self.assertEqual(run.skipped_files, 1)
 
+    def test_sync_excludes_files_with_failed_permission_fetch_and_continues(self):
+        connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-123",
+        )
+        client = FakeDriveMetadataClient(
+            [
+                DriveFileMetadata(
+                    drive_file_id="drive-file-3",
+                    title="Restricted File",
+                    mime_type="application/pdf",
+                    permissions=[],
+                    permissions_fetch_failed=True,
+                ),
+                DriveFileMetadata(
+                    drive_file_id="drive-file-4",
+                    title="Readable File",
+                    mime_type="application/pdf",
+                    permissions=[{"id": "perm-1", "type": "user", "role": "reader"}],
+                ),
+            ]
+        )
+
+        run = sync_drive_metadata(connection=connection, client=client)
+
+        self.assertEqual(run.status, DriveSyncRun.Status.SUCCEEDED)
+        restricted = SourceDocument.objects.get(drive_file_id="drive-file-3")
+        self.assertFalse(restricted.retrieval_eligible)
+        self.assertEqual(
+            restricted.exclusion_reason,
+            SourceDocument.ExclusionReason.PERMISSION_METADATA_INCOMPLETE,
+        )
+        readable = SourceDocument.objects.get(drive_file_id="drive-file-4")
+        self.assertEqual(readable.exclusion_reason, "")
+        self.assertEqual(run.total_files, 2)
+        self.assertEqual(run.stored_files, 1)
+        self.assertEqual(run.skipped_files, 1)
+
 
 class FakeApiCall:
     def __init__(self, result):
@@ -257,6 +295,8 @@ class FakePermissionsResource:
         self._service = service
 
     def list(self, *, fileId, pageToken=None, **_kwargs):
+        if fileId in self._service.permission_errors:
+            return FakeApiCall(self._service.permission_errors[fileId])
         pages = self._service.permission_pages.get(fileId, [[]])
         index = int(pageToken or 0)
         page = {"permissions": pages[index]}
@@ -294,6 +334,7 @@ class FakeGoogleDriveService:
         folder_names=None,
         children_pages=None,
         permission_pages=None,
+        permission_errors=None,
         drive_names=None,
         shared_folder_pages=None,
         shared_drive_pages=None,
@@ -303,6 +344,7 @@ class FakeGoogleDriveService:
         self.folder_names = folder_names or {}
         self.children_pages = children_pages or {}
         self.permission_pages = permission_pages or {}
+        self.permission_errors = permission_errors or {}
         self.drive_names = drive_names or {}
         self.shared_folder_pages = shared_folder_pages or [[]]
         self.shared_drive_pages = shared_drive_pages or [[]]
@@ -389,6 +431,39 @@ class GoogleDriveMetadataClientTests(TestCase):
         self.assertEqual(
             [permission["id"] for permission in by_id["file-1"].permissions],
             ["perm-1", "perm-2"],
+        )
+
+    def test_permission_fetch_failure_is_isolated_to_that_file(self):
+        # Reproduces a real Drive response: a file listable via files.list()
+        # can still 403 on permissions.list() (e.g. folder-level sharing
+        # without "manage permissions" rights) — this must not abort the
+        # whole walk or lose the other file.
+        service = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [
+                    [
+                        _file_entry("file-1", "Restricted.pdf", parents=["folder-root"]),
+                        _file_entry("file-2", "Readable.pdf", parents=["folder-root"]),
+                    ],
+                ],
+            },
+            permission_pages={
+                "file-2": [[{"id": "perm-1", "type": "user", "role": "reader"}]],
+            },
+            permission_errors={"file-1": TimeoutError("network timeout")},
+        )
+
+        files = GoogleDriveMetadataClient(service=service).list_files(self._folder_connection())
+
+        by_id = {item.drive_file_id: item for item in files}
+        self.assertEqual(set(by_id), {"file-1", "file-2"})
+        self.assertTrue(by_id["file-1"].permissions_fetch_failed)
+        self.assertEqual(by_id["file-1"].permissions, [])
+        self.assertFalse(by_id["file-2"].permissions_fetch_failed)
+        self.assertEqual(
+            [permission["id"] for permission in by_id["file-2"].permissions],
+            ["perm-1"],
         )
 
     def test_multi_parented_files_are_emitted_once(self):

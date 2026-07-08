@@ -20,6 +20,10 @@ class DriveFileMetadata:
     owner_email: str = ""
     creator_email: str = ""
     permissions: list[dict] = field(default_factory=list)
+    # True when permissions.list() failed for this file (e.g. the service
+    # account has read access to the file itself but not to its ACL). Must
+    # never be treated as "no special sharing" — sync.py excludes on this.
+    permissions_fetch_failed: bool = False
 
 
 @dataclass(frozen=True)

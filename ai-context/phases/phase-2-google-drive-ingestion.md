@@ -68,15 +68,24 @@ be detected without re-downloading or re-embedding file content.
 
 ## Validation
 
-- [~] Test folder scan succeeds. (Passes against a fake Drive service; live
-  run blocked on Drake's service-account credentials.)
-- [~] Supported files ingest. (Offline tests pass; live run pending credentials.)
+- [x] Test folder scan succeeds. Live-validated 2026-07-08: root discovery
+  and file listing both succeeded against a real Drive folder (`kg-graph`,
+  service account in Drake's GCP project). See ADR-009 for the pilot-folder
+  caveat (personal account, not Drake's Workspace domain).
+- [~] Supported files ingest. (Metadata capture live-validated end-to-end;
+  the one available live test file failed `permissions.list()` — see
+  ADR-009 — so it was correctly excluded before the content-export path ran.
+  The content-export/storage path itself is still offline-test-only; needs a
+  live file whose permission fetch actually succeeds, most likely via
+  domain-wide delegation in a real Workspace, to validate end-to-end.)
 - [x] Unsupported files are skipped safely.
-- [~] No file contents or credentials appear in logs. (Code review holds: no
-  content/credential logging paths, error rows store exception class only;
-  live log inspection pending credentials.)
+- [x] No file contents or credentials appear in logs. Live-validated
+  2026-07-08: inspected `django` and `celery-worker` container logs across
+  two real sync runs; no document content, permission payloads, or
+  credential material present, only HTTP status/reason and task lifecycle
+  lines.
 - [x] Metadata includes Drive file ID, URL, title, MIME type, modified time, content hash, and folder path.
-- [~] Metadata includes owner/creator, folder ancestry, sharing metadata, and source permissions version. (Creator intentionally empty — no Drive v3 creator field.)
+- [~] Metadata includes owner/creator, folder ancestry, sharing metadata, and source permissions version. (Creator intentionally empty — no Drive v3 creator field. Sharing metadata itself is the same open item as "Supported files ingest" above: the live test file's permissions were unreadable, so full sharing metadata was never actually captured, only the failure path.)
 - [x] Permission metadata can be refreshed without downloading or re-embedding file content.
 - [x] `source_permissions_version` changes when Drive permissions change and stays stable when only fetch time changes.
 - [x] Source documents default to `retrieval_eligible = False`.

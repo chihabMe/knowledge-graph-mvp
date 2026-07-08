@@ -160,9 +160,25 @@ Reason:
   verification is expensive.
 - This resolves the previously open "domain-wide delegation vs. per-user
   OAuth" question. Delegation remains the documented fallback for Workspace
-  domains that block external sharing or restrict permission-list reads
-  (the pilot's live validation will show whether viewer-level sharing
-  exposes full ACLs).
+  domains that block external sharing or restrict permission-list reads.
+
+**ACL visibility under folder-level sharing — resolved 2026-07-08 by live
+test.** Sharing a folder with the service account (tested at Editor role,
+via `kg-graph` in a personal Google account, service account in Drake's GCP
+project) lets the service account list and read files inside it, but
+`permissions.list()` on those files returns `403 insufficientFilePermissions`
+— folder-level sharing does not grant "manage permissions" rights on the
+files inside it. This is a Drive API access-control property, not specific
+to personal vs. Workspace accounts, so it is expected to reproduce for
+Drake's real pilot folder too. Practical effect: under the default
+"share to connect" model, per-file permission metadata will generally be
+unreadable, and Phase 2 now fails those documents closed
+(`exclusion_reason = permission_metadata_incomplete`, `retrieval_eligible =
+False`) instead of crashing the sync or guessing. **Domain-wide delegation
+is therefore not just a fallback for edge cases — it is the expected path
+to get real per-file permission metadata for any client**, and Phase 4
+(SpiceDB) planning should assume delegation is needed rather than treating
+it as optional hardening.
 
 Rule for root changes: changing the root folder/shared drive is a re-scope
 operation — documents outside the new root must lose retrieval eligibility and
@@ -171,7 +187,8 @@ is answerable.
 
 Status: Accepted (2026-07-08). Updated 2026-07-08: dynamic folder/shared-drive
 selection is no longer deferred; it is the next Phase 2 product path before
-asking the client to provide manual root IDs.
+asking the client to provide manual root IDs. Updated 2026-07-08 (live
+validation): ACL-visibility question resolved — see above.
 
 ## Open / Needs Explicit Confirmation
 

@@ -143,8 +143,19 @@ class GoogleDriveMetadataClient:
                 if entry["id"] in seen_files:
                     continue
                 seen_files.add(entry["id"])
-                permissions = self._list_permissions(service, entry["id"])
-                files.append(self._to_metadata(entry, folder_path, permissions))
+                # A single file's permission ACL can be unreadable even when the
+                # file itself is listable (e.g. folder-level sharing without
+                # "manage permissions" rights) — isolate that to this one file
+                # instead of aborting the whole sync; sync.py fails it closed.
+                try:
+                    permissions = self._list_permissions(service, entry["id"])
+                    permissions_fetch_failed = False
+                except DRIVE_API_ERRORS:
+                    permissions = []
+                    permissions_fetch_failed = True
+                files.append(
+                    self._to_metadata(entry, folder_path, permissions, permissions_fetch_failed)
+                )
 
         return files
 
@@ -292,6 +303,7 @@ class GoogleDriveMetadataClient:
         entry: dict[str, Any],
         folder_path: str,
         permissions: list[dict[str, Any]],
+        permissions_fetch_failed: bool = False,
     ) -> DriveFileMetadata:
         owners = entry.get("owners") or []
         return DriveFileMetadata(
@@ -311,6 +323,7 @@ class GoogleDriveMetadataClient:
             # which is a follow-up — never fabricate it from other fields.
             creator_email="",
             permissions=permissions,
+            permissions_fetch_failed=permissions_fetch_failed,
         )
 
 

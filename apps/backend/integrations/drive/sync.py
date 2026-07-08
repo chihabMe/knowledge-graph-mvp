@@ -73,6 +73,7 @@ def sync_drive_metadata(
                     mime_type=file_metadata.mime_type,
                     public_link=public_link,
                     domain_visibility=domain_visibility,
+                    permissions_fetch_failed=file_metadata.permissions_fetch_failed,
                 )
                 if exclusion_reason:
                     skipped_files += 1
@@ -192,7 +193,18 @@ def _store_content(document, file_metadata, content_exporter) -> None:
     document.save(update_fields=["content_hash"])
 
 
-def _exclusion_reason(*, mime_type: str, public_link: bool, domain_visibility: bool) -> str:
+def _exclusion_reason(
+    *,
+    mime_type: str,
+    public_link: bool,
+    domain_visibility: bool,
+    permissions_fetch_failed: bool,
+) -> str:
+    # Checked first: an empty permissions list from a failed fetch reads
+    # identically to "no special sharing" to the checks below. Fail closed
+    # instead of silently treating an unknown ACL as safe.
+    if permissions_fetch_failed:
+        return SourceDocument.ExclusionReason.PERMISSION_METADATA_INCOMPLETE
     if public_link:
         return SourceDocument.ExclusionReason.PUBLIC_LINK_NOT_SUPPORTED
     if domain_visibility:
