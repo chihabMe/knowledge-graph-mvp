@@ -33,6 +33,15 @@ ROOT_FOLDER_QUERY = (
     "sharedWithMe and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
 )
 
+try:
+    from googleapiclient.errors import HttpError
+except ImportError:  # pragma: no cover - dependency is installed in real/test envs.
+    HttpError = None
+
+DRIVE_API_ERRORS = (
+    (TimeoutError, OSError) if HttpError is None else (HttpError, TimeoutError, OSError)
+)
+
 
 class MissingServiceAccountKeyError(RuntimeError):
     """GOOGLE_SERVICE_ACCOUNT_FILE is unset, missing, or an empty file.
@@ -42,6 +51,10 @@ class MissingServiceAccountKeyError(RuntimeError):
     lands in DriveSyncRun.error_summary, so it must say the problem on its
     own — the alternative is an opaque credential parse error mid-sync.
     """
+
+
+class GoogleDriveApiError(RuntimeError):
+    """Controlled API-boundary error for Drive request failures."""
 
 
 def build_drive_service(connection: DriveConnection):
@@ -109,11 +122,19 @@ class GoogleDriveMetadataClient:
         return files
 
     def list_root_candidates(self, connection: DriveConnection) -> list[DriveRootCandidate]:
-        service = self._service or build_drive_service(connection)
-        candidates = [
-            *self._list_shared_folders(service),
-            *self._list_shared_drives(service),
-        ]
+        try:
+            service = self._service or build_drive_service(connection)
+            candidates = [
+                *self._list_shared_folders(service),
+                *self._list_shared_drives(service),
+            ]
+        except MissingServiceAccountKeyError:
+            raise
+        except DRIVE_API_ERRORS as exc:
+            raise GoogleDriveApiError(
+                "Google Drive API request failed while listing Drive roots."
+            ) from exc
+
         by_scope_and_id: dict[tuple[str, str], DriveRootCandidate] = {}
         for candidate in candidates:
             by_scope_and_id.setdefault((candidate.scope_type, candidate.root_id), candidate)

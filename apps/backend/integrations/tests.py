@@ -10,6 +10,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from integrations.drive.client import DriveFileMetadata, DriveRootCandidate
 from integrations.drive.export import content_sha256, export_file_content
 from integrations.drive.google_client import (
+    GoogleDriveApiError,
     GoogleDriveMetadataClient,
     MissingServiceAccountKeyError,
     build_drive_service,
@@ -37,12 +38,15 @@ class FakeDriveMetadataClient:
 
 
 class FakeDriveRootClient:
-    def __init__(self, candidates):
+    def __init__(self, candidates=None, error=None):
+        self.error = error
         self.candidates = candidates
         self.connections = []
 
     def list_root_candidates(self, connection):
         self.connections.append(connection)
+        if self.error is not None:
+            raise self.error
         return self.candidates
 
 
@@ -213,6 +217,8 @@ class FakeApiCall:
         self._result = result
 
     def execute(self):
+        if isinstance(self._result, BaseException):
+            raise self._result
         return self._result
 
 
@@ -533,6 +539,20 @@ class GoogleDriveMetadataClientTests(TestCase):
                 (DriveConnection.ScopeType.SHARED_DRIVE, "drive-1"),
             ],
         )
+
+    def test_root_candidate_drive_failures_raise_controlled_error(self):
+        class FailingFilesResource:
+            def list(self, **_kwargs):
+                return FakeApiCall(TimeoutError("network timeout"))
+
+        class FailingRootService:
+            def files(self):
+                return FailingFilesResource()
+
+        with self.assertRaises(GoogleDriveApiError):
+            GoogleDriveMetadataClient(service=FailingRootService()).list_root_candidates(
+                self._folder_connection()
+            )
 
 
 class BuildDriveServiceTests(SimpleTestCase):
@@ -868,6 +888,10 @@ class DriveRootApiTests(TestCase):
         )
         self.client.force_login(member)
 
+        response = self.client.get("/api/ingest/drive/roots/")
+
+        self.assertEqual(response.status_code, 403)
+
         response = self.client.post(
             "/api/ingest/drive/connection/root/",
             data={"scope_type": "folder", "root_id": "folder-123"},
@@ -916,6 +940,7 @@ class DriveRootApiTests(TestCase):
         self.assertEqual(self.connection.root_folder_id, "folder-123")
         self.assertEqual(self.connection.shared_drive_id, "")
         self.assertEqual(response.json()["selected_root"]["name"], "Client Folder")
+        self.assertEqual(response.json()["rescoped_document_count"], 0)
 
     @patch("integrations.views.GoogleDriveMetadataClient")
     def test_admin_can_select_visible_shared_drive_root(self, mock_client_class):
@@ -933,6 +958,73 @@ class DriveRootApiTests(TestCase):
         self.assertEqual(self.connection.scope_type, DriveConnection.ScopeType.SHARED_DRIVE)
         self.assertEqual(self.connection.root_folder_id, "")
         self.assertEqual(self.connection.shared_drive_id, "drive-123")
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_root_change_marks_existing_documents_retrieval_ineligible(self, mock_client_class):
+        other_connection = DriveConnection.objects.create(
+            workspace_domain="other.example.com",
+            root_folder_id="other-folder",
+        )
+        stale_document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="drive-file-1",
+            title="Old Scope Notes",
+            mime_type="application/pdf",
+            retrieval_eligible=True,
+        )
+        unrelated_document = SourceDocument.objects.create(
+            connection=other_connection,
+            drive_file_id="drive-file-2",
+            title="Other Client Notes",
+            mime_type="application/pdf",
+            retrieval_eligible=True,
+        )
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "folder", "root_id": "folder-123"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["rescoped_document_count"], 1)
+        stale_document.refresh_from_db()
+        unrelated_document.refresh_from_db()
+        self.assertFalse(stale_document.retrieval_eligible)
+        self.assertTrue(unrelated_document.retrieval_eligible)
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_reselecting_same_root_does_not_rescope_existing_documents(self, mock_client_class):
+        document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="drive-file-1",
+            title="Current Scope Notes",
+            mime_type="application/pdf",
+            retrieval_eligible=True,
+        )
+        mock_client_class.return_value = FakeDriveRootClient(
+            [
+                DriveRootCandidate(
+                    scope_type=DriveConnection.ScopeType.FOLDER,
+                    root_id="folder-old",
+                    name="Current Folder",
+                )
+            ]
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "folder", "root_id": "folder-old"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["rescoped_document_count"], 0)
+        document.refresh_from_db()
+        self.assertTrue(document.retrieval_eligible)
 
     @patch("integrations.views.GoogleDriveMetadataClient")
     def test_unknown_root_selection_is_rejected(self, mock_client_class):
@@ -972,6 +1064,29 @@ class DriveRootApiTests(TestCase):
         self.assertEqual(connection.delegated_subject_email, "admin@example.com")
         self.assertEqual(connection.credential_reference, "GOOGLE_SERVICE_ACCOUNT_FILE")
         self.assertEqual(fake_client.connections, [connection])
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_drive_api_errors_return_controlled_bad_gateway(self, mock_client_class):
+        mock_client_class.return_value = FakeDriveRootClient(
+            error=GoogleDriveApiError("Google Drive API request failed while listing Drive roots.")
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/roots/")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.json(),
+            {"detail": "Google Drive API request failed while listing Drive roots."},
+        )
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "folder", "root_id": "folder-123"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 502)
 
 
 class DriveSyncApiTests(TestCase):

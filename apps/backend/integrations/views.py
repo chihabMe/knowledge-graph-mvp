@@ -1,4 +1,6 @@
 from django.conf import settings
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
@@ -7,10 +9,11 @@ from rest_framework.views import APIView
 
 from integrations.drive.client import DriveRootCandidate
 from integrations.drive.google_client import (
+    GoogleDriveApiError,
     GoogleDriveMetadataClient,
     MissingServiceAccountKeyError,
 )
-from integrations.models import DriveConnection, DriveSyncRun
+from integrations.models import DriveConnection, DriveSyncRun, SourceDocument
 from integrations.serializers import DriveRootSelectionSerializer
 from integrations.tasks import run_drive_sync
 
@@ -53,6 +56,10 @@ def _root_candidate_error_response(exc: MissingServiceAccountKeyError) -> Respon
     return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
 
+def _drive_api_error_response(exc: GoogleDriveApiError) -> Response:
+    return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+
 def _connection_has_selected_root(connection: DriveConnection) -> bool:
     if connection.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
         return bool(connection.shared_drive_id)
@@ -70,6 +77,8 @@ class DriveRootListView(APIView):
             candidates = GoogleDriveMetadataClient().list_root_candidates(connection)
         except MissingServiceAccountKeyError as exc:
             return _root_candidate_error_response(exc)
+        except GoogleDriveApiError as exc:
+            return _drive_api_error_response(exc)
 
         return Response(
             {
@@ -95,6 +104,8 @@ class DriveRootSelectionView(APIView):
             candidates = GoogleDriveMetadataClient().list_root_candidates(connection)
         except MissingServiceAccountKeyError as exc:
             return _root_candidate_error_response(exc)
+        except GoogleDriveApiError as exc:
+            return _drive_api_error_response(exc)
 
         selected = next(
             (
@@ -110,21 +121,42 @@ class DriveRootSelectionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        connection.scope_type = selected.scope_type
-        if selected.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
-            connection.root_folder_id = ""
-            connection.shared_drive_id = selected.root_id
-        else:
-            connection.root_folder_id = selected.root_id
-            connection.shared_drive_id = ""
-        connection.save(
-            update_fields=["scope_type", "root_folder_id", "shared_drive_id", "updated_at"]
-        )
+        with transaction.atomic():
+            connection = DriveConnection.objects.select_for_update().get(pk=connection.pk)
+            previous_scope = (
+                connection.scope_type,
+                connection.root_folder_id,
+                connection.shared_drive_id,
+            )
+            connection.scope_type = selected.scope_type
+            if selected.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
+                connection.root_folder_id = ""
+                connection.shared_drive_id = selected.root_id
+            else:
+                connection.root_folder_id = selected.root_id
+                connection.shared_drive_id = ""
+            selected_scope = (
+                connection.scope_type,
+                connection.root_folder_id,
+                connection.shared_drive_id,
+            )
+            connection.save(
+                update_fields=["scope_type", "root_folder_id", "shared_drive_id", "updated_at"]
+            )
+            rescoped_document_count = 0
+            if selected_scope != previous_scope:
+                rescoped_document_count = SourceDocument.objects.filter(
+                    connection=connection,
+                ).update(
+                    retrieval_eligible=False,
+                    updated_at=timezone.now(),
+                )
 
         return Response(
             {
                 "connection_id": connection.pk,
                 "selected_root": _root_candidate_payload(selected),
+                "rescoped_document_count": rescoped_document_count,
             }
         )
 
