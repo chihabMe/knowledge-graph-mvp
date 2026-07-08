@@ -52,12 +52,16 @@ DRIVE_API_ERRORS = tuple(_DRIVE_API_ERROR_TYPES)
 
 
 class MissingServiceAccountKeyError(RuntimeError):
-    """GOOGLE_SERVICE_ACCOUNT_FILE is unset, missing, or an empty file.
+    """The service-account key file is missing, empty, unreadable, or malformed.
 
-    The compose stack mounts /dev/null when no host key path is configured,
-    so "empty file" means the key was never mounted. This class name is what
-    lands in DriveSyncRun.error_summary, so it must say the problem on its
-    own — the alternative is an opaque credential parse error mid-sync.
+    Raised whenever GOOGLE_SERVICE_ACCOUNT_FILE cannot yield credentials:
+    unset path, absent file, empty file, an unreadable file, or contents that
+    do not parse as key JSON — despite the name, callers must not assume
+    "file absent". The compose stack mounts /dev/null when no host key path is
+    configured, so "empty file" means the key was never mounted. This class
+    name is what lands in DriveSyncRun.error_summary, so it must say the
+    problem on its own — the alternative is an opaque credential parse error
+    mid-sync.
     """
 
 
@@ -145,12 +149,16 @@ class GoogleDriveMetadataClient:
         return files
 
     def list_root_candidates(self, connection: DriveConnection) -> list[DriveRootCandidate]:
-        service = self._service or build_drive_service(connection)
         try:
+            service = self._service or build_drive_service(connection)
             candidates = [
                 *self._list_shared_folders(service),
                 *self._list_shared_drives(service),
             ]
+        except MissingServiceAccountKeyError:
+            # Key-file problems keep their own error (409 at the API boundary);
+            # only Drive/auth request failures collapse into the 502 below.
+            raise
         except DRIVE_API_ERRORS as exc:
             raise GoogleDriveApiError(
                 "Google Drive API request failed while listing Drive roots."

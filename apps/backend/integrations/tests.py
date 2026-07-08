@@ -900,30 +900,37 @@ class DriveRootApiTests(TestCase):
             ),
         ]
 
+    def _login_member(self):
+        member = get_user_model().objects.create_user(
+            username="member",
+            email="member@example.com",
+            password="test-password",
+        )
+        self.client.force_login(member)
+
     def test_root_list_rejects_anonymous_requests(self):
         response = self.client.get("/api/ingest/drive/roots/")
 
         self.assertEqual(response.status_code, 403)
 
     def test_root_list_rejects_non_admin_users(self):
-        member = get_user_model().objects.create_user(
-            username="member",
-            email="member@example.com",
-            password="test-password",
-        )
-        self.client.force_login(member)
+        self._login_member()
 
         response = self.client.get("/api/ingest/drive/roots/")
 
         self.assertEqual(response.status_code, 403)
 
-    def test_root_selection_rejects_non_admin_users(self):
-        member = get_user_model().objects.create_user(
-            username="member",
-            email="member@example.com",
-            password="test-password",
+    def test_root_selection_rejects_anonymous_requests(self):
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "folder", "root_id": "folder-123"},
+            content_type="application/json",
         )
-        self.client.force_login(member)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_root_selection_rejects_non_admin_users(self):
+        self._login_member()
 
         response = self.client.post(
             "/api/ingest/drive/connection/root/",
@@ -1118,6 +1125,23 @@ class DriveRootApiTests(TestCase):
             data={"scope_type": "folder", "root_id": "folder-123"},
             content_type="application/json",
         )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.json(),
+            {"detail": "Google Drive API request failed while listing Drive roots."},
+        )
+
+    @patch(
+        "integrations.drive.google_client.build_drive_service",
+        side_effect=RefreshError("revoked service-account key"),
+    )
+    def test_service_construction_failures_return_controlled_bad_gateway(self, mock_build):
+        # No injected fake service here: the real client must wrap failures
+        # raised while *building* the service, not just while listing.
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/roots/")
 
         self.assertEqual(response.status_code, 502)
         self.assertEqual(
