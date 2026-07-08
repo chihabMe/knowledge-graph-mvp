@@ -1,10 +1,12 @@
 import hashlib
 from datetime import UTC, datetime
+from tempfile import NamedTemporaryFile
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase, override_settings
+from google.auth.exceptions import RefreshError
 from rest_framework.throttling import ScopedRateThrottle
 
 from integrations.drive.client import DriveFileMetadata, DriveRootCandidate
@@ -554,6 +556,20 @@ class GoogleDriveMetadataClientTests(TestCase):
                 self._folder_connection()
             )
 
+    def test_root_candidate_auth_failures_raise_controlled_error(self):
+        class FailingFilesResource:
+            def list(self, **_kwargs):
+                return FakeApiCall(RefreshError("revoked service-account key"))
+
+        class FailingRootService:
+            def files(self):
+                return FailingFilesResource()
+
+        with self.assertRaises(GoogleDriveApiError):
+            GoogleDriveMetadataClient(service=FailingRootService()).list_root_candidates(
+                self._folder_connection()
+            )
+
 
 class BuildDriveServiceTests(SimpleTestCase):
     # connection=None works only because the key check runs before anything
@@ -568,6 +584,14 @@ class BuildDriveServiceTests(SimpleTestCase):
         with override_settings(GOOGLE_SERVICE_ACCOUNT_FILE="/dev/null"):
             with self.assertRaises(MissingServiceAccountKeyError):
                 build_drive_service(connection=None)
+
+    def test_malformed_key_file_fails_with_a_named_error(self):
+        with NamedTemporaryFile(mode="w", encoding="utf-8") as key_file:
+            key_file.write("not json")
+            key_file.flush()
+            with override_settings(GOOGLE_SERVICE_ACCOUNT_FILE=key_file.name):
+                with self.assertRaises(MissingServiceAccountKeyError):
+                    build_drive_service(connection=None)
 
 
 class ExportFileContentTests(SimpleTestCase):
@@ -876,11 +900,12 @@ class DriveRootApiTests(TestCase):
             ),
         ]
 
-    def test_root_endpoints_require_admin_user(self):
+    def test_root_list_rejects_anonymous_requests(self):
         response = self.client.get("/api/ingest/drive/roots/")
 
         self.assertEqual(response.status_code, 403)
 
+    def test_root_list_rejects_non_admin_users(self):
         member = get_user_model().objects.create_user(
             username="member",
             email="member@example.com",
@@ -891,6 +916,14 @@ class DriveRootApiTests(TestCase):
         response = self.client.get("/api/ingest/drive/roots/")
 
         self.assertEqual(response.status_code, 403)
+
+    def test_root_selection_rejects_non_admin_users(self):
+        member = get_user_model().objects.create_user(
+            username="member",
+            email="member@example.com",
+            password="test-password",
+        )
+        self.client.force_login(member)
 
         response = self.client.post(
             "/api/ingest/drive/connection/root/",
@@ -1087,6 +1120,10 @@ class DriveRootApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.json(),
+            {"detail": "Google Drive API request failed while listing Drive roots."},
+        )
 
 
 class DriveSyncApiTests(TestCase):

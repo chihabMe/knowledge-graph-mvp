@@ -34,13 +34,21 @@ ROOT_FOLDER_QUERY = (
 )
 
 try:
+    from google.auth.exceptions import GoogleAuthError
+except ImportError:  # pragma: no cover - dependency is installed in real/test envs.
+    GoogleAuthError = None
+
+try:
     from googleapiclient.errors import HttpError
 except ImportError:  # pragma: no cover - dependency is installed in real/test envs.
     HttpError = None
 
-DRIVE_API_ERRORS = (
-    (TimeoutError, OSError) if HttpError is None else (HttpError, TimeoutError, OSError)
-)
+_DRIVE_API_ERROR_TYPES = [OSError]
+if HttpError is not None:
+    _DRIVE_API_ERROR_TYPES.append(HttpError)
+if GoogleAuthError is not None:
+    _DRIVE_API_ERROR_TYPES.append(GoogleAuthError)
+DRIVE_API_ERRORS = tuple(_DRIVE_API_ERROR_TYPES)
 
 
 class MissingServiceAccountKeyError(RuntimeError):
@@ -60,7 +68,16 @@ class GoogleDriveApiError(RuntimeError):
 def build_drive_service(connection: DriveConnection):
     """Build an authenticated Drive v3 service for a connection."""
     key_path = settings.GOOGLE_SERVICE_ACCOUNT_FILE
-    if not key_path or not os.path.exists(key_path) or os.path.getsize(key_path) == 0:
+    try:
+        missing_or_empty_key = (
+            not key_path or not os.path.exists(key_path) or os.path.getsize(key_path) == 0
+        )
+    except OSError as exc:
+        raise MissingServiceAccountKeyError(
+            "GOOGLE_SERVICE_ACCOUNT_FILE could not be inspected. Check the "
+            "mounted service-account key path and file permissions."
+        ) from exc
+    if missing_or_empty_key:
         raise MissingServiceAccountKeyError(
             "GOOGLE_SERVICE_ACCOUNT_FILE is not configured or points at an "
             "empty file (the /dev/null bootstrap mount). Set the host path "
@@ -72,10 +89,16 @@ def build_drive_service(connection: DriveConnection):
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
 
-    credentials = service_account.Credentials.from_service_account_file(
-        key_path,
-        scopes=[DRIVE_READONLY_SCOPE],
-    )
+    try:
+        credentials = service_account.Credentials.from_service_account_file(
+            key_path,
+            scopes=[DRIVE_READONLY_SCOPE],
+        )
+    except (OSError, ValueError) as exc:
+        raise MissingServiceAccountKeyError(
+            "GOOGLE_SERVICE_ACCOUNT_FILE could not be read as a service-account "
+            "key. Check that the mounted file contains valid key JSON."
+        ) from exc
     subject = connection.delegated_subject_email or settings.GOOGLE_DRIVE_DELEGATED_SUBJECT
     if subject:
         credentials = credentials.with_subject(subject)
@@ -122,14 +145,12 @@ class GoogleDriveMetadataClient:
         return files
 
     def list_root_candidates(self, connection: DriveConnection) -> list[DriveRootCandidate]:
+        service = self._service or build_drive_service(connection)
         try:
-            service = self._service or build_drive_service(connection)
             candidates = [
                 *self._list_shared_folders(service),
                 *self._list_shared_drives(service),
             ]
-        except MissingServiceAccountKeyError:
-            raise
         except DRIVE_API_ERRORS as exc:
             raise GoogleDriveApiError(
                 "Google Drive API request failed while listing Drive roots."

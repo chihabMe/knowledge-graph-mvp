@@ -174,7 +174,9 @@ the configured Google Drive connection.
 
 `POST /api/ingest/drive/connection/root/` accepts a `scope_type` and `root_id`
 from that visible list, then persists the selected ingestion scope in
-`DriveConnection`.
+`DriveConnection`. When the selected root changes, existing documents for that
+connection are marked non-retrievable until the new scope is synced; the
+response includes `rescoped_document_count` for operator visibility.
 
 `POST /api/ingest/drive/sync/` starts or resumes Drive ingestion for the
 configured pilot scope. The Drive scope, folder ID, or shared drive ID must be
