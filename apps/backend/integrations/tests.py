@@ -1,11 +1,13 @@
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from tempfile import NamedTemporaryFile
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 from google.auth.exceptions import RefreshError
 from rest_framework.throttling import ScopedRateThrottle
 
@@ -30,7 +32,7 @@ from integrations.models import (
     SourceDocument,
     SourceDocumentContent,
 )
-from integrations.tasks import run_drive_sync
+from integrations.tasks import run_drive_sync, sweep_stale_drive_sync_runs
 
 
 class FakeDriveMetadataClient:
@@ -1884,3 +1886,58 @@ class RunDriveSyncTaskTests(TestCase):
 
         mock_build.assert_not_called()
         self.assertEqual(result["status"], DriveSyncRun.Status.RUNNING)
+
+
+class SweepStaleDriveSyncRunsTaskTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-root",
+        )
+
+    def _run(self, status, started_at):
+        run = DriveSyncRun.create_for_connection(self.connection)
+        DriveSyncRun.objects.filter(pk=run.pk).update(status=status, started_at=started_at)
+        run.refresh_from_db()
+        return run
+
+    def test_running_past_the_timeout_is_marked_failed(self):
+        stale_cutoff = timezone.now() - timedelta(
+            minutes=settings.DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES + 1
+        )
+        run = self._run(DriveSyncRun.Status.RUNNING, stale_cutoff)
+
+        result = sweep_stale_drive_sync_runs()
+
+        run.refresh_from_db()
+        self.assertEqual(result, {"swept": 1})
+        self.assertEqual(run.status, DriveSyncRun.Status.FAILED)
+        self.assertEqual(run.error_summary, "stale_run_timeout")
+        self.assertIsNotNone(run.finished_at)
+
+    def test_running_within_the_timeout_is_left_alone(self):
+        recent = timezone.now() - timedelta(
+            minutes=settings.DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES - 1
+        )
+        run = self._run(DriveSyncRun.Status.RUNNING, recent)
+
+        result = sweep_stale_drive_sync_runs()
+
+        run.refresh_from_db()
+        self.assertEqual(result, {"swept": 0})
+        self.assertEqual(run.status, DriveSyncRun.Status.RUNNING)
+
+    def test_other_statuses_are_never_touched(self):
+        stale_cutoff = timezone.now() - timedelta(
+            minutes=settings.DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES + 1
+        )
+        queued = self._run(DriveSyncRun.Status.QUEUED, stale_cutoff)
+        succeeded = self._run(DriveSyncRun.Status.SUCCEEDED, stale_cutoff)
+
+        result = sweep_stale_drive_sync_runs()
+
+        queued.refresh_from_db()
+        succeeded.refresh_from_db()
+        self.assertEqual(result, {"swept": 0})
+        self.assertEqual(queued.status, DriveSyncRun.Status.QUEUED)
+        self.assertEqual(succeeded.status, DriveSyncRun.Status.SUCCEEDED)

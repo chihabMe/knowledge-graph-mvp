@@ -1,4 +1,7 @@
+import datetime
+
 from celery import shared_task
+from django.conf import settings
 from django.utils import timezone
 
 from integrations.drive.export import export_file_content
@@ -57,6 +60,28 @@ def run_drive_sync(run_id: int) -> dict[str, int | str]:
         queue_extraction=queue_document_extraction.delay,
     )
     return {"run_id": run.pk, "status": run.status}
+
+
+@shared_task(name="integrations.sweep_stale_drive_sync_runs")
+def sweep_stale_drive_sync_runs() -> dict[str, int]:
+    """Fail closed on runs a crashed worker left stuck in RUNNING.
+
+    A run only ever leaves RUNNING via sync_drive_metadata's own status
+    update, so one still RUNNING after the timeout has no worker left
+    finishing it — mark it FAILED rather than let it block re-sync forever.
+    """
+    cutoff = timezone.now() - datetime.timedelta(
+        minutes=settings.DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES
+    )
+    swept = DriveSyncRun.objects.filter(
+        status=DriveSyncRun.Status.RUNNING,
+        started_at__lt=cutoff,
+    ).update(
+        status=DriveSyncRun.Status.FAILED,
+        error_summary="stale_run_timeout",
+        finished_at=timezone.now(),
+    )
+    return {"swept": swept}
 
 
 @shared_task(name="integrations.queue_document_extraction")

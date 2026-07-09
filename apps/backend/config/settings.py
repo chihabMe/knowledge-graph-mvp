@@ -145,6 +145,16 @@ CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://redis:6379
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TIMEZONE = TIME_ZONE
 
+# A worker crash mid-task leaves the DriveSyncRun row stuck in RUNNING
+# forever with no other signal that it died. The sweep is the recovery path.
+DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int("DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120)
+CELERY_BEAT_SCHEDULE = {
+    "sweep-stale-drive-sync-runs": {
+        "task": "integrations.sweep_stale_drive_sync_runs",
+        "schedule": 900.0,
+    },
+}
+
 NEO4J_URI = env("NEO4J_URI", default="bolt://neo4j:7687")
 NEO4J_USER = env("NEO4J_USER", default="neo4j")
 NEO4J_PASSWORD = env("NEO4J_PASSWORD", default="change-this-neo4j-password")
