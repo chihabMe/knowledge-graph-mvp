@@ -6,14 +6,19 @@ incomplete is refused outright — never written with gaps for someone to
 backfill later.
 """
 
-from graph.extraction import ExtractedChunk
-from graph.ontology import validate_relationship_type
+from graph.extraction import ExtractedChunk, ExtractedEntity, ExtractedRelationship
+from graph.ontology import validate_entity_type, validate_relationship_type
 from integrations.models import SourceDocument
 
 # Structural edge from a chunk to the document it was derived from. Drawn
 # from the declared ontology like every other relationship type.
 CHUNK_DOCUMENT_RELATIONSHIP = "belongs_to"
 validate_relationship_type(CHUNK_DOCUMENT_RELATIONSHIP)
+
+# Structural edge from a chunk to an entity found in it — the fact-level
+# provenance anchor (ADR-010).
+CHUNK_ENTITY_RELATIONSHIP = "mentions"
+validate_relationship_type(CHUNK_ENTITY_RELATIONSHIP)
 
 
 class MissingProvenanceError(ValueError):
@@ -22,6 +27,18 @@ class MissingProvenanceError(ValueError):
 
 class DocumentNodeMissingError(ValueError):
     """Raised instead of silently dropping chunks when the Document node is absent."""
+
+
+class ChunkNodeMissingError(ValueError):
+    """Raised when an entity references a chunk that was never written."""
+
+
+def _entity_id(source_document_id: int, entity: ExtractedEntity) -> str:
+    # Per-document scoping (ADR-010): entities are never merged across
+    # documents, so a restricted document's facts can't surface one hop from
+    # an unrestricted document through a shared node.
+    normalized_name = " ".join(entity.name.split()).lower()
+    return f"{source_document_id}:{entity.entity_type}:{normalized_name}"
 
 
 def document_provenance(document: SourceDocument) -> dict[str, int | str]:
@@ -99,3 +116,93 @@ def replace_document_chunks(
             text=chunk.text,
         )
     return len(chunks)
+
+
+def replace_document_entities(
+    db_session,
+    document: SourceDocument,
+    entities: tuple[ExtractedEntity, ...],
+    relationships: tuple[ExtractedRelationship, ...],
+) -> dict[str, int]:
+    """Replace the document's extracted entities and relationships.
+
+    Entity nodes carry a single structural :Entity label with entity_type as
+    a property — using ontology types as Neo4j labels would collide with the
+    structural :Document nodes (the ontology legitimately declares "Document"
+    as an entity type, and its uniqueness constraint is keyed on the same
+    source_document_id every entity carries as provenance).
+
+    Relationships resolve their endpoints by name against this document's
+    own entities; an unresolvable or ambiguous name is counted and skipped —
+    an edge that can't be anchored to known entities can't be stored with
+    valid provenance.
+    """
+    for entity in entities:
+        validate_entity_type(entity.entity_type)
+    for relationship in relationships:
+        validate_relationship_type(relationship.relationship_type)
+    provenance = document_provenance(document)
+    source_document_id = provenance["source_document_id"]
+
+    db_session.run(
+        "MATCH (e:Entity {source_document_id: $source_document_id}) DETACH DELETE e",
+        source_document_id=source_document_id,
+    )
+
+    entity_ids_by_name: dict[str, set[str]] = {}
+    written_entity_ids: set[str] = set()
+    for entity in entities:
+        entity_id = _entity_id(source_document_id, entity)
+        entity_ids_by_name.setdefault(entity.name, set()).add(entity_id)
+        written_entity_ids.add(entity_id)
+        created = db_session.run(
+            "MATCH (c:Chunk {chunk_id: $chunk_id}) "
+            "MERGE (e:Entity {entity_id: $entity_id}) "
+            "SET e.name = $name, "
+            "    e.entity_type = $entity_type, "
+            "    e.source_document_id = $source_document_id, "
+            "    e.connection_id = $connection_id, "
+            "    e.drive_file_id = $drive_file_id, "
+            "    e.source_permissions_version = $source_permissions_version "
+            f"MERGE (c)-[:{CHUNK_ENTITY_RELATIONSHIP}]->(e) "
+            "RETURN count(e) AS n",
+            **provenance,
+            entity_id=entity_id,
+            name=entity.name,
+            entity_type=entity.entity_type,
+            chunk_id=f"{source_document_id}:{entity.chunk_index}",
+        ).single()
+        if created is None or created["n"] == 0:
+            raise ChunkNodeMissingError(
+                f"No Chunk node {source_document_id}:{entity.chunk_index} to anchor an entity."
+            )
+
+    written_relationships = 0
+    skipped_relationships = 0
+    for relationship in relationships:
+        source_ids = entity_ids_by_name.get(relationship.source_name, set())
+        target_ids = entity_ids_by_name.get(relationship.target_name, set())
+        if len(source_ids) != 1 or len(target_ids) != 1:
+            skipped_relationships += 1
+            continue
+        db_session.run(
+            "MATCH (a:Entity {entity_id: $source_id}) "
+            "MATCH (b:Entity {entity_id: $target_id}) "
+            f"MERGE (a)-[r:{relationship.relationship_type}]->(b) "
+            "SET r.source_document_id = $source_document_id, "
+            "    r.connection_id = $connection_id, "
+            "    r.drive_file_id = $drive_file_id, "
+            "    r.source_permissions_version = $source_permissions_version, "
+            "    r.chunk_index = $chunk_index",
+            **provenance,
+            source_id=next(iter(source_ids)),
+            target_id=next(iter(target_ids)),
+            chunk_index=relationship.chunk_index,
+        )
+        written_relationships += 1
+
+    return {
+        "entities": len(written_entity_ids),
+        "relationships": written_relationships,
+        "relationships_skipped": skipped_relationships,
+    }

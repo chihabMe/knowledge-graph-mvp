@@ -190,8 +190,54 @@ selection is no longer deferred; it is the next Phase 2 product path before
 asking the client to provide manual root IDs. Updated 2026-07-08 (live
 validation): ACL-visibility question resolved — see above.
 
+## ADR-010: neo4j-graphrag As The Extraction Engine; Per-Document Entity Scoping
+
+Decision: Use the official `neo4j-graphrag` Python package (Apache-2.0,
+maintained by Neo4j) as the LLM extraction engine, wrapped behind the
+`ExtractionAdapter` boundary in `graph/extraction.py`. Only its extraction
+components are used — chunk/entity/relationship writing stays in our own
+fail-closed writers (`graph/writer.py`), and its entity-resolution component
+is deliberately **not** used.
+
+Reason:
+
+- Evaluation (2026-07-09) of `neo4j-graphrag`, Graphiti, Microsoft GraphRAG,
+  LightRAG/cognee, and LlamaIndex PropertyGraphIndex against our constraints
+  (Neo4j-native, closed ontology, fact-level provenance, self-hostable LLM):
+  - `neo4j-graphrag` links extracted entities back to their source chunk and
+    chunks to documents natively, supports schema-grounded extraction with
+    strict enforcement, has swappable components, and accepts any
+    OpenAI-compatible LLM (OpenRouter).
+  - Graphiti has strong episode provenance but is shaped for bi-temporal
+    agent memory and manages the graph its own way — it would fight our
+    provenance/guard model.
+  - Microsoft GraphRAG is batch/Parquet-based and not Neo4j-native;
+    LightRAG/cognee trade provenance rigor for cost; LlamaIndex is a viable
+    runner-up but drags in a full framework for what the Neo4j package does
+    natively.
+- **Resolves the open fact-level vs. document-level provenance question:
+  fact-level provenance is supported and adopted.** Every extracted entity
+  and relationship carries `source_document_id` + chunk linkage, so Phase 5
+  retrieval can filter at fact level rather than defaulting to strict
+  document-level visibility.
+- **Entity nodes are scoped per document** (identity =
+  `source_document_id` + type + normalized name), not merged across
+  documents. Cross-document entity resolution is a permission hazard: a
+  merged node derived from a restricted and an unrestricted document would
+  put restricted facts one hop from unrestricted context ("a fact one
+  graph-hop away from a restricted file is still restricted"). Resolution
+  can be revisited after SpiceDB enforcement exists (Phase 4+), never
+  before.
+- Extraction output is strictly validated against the declared ontology
+  (`validate_extraction_result`) and rejected loudly on violation — the
+  engine's own schema grounding is a second fence, not the enforcement
+  point.
+
+Status: Accepted (2026-07-09). LLM-backed extraction cannot be
+live-validated until an OpenRouter API key exists; the deterministic
+`ParagraphChunkExtractor` remains the default engine until then.
+
 ## Open / Needs Explicit Confirmation
 
 Not yet decisions — flagged so they don't get silently locked in by omission:
-- **Fact-level vs. document-level provenance granularity** — depends on whether the chosen extraction engine (neo4j-graphrag / Graphify / Graphiti) supports per-fact tagging. Decides how strict the WP6 visibility default must be. Deferred until extraction engine evaluation (Week 2–3).
 - **Freshness/recency scoring** (timestamp, importance, last-updated metadata influencing retrieval priority) — the client's own idea from 2026-05-02, not scoped into any current milestone or work package. Candidate for backlog, not part of this POC unless the client asks for it explicitly.

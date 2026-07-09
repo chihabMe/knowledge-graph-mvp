@@ -160,6 +160,26 @@ NEO4J_URI = env("NEO4J_URI", default="bolt://neo4j:7687")
 NEO4J_USER = env("NEO4J_USER", default="neo4j")
 NEO4J_PASSWORD = env("NEO4J_PASSWORD", default="change-this-neo4j-password")
 
+# Extraction engine selection (ADR-010). "paragraph" is the deterministic
+# no-LLM baseline; "neo4j_graphrag" enables LLM entity/relationship
+# extraction through OpenRouter and requires the key + model below.
+GRAPH_EXTRACTION_ENGINE = env("GRAPH_EXTRACTION_ENGINE", default="paragraph")
+if GRAPH_EXTRACTION_ENGINE not in {"paragraph", "neo4j_graphrag"}:
+    raise ImproperlyConfigured(
+        f"GRAPH_EXTRACTION_ENGINE must be 'paragraph' or 'neo4j_graphrag', "
+        f"got {GRAPH_EXTRACTION_ENGINE!r}."
+    )
+OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", default="")
+OPENROUTER_BASE_URL = env("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
+GRAPH_EXTRACTION_MODEL = env("GRAPH_EXTRACTION_MODEL", default="")
+if GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag" and not (
+    OPENROUTER_API_KEY and GRAPH_EXTRACTION_MODEL
+):
+    raise ImproperlyConfigured(
+        "GRAPH_EXTRACTION_ENGINE='neo4j_graphrag' requires OPENROUTER_API_KEY "
+        "and GRAPH_EXTRACTION_MODEL to be set."
+    )
+
 GOOGLE_WORKSPACE_DOMAIN = env("GOOGLE_WORKSPACE_DOMAIN", default="")
 GOOGLE_SERVICE_ACCOUNT_FILE = env("GOOGLE_SERVICE_ACCOUNT_FILE", default="")
 GOOGLE_DRIVE_DELEGATED_SUBJECT = env("GOOGLE_DRIVE_DELEGATED_SUBJECT", default="")

@@ -22,11 +22,13 @@ Build a graph representation of documents, chunks, entities, and relationships w
 
 ## Tasks
 
-- [~] Define initial graph schema. Effort: High. (Document/Chunk constraints
-  shipped in `graph/schema.py`; entity/relationship constraints follow the
-  extraction-engine decision so the schema isn't presupposed.)
+- [x] Define initial graph schema. Effort: High. (Document/Chunk/Entity
+  constraints in `graph/schema.py`. Extracted entities share one structural
+  `:Entity` label with `entity_type` as a property — ontology types as node
+  labels would collide with the structural `:Document` uniqueness
+  constraint.)
 - [x] Ship the ontology as code: a constants module declaring the allowed entity and relationship types, plus a test that fails when extraction produces an undeclared type. Effort: High. (`graph/ontology.py` + `validate_extraction_result` boundary check.)
-- [ ] Evaluate `neo4j-graphrag`, Graphify, and Graphiti for provenance support. Effort: Extra High.
+- [x] Evaluate `neo4j-graphrag`, Graphify, and Graphiti for provenance support. Effort: Extra High. (2026-07-09 — `neo4j-graphrag` chosen; fact-level provenance confirmed supported. See ADR-010 for the comparison and the per-document entity-scoping rule.)
 - [x] Create an extraction adapter boundary before committing to one engine. Effort: High. (`graph/extraction.py`: `ExtractionAdapter` protocol, typed result dataclasses, deterministic `ParagraphChunkExtractor` baseline.)
 - [x] Add Neo4j migration/setup command. Effort: High. (`manage.py graph_setup`, idempotent.)
 - [x] Store Document and Chunk nodes. Effort: High. (Writers in
@@ -42,11 +44,19 @@ Build a graph representation of documents, chunks, entities, and relationships w
   only re-queues extraction on content change — skipping ineligible
   documents would leave them permanently missing from the graph once their
   permissions become readable.)
-- [ ] Store extracted entity nodes. Effort: High.
-- [ ] Store extracted relationship edges. Effort: Extra High.
-- [~] Attach source provenance to every graph element. Effort: Extra High.
-  (Enforced for Document/Chunk writes — `MissingProvenanceError` refuses
-  incomplete identity; extends to entity/relationship writers when built.)
+- [~] Store extracted entity nodes. Effort: High.
+  (`replace_document_entities` in `graph/writer.py`: per-document scoped
+  `entity_id`, `mentions` edge to the source chunk, chunk-anchor check fails
+  loudly. Offline-tested; live LLM extraction blocked on the OpenRouter
+  key.)
+- [~] Store extracted relationship edges. Effort: Extra High. (Same writer:
+  endpoints resolved by name against the document's own entities;
+  unresolvable/ambiguous endpoints counted and skipped. Offline-tested;
+  live LLM extraction blocked on the OpenRouter key.)
+- [x] Attach source provenance to every graph element. Effort: Extra High.
+  (Enforced for Document, Chunk, Entity nodes and relationship edges —
+  `MissingProvenanceError` refuses incomplete identity; every element
+  carries the identity triple + `source_permissions_version`.)
 - [~] Add retrieval guard that excludes graph records missing source provenance. Effort: Extra High. (`graph/guard.py`: `provenance_where` Cypher fragment + `record_has_provenance` post-query check; wired into real queries when the retrieval path exists.)
 - [ ] Add vector index support. Effort: High.
 - [~] Add provenance tests. Effort: Extra High. (Offline writer/guard/ontology
@@ -70,8 +80,13 @@ Foundation laid: `graph` Django app with a process-wide Neo4j driver
 ontology as code mirroring the brief's section 8, an engine-agnostic
 extraction adapter boundary with a deterministic paragraph-chunk baseline,
 fail-closed Document/Chunk writers keyed by `source_document_id`, and the
-provenance retrieval guard. The pipeline is wired: Phase 2's
-`queue_document_extraction` now runs `graph/pipeline.py` end-to-end
-(stored text content → paragraph chunks → Neo4j with provenance). All
-offline-tested. Next: evaluate extraction engines behind the adapter,
-entity/relationship writers, vector index, live Neo4j validation.
+provenance retrieval guard. The pipeline is wired and live-validated for
+the chunk path: Phase 2's `queue_document_extraction` runs
+`graph/pipeline.py` end-to-end. Engine decision made (ADR-010):
+`neo4j-graphrag` behind the adapter (`graph/graphrag.py`), selected via
+`GRAPH_EXTRACTION_ENGINE=neo4j_graphrag`, with entity/relationship writers
+(`replace_document_entities`) storing per-document-scoped entities with
+`mentions` fact-level provenance. Offline tests cover the real
+neo4j-graphrag extraction component with only the LLM faked. Remaining:
+live LLM extraction validation (blocked on OpenRouter key), vector index,
+wiring the guard into a real retrieval query (Phase 5 seam).

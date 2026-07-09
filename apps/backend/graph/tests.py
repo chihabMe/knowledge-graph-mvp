@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 
 import graph.db as graph_db
 from graph.extraction import (
@@ -12,6 +12,7 @@ from graph.extraction import (
     ParagraphChunkExtractor,
     validate_extraction_result,
 )
+from graph.graphrag import GraphRAGExtractor, ontology_graph_schema
 from graph.guard import (
     ALLOWED_DOCUMENTS_PARAMETER,
     PROVENANCE_FIELDS,
@@ -26,14 +27,17 @@ from graph.ontology import (
     validate_entity_type,
     validate_relationship_type,
 )
-from graph.pipeline import extract_document_to_graph
+from graph.pipeline import extract_document_to_graph, get_extraction_adapter
 from graph.schema import CONSTRAINTS
 from graph.writer import (
     CHUNK_DOCUMENT_RELATIONSHIP,
+    CHUNK_ENTITY_RELATIONSHIP,
+    ChunkNodeMissingError,
     DocumentNodeMissingError,
     MissingProvenanceError,
     document_provenance,
     replace_document_chunks,
+    replace_document_entities,
     upsert_document,
 )
 from integrations.models import DriveConnection, SourceDocument, SourceDocumentContent
@@ -254,6 +258,226 @@ class WriterTests(SimpleTestCase):
                 self.assertIsNotNone(kwargs[field])
 
 
+class OntologyGraphSchemaTests(SimpleTestCase):
+    def test_schema_mirrors_the_declared_ontology_and_is_closed(self):
+        schema = ontology_graph_schema()
+
+        self.assertEqual({n.label for n in schema.node_types}, set(ENTITY_TYPES))
+        self.assertEqual({r.label for r in schema.relationship_types}, set(RELATIONSHIP_TYPES))
+        self.assertFalse(schema.additional_node_types)
+        self.assertFalse(schema.additional_relationship_types)
+
+
+def _fake_llm(payload: str):
+    from neo4j_graphrag.llm import LLMInterface, LLMResponse
+
+    class FakeLLM(LLMInterface):
+        def __init__(self):
+            super().__init__(model_name="fake")
+
+        def invoke(self, input, message_history=None, system_instruction=None):
+            return LLMResponse(content=payload)
+
+        async def ainvoke(self, input, message_history=None, system_instruction=None):
+            return LLMResponse(content=payload)
+
+    return FakeLLM()
+
+
+class GraphRAGExtractorTests(SimpleTestCase):
+    # Exercises the real neo4j-graphrag extraction component (prompting,
+    # JSON parsing, pydantic validation) with only the LLM call faked.
+    def test_llm_output_maps_to_boundary_dataclasses_with_chunk_provenance(self):
+        payload = (
+            '{"nodes": ['
+            '{"id": "0", "label": "Person", "properties": {"name": "Ada Lovelace"}},'
+            '{"id": "1", "label": "Project", "properties": {"name": "Analytical Engine"}}'
+            '], "relationships": ['
+            '{"type": "works_on", "start_node_id": "0", "end_node_id": "1", "properties": {}}'
+            "]}"
+        )
+        extractor = GraphRAGExtractor(llm=_fake_llm(payload))
+
+        result = extractor.extract("Ada Lovelace works on the Analytical Engine.")
+
+        self.assertEqual(len(result.chunks), 1)
+        self.assertEqual(
+            {(e.entity_type, e.name, e.chunk_index) for e in result.entities},
+            {("Person", "Ada Lovelace", 0), ("Project", "Analytical Engine", 0)},
+        )
+        self.assertEqual(
+            result.relationships,
+            (
+                ExtractedRelationship(
+                    relationship_type="works_on",
+                    source_name="Ada Lovelace",
+                    target_name="Analytical Engine",
+                    chunk_index=0,
+                ),
+            ),
+        )
+
+    def test_relationship_with_undeclared_node_id_is_dropped(self):
+        payload = (
+            '{"nodes": [{"id": "0", "label": "Person", "properties": {"name": "Ada"}}],'
+            '"relationships": ['
+            '{"type": "works_on", "start_node_id": "0", "end_node_id": "99", "properties": {}}'
+            "]}"
+        )
+        extractor = GraphRAGExtractor(llm=_fake_llm(payload))
+
+        result = extractor.extract("Some text.")
+
+        self.assertEqual(len(result.entities), 1)
+        self.assertEqual(result.relationships, ())
+
+    def test_each_paragraph_is_extracted_with_its_own_chunk_index(self):
+        payload = (
+            '{"nodes": [{"id": "0", "label": "Topic", "properties": {"name": "Safety"}}],'
+            '"relationships": []}'
+        )
+        extractor = GraphRAGExtractor(llm=_fake_llm(payload))
+
+        result = extractor.extract("Paragraph one.\n\nParagraph two.")
+
+        self.assertEqual([e.chunk_index for e in result.entities], [0, 1])
+
+
+class ExtractionEngineSelectionTests(SimpleTestCase):
+    @override_settings(GRAPH_EXTRACTION_ENGINE="paragraph")
+    def test_paragraph_engine_is_the_deterministic_baseline(self):
+        self.assertIsInstance(get_extraction_adapter(), ParagraphChunkExtractor)
+
+    @override_settings(GRAPH_EXTRACTION_ENGINE="neo4j_graphrag")
+    @patch("graph.graphrag.build_graphrag_extractor")
+    def test_graphrag_engine_is_built_when_selected(self, mock_build):
+        sentinel = object()
+        mock_build.return_value = sentinel
+
+        self.assertIs(get_extraction_adapter(), sentinel)
+
+
+class ReplaceDocumentEntitiesTests(SimpleTestCase):
+    def _session(self, chunk_found=True):
+        db_session = MagicMock()
+        db_session.run.return_value.single.return_value = {"n": 1 if chunk_found else 0}
+        return db_session
+
+    def test_undeclared_entity_type_is_rejected_before_any_write(self):
+        db_session = self._session()
+        entities = (ExtractedEntity(entity_type="Wizard", name="Merlin", chunk_index=0),)
+
+        with self.assertRaises(UnknownEntityTypeError):
+            replace_document_entities(db_session, _document(), entities, ())
+
+        db_session.run.assert_not_called()
+
+    def test_undeclared_relationship_type_is_rejected_before_any_write(self):
+        db_session = self._session()
+        relationships = (
+            ExtractedRelationship(
+                relationship_type="enchants",
+                source_name="A",
+                target_name="B",
+                chunk_index=0,
+            ),
+        )
+
+        with self.assertRaises(UnknownRelationshipTypeError):
+            replace_document_entities(db_session, _document(), (), relationships)
+
+        db_session.run.assert_not_called()
+
+    def test_entities_are_written_with_provenance_and_a_mention_edge(self):
+        db_session = self._session()
+        entities = (ExtractedEntity(entity_type="Person", name="Ada Lovelace", chunk_index=0),)
+
+        counts = replace_document_entities(db_session, _document(), entities, ())
+
+        self.assertEqual(counts, {"entities": 1, "relationships": 0, "relationships_skipped": 0})
+        delete_call, entity_call = db_session.run.call_args_list
+        self.assertIn("DETACH DELETE e", delete_call.args[0])
+        self.assertIn(f"[:{CHUNK_ENTITY_RELATIONSHIP}]", entity_call.args[0])
+        kwargs = entity_call.kwargs
+        self.assertEqual(kwargs["entity_id"], "7:Person:ada lovelace")
+        self.assertEqual(kwargs["chunk_id"], "7:0")
+        for field in PROVENANCE_FIELDS:
+            self.assertIsNotNone(kwargs[field])
+
+    def test_missing_chunk_anchor_fails_loudly(self):
+        db_session = self._session(chunk_found=False)
+        entities = (ExtractedEntity(entity_type="Person", name="Ada", chunk_index=3),)
+
+        with self.assertRaises(ChunkNodeMissingError):
+            replace_document_entities(db_session, _document(), entities, ())
+
+    def test_same_entity_in_two_chunks_counts_once_with_two_mentions(self):
+        db_session = self._session()
+        entities = (
+            ExtractedEntity(entity_type="Person", name="Ada", chunk_index=0),
+            ExtractedEntity(entity_type="Person", name="Ada", chunk_index=1),
+        )
+
+        counts = replace_document_entities(db_session, _document(), entities, ())
+
+        self.assertEqual(counts["entities"], 1)
+        # delete + one write per mention
+        self.assertEqual(db_session.run.call_count, 3)
+
+    def test_resolvable_relationship_is_written_with_provenance(self):
+        db_session = self._session()
+        entities = (
+            ExtractedEntity(entity_type="Person", name="Ada", chunk_index=0),
+            ExtractedEntity(entity_type="Project", name="Engine", chunk_index=0),
+        )
+        relationships = (
+            ExtractedRelationship(
+                relationship_type="works_on",
+                source_name="Ada",
+                target_name="Engine",
+                chunk_index=0,
+            ),
+        )
+
+        counts = replace_document_entities(db_session, _document(), entities, relationships)
+
+        self.assertEqual(counts["relationships"], 1)
+        self.assertEqual(counts["relationships_skipped"], 0)
+        relationship_call = db_session.run.call_args_list[-1]
+        self.assertIn("[r:works_on]", relationship_call.args[0])
+        self.assertEqual(relationship_call.kwargs["source_id"], "7:Person:ada")
+        self.assertEqual(relationship_call.kwargs["target_id"], "7:Project:engine")
+        for field in PROVENANCE_FIELDS:
+            self.assertIsNotNone(relationship_call.kwargs[field])
+
+    def test_unresolvable_or_ambiguous_relationships_are_counted_and_skipped(self):
+        db_session = self._session()
+        entities = (
+            # Same name under two types → ambiguous endpoint.
+            ExtractedEntity(entity_type="Person", name="Mercury", chunk_index=0),
+            ExtractedEntity(entity_type="Topic", name="Mercury", chunk_index=0),
+        )
+        relationships = (
+            ExtractedRelationship(
+                relationship_type="related_to",
+                source_name="Mercury",
+                target_name="Mercury",
+                chunk_index=0,
+            ),
+            ExtractedRelationship(
+                relationship_type="related_to",
+                source_name="Nobody",
+                target_name="Mercury",
+                chunk_index=0,
+            ),
+        )
+
+        counts = replace_document_entities(db_session, _document(), entities, relationships)
+
+        self.assertEqual(counts["relationships"], 0)
+        self.assertEqual(counts["relationships_skipped"], 2)
+
+
 class ExtractionPipelineTests(TestCase):
     def setUp(self):
         self.connection = DriveConnection.objects.create(
@@ -312,6 +536,9 @@ class ExtractionPipelineTests(TestCase):
                 "source_document_id": self.document.pk,
                 "status": "extracted",
                 "chunks": 2,
+                "entities": 0,
+                "relationships": 0,
+                "relationships_skipped": 0,
             },
         )
         statements = [call.args[0] for call in db_session.run.call_args_list]

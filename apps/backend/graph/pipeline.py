@@ -8,16 +8,21 @@ after their permissions later become readable. Nothing in this module is a
 retrieval path; no content leaves the graph store.
 """
 
+from django.conf import settings
+
 from graph.db import session
 from graph.extraction import ExtractionAdapter, ParagraphChunkExtractor, validate_extraction_result
-from graph.writer import replace_document_chunks, upsert_document
+from graph.writer import replace_document_chunks, replace_document_entities, upsert_document
 from integrations.models import SourceDocument, SourceDocumentContent
 
 
 def get_extraction_adapter() -> ExtractionAdapter:
-    # Single swap point for the engine choice (neo4j-graphrag / Graphify /
-    # Graphiti evaluation is an open Phase 3 task). The baseline is
-    # deterministic and cannot invent entities or relationships.
+    # Single swap point for the engine choice (ADR-010). The graphrag import
+    # stays local so the paragraph baseline never touches the LLM stack.
+    if settings.GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag":
+        from graph.graphrag import build_graphrag_extractor
+
+        return build_graphrag_extractor()
     return ParagraphChunkExtractor()
 
 
@@ -50,9 +55,13 @@ def extract_document_to_graph(source_document_id: int) -> dict[str, int | str]:
     with session() as db_session:
         upsert_document(db_session, document)
         written = replace_document_chunks(db_session, document, result.chunks)
+        entity_counts = replace_document_entities(
+            db_session, document, result.entities, result.relationships
+        )
 
     return {
         "source_document_id": source_document_id,
         "status": "extracted",
         "chunks": written,
+        **entity_counts,
     }
