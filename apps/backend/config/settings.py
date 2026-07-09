@@ -1,6 +1,7 @@
 """Django settings for the knowledge graph backend."""
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -159,6 +160,23 @@ CELERY_BEAT_SCHEDULE = {
 NEO4J_URI = env("NEO4J_URI", default="bolt://neo4j:7687")
 NEO4J_USER = env("NEO4J_USER", default="neo4j")
 NEO4J_PASSWORD = env("NEO4J_PASSWORD", default="change-this-neo4j-password")
+GRAPH_CHUNK_VECTOR_INDEX_NAME = env(
+    "GRAPH_CHUNK_VECTOR_INDEX_NAME", default="chunk_embedding_vector"
+)
+if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", GRAPH_CHUNK_VECTOR_INDEX_NAME):
+    raise ImproperlyConfigured(
+        "GRAPH_CHUNK_VECTOR_INDEX_NAME must be a safe Neo4j identifier "
+        "(letters, numbers, underscores; cannot start with a number)."
+    )
+GRAPH_CHUNK_EMBEDDING_DIMENSIONS = env.int("GRAPH_CHUNK_EMBEDDING_DIMENSIONS", default=1536)
+if GRAPH_CHUNK_EMBEDDING_DIMENSIONS < 1:
+    raise ImproperlyConfigured("GRAPH_CHUNK_EMBEDDING_DIMENSIONS must be a positive integer.")
+GRAPH_CHUNK_VECTOR_SIMILARITY = env("GRAPH_CHUNK_VECTOR_SIMILARITY", default="cosine")
+if GRAPH_CHUNK_VECTOR_SIMILARITY not in {"cosine", "euclidean"}:
+    raise ImproperlyConfigured(
+        "GRAPH_CHUNK_VECTOR_SIMILARITY must be 'cosine' or 'euclidean', "
+        f"got {GRAPH_CHUNK_VECTOR_SIMILARITY!r}."
+    )
 
 # Extraction engine selection (ADR-010). "paragraph" is the deterministic
 # no-LLM baseline; "neo4j_graphrag" enables LLM entity/relationship

@@ -6,6 +6,7 @@ incomplete is refused outright — never written with gaps for someone to
 backfill later.
 """
 
+from graph.embeddings import ChunkEmbedding, validate_chunk_embeddings
 from graph.extraction import ExtractedChunk, ExtractedEntity, ExtractedRelationship
 from graph.ontology import validate_entity_type, validate_relationship_type
 from integrations.models import SourceDocument
@@ -75,7 +76,12 @@ def upsert_document(db_session, document: SourceDocument) -> None:
 
 
 def replace_document_chunks(
-    db_session, document: SourceDocument, chunks: tuple[ExtractedChunk, ...]
+    db_session,
+    document: SourceDocument,
+    chunks: tuple[ExtractedChunk, ...],
+    *,
+    chunk_embeddings: tuple[ChunkEmbedding, ...] = (),
+    embedding_dimensions: int | None = None,
 ) -> int:
     """Replace the document's chunk set (delete then create).
 
@@ -83,6 +89,9 @@ def replace_document_chunks(
     merging per-chunk would leave orphans behind when a document shrinks.
     """
     provenance = document_provenance(document)
+    embedding_vectors = validate_chunk_embeddings(
+        chunks, chunk_embeddings, dimensions=embedding_dimensions
+    )
     # MATCH + CREATE against an absent Document node would silently create
     # nothing while this function reports success — check explicitly and fail
     # loudly instead. Callers upsert_document() first.
@@ -100,6 +109,8 @@ def replace_document_chunks(
         source_document_id=provenance["source_document_id"],
     )
     for chunk in chunks:
+        embedding = embedding_vectors.get(chunk.index)
+        embedding_property = ", embedding: $embedding" if embedding is not None else ""
         db_session.run(
             "MATCH (d:Document {source_document_id: $source_document_id}) "
             "CREATE (c:Chunk {chunk_id: $chunk_id, "
@@ -108,7 +119,8 @@ def replace_document_chunks(
             "                 source_document_id: $source_document_id, "
             "                 connection_id: $connection_id, "
             "                 drive_file_id: $drive_file_id, "
-            "                 source_permissions_version: $source_permissions_version}) "
+            "                 source_permissions_version: $source_permissions_version"
+            f"{embedding_property}}}) "
             f"CREATE (c)-[r:{CHUNK_DOCUMENT_RELATIONSHIP}]->(d) "
             "SET r.source_document_id = $source_document_id, "
             "    r.connection_id = $connection_id, "
@@ -118,6 +130,7 @@ def replace_document_chunks(
             chunk_id=f"{provenance['source_document_id']}:{chunk.index}",
             chunk_index=chunk.index,
             text=chunk.text,
+            embedding=embedding,
         )
     return len(chunks)
 

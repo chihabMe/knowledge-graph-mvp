@@ -11,6 +11,7 @@ retrieval path; no content leaves the graph store.
 from django.conf import settings
 
 from graph.db import session
+from graph.embeddings import EmbeddingAdapter, NoOpEmbeddingAdapter
 from graph.extraction import ExtractionAdapter, ParagraphChunkExtractor, validate_extraction_result
 from graph.writer import replace_document_chunks, replace_document_entities, upsert_document
 from integrations.models import SourceDocument, SourceDocumentContent
@@ -24,6 +25,10 @@ def get_extraction_adapter() -> ExtractionAdapter:
 
         return build_graphrag_extractor()
     return ParagraphChunkExtractor()
+
+
+def get_embedding_adapter() -> EmbeddingAdapter:
+    return NoOpEmbeddingAdapter()
 
 
 def extract_document_to_graph(source_document_id: int) -> dict[str, int | str]:
@@ -51,10 +56,17 @@ def extract_document_to_graph(source_document_id: int) -> dict[str, int | str]:
         return {"source_document_id": source_document_id, "status": "skipped_decode_error"}
 
     result = validate_extraction_result(get_extraction_adapter().extract(text))
+    chunk_embeddings = get_embedding_adapter().embed_chunks(result.chunks)
 
     with session() as db_session:
         upsert_document(db_session, document)
-        written = replace_document_chunks(db_session, document, result.chunks)
+        written = replace_document_chunks(
+            db_session,
+            document,
+            result.chunks,
+            chunk_embeddings=chunk_embeddings,
+            embedding_dimensions=settings.GRAPH_CHUNK_EMBEDDING_DIMENSIONS,
+        )
         entity_counts = replace_document_entities(
             db_session, document, result.entities, result.relationships
         )

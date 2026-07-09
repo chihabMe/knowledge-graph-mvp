@@ -4,6 +4,12 @@ from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 
 import graph.db as graph_db
+from graph.embeddings import (
+    ChunkEmbedding,
+    ChunkEmbeddingValidationError,
+    NoOpEmbeddingAdapter,
+    validate_chunk_embeddings,
+)
 from graph.extraction import (
     ExtractedChunk,
     ExtractedEntity,
@@ -28,7 +34,7 @@ from graph.ontology import (
     validate_relationship_type,
 )
 from graph.pipeline import extract_document_to_graph, get_extraction_adapter
-from graph.schema import CONSTRAINTS
+from graph.schema import chunk_vector_index_statement, graph_setup_statements
 from graph.writer import (
     CHUNK_DOCUMENT_RELATIONSHIP,
     CHUNK_ENTITY_RELATIONSHIP,
@@ -90,6 +96,11 @@ class GraphDriverTests(SimpleTestCase):
 
 
 class GraphSetupCommandTests(SimpleTestCase):
+    @override_settings(
+        GRAPH_CHUNK_VECTOR_INDEX_NAME="test_chunk_embedding_vector",
+        GRAPH_CHUNK_EMBEDDING_DIMENSIONS=384,
+        GRAPH_CHUNK_VECTOR_SIMILARITY="cosine",
+    )
     @patch("graph.management.commands.graph_setup.session")
     def test_applies_every_declared_constraint(self, mock_session_ctx):
         mock_session = MagicMock()
@@ -98,7 +109,64 @@ class GraphSetupCommandTests(SimpleTestCase):
         call_command("graph_setup")
 
         actual_statements = [call.args[0] for call in mock_session.run.call_args_list]
-        self.assertEqual(actual_statements, CONSTRAINTS)
+        self.assertEqual(actual_statements, graph_setup_statements())
+
+
+class VectorIndexSchemaTests(SimpleTestCase):
+    def test_chunk_vector_index_statement_uses_configured_shape(self):
+        statement = chunk_vector_index_statement(
+            index_name="chunk_embedding_vector",
+            dimensions=384,
+            similarity_function="cosine",
+        )
+
+        self.assertIn("CREATE VECTOR INDEX chunk_embedding_vector IF NOT EXISTS", statement)
+        self.assertIn("FOR (c:Chunk) ON (c.embedding)", statement)
+        self.assertIn("`vector.dimensions`: 384", statement)
+        self.assertIn("`vector.similarity_function`: 'cosine'", statement)
+
+    def test_chunk_vector_index_rejects_unsafe_identifier(self):
+        with self.assertRaises(ValueError):
+            chunk_vector_index_statement(
+                index_name="chunk embedding",
+                dimensions=384,
+                similarity_function="cosine",
+            )
+
+
+class ChunkEmbeddingTests(SimpleTestCase):
+    def test_noop_adapter_leaves_embeddings_unset(self):
+        chunks = (ExtractedChunk(index=0, text="text"),)
+
+        self.assertEqual(NoOpEmbeddingAdapter().embed_chunks(chunks), ())
+
+    def test_valid_embeddings_are_keyed_by_chunk_index(self):
+        chunks = (
+            ExtractedChunk(index=0, text="first"),
+            ExtractedChunk(index=1, text="second"),
+        )
+        embeddings = (
+            ChunkEmbedding(chunk_index=0, vector=(0.1, 0.2, 0.3)),
+            ChunkEmbedding(chunk_index=1, vector=(0.4, 0.5, 0.6)),
+        )
+
+        vectors = validate_chunk_embeddings(chunks, embeddings, dimensions=3)
+
+        self.assertEqual(vectors, {0: [0.1, 0.2, 0.3], 1: [0.4, 0.5, 0.6]})
+
+    def test_embedding_count_must_match_chunk_count(self):
+        chunks = (ExtractedChunk(index=0, text="first"), ExtractedChunk(index=1, text="second"))
+        embeddings = (ChunkEmbedding(chunk_index=0, vector=(0.1, 0.2, 0.3)),)
+
+        with self.assertRaises(ChunkEmbeddingValidationError):
+            validate_chunk_embeddings(chunks, embeddings, dimensions=3)
+
+    def test_embedding_dimensions_must_match_configured_dimensions(self):
+        chunks = (ExtractedChunk(index=0, text="first"),)
+        embeddings = (ChunkEmbedding(chunk_index=0, vector=(0.1, 0.2)),)
+
+        with self.assertRaises(ChunkEmbeddingValidationError):
+            validate_chunk_embeddings(chunks, embeddings, dimensions=3)
 
 
 class ParagraphChunkExtractorTests(SimpleTestCase):
@@ -257,6 +325,40 @@ class WriterTests(SimpleTestCase):
             self.assertEqual(kwargs["text"], chunk.text)
             for field in PROVENANCE_FIELDS:
                 self.assertIsNotNone(kwargs[field])
+
+    def test_replace_chunks_can_write_embeddings(self):
+        db_session = MagicMock()
+        chunks = (ExtractedChunk(index=0, text="first"),)
+        embeddings = (ChunkEmbedding(chunk_index=0, vector=(0.1, 0.2, 0.3)),)
+
+        written = replace_document_chunks(
+            db_session,
+            _document(),
+            chunks,
+            chunk_embeddings=embeddings,
+            embedding_dimensions=3,
+        )
+
+        self.assertEqual(written, 1)
+        create_call = db_session.run.call_args_list[-1]
+        self.assertIn("embedding: $embedding", create_call.args[0])
+        self.assertEqual(create_call.kwargs["embedding"], [0.1, 0.2, 0.3])
+
+    def test_replace_chunks_refuses_malformed_embeddings_before_writing(self):
+        db_session = MagicMock()
+        chunks = (ExtractedChunk(index=0, text="first"),)
+        embeddings = (ChunkEmbedding(chunk_index=0, vector=(0.1, 0.2)),)
+
+        with self.assertRaises(ChunkEmbeddingValidationError):
+            replace_document_chunks(
+                db_session,
+                _document(),
+                chunks,
+                chunk_embeddings=embeddings,
+                embedding_dimensions=3,
+            )
+
+        db_session.run.assert_not_called()
 
 
 class OntologyGraphSchemaTests(SimpleTestCase):
