@@ -35,105 +35,13 @@ When a fact changes (stack, scope, phase status, a rule), update
 fact. If two documents disagree, `AGENT_PROJECT_BRIEF.md` wins — and the
 disagreement itself is a bug: fix the stale copy in the same change.
 
-## Post-Change Review Workflow (Run After Code Changes)
+## Manual Audit Only
 
-After Codex writes code, fixes a bug, or adds a feature, run the review workflow
-before presenting the work as done.
+Do not run repository audit commands automatically. The human operator decides
+when an audit is needed and will ask for it explicitly.
 
-1. Stage only the intended changes:
-
-```bash
-git add <changed-files>
-```
-
-If the review is abandoned or the staged set is wrong, unstage files with
-`git restore --staged <files>` before continuing.
-
-2. Run the two-stage review without creating a commit:
-
-```bash
-make review-staged
-```
-
-If `make review-staged` exits with an error before producing `REVIEW.md`,
-report the raw error output to the user and treat the review as incomplete.
-
-This writes `REVIEW.md` using:
-
-- **Stage 1:** offline static checks from `scripts/hooks/pre-commit`.
-- **Stage 2:** AI review is disabled by default. It runs only when a human
-  operator explicitly opts in with `ENABLE_AI_REVIEW=1`.
-
-3. Read `REVIEW.md` in full.
-
-4. Present the review results to the user:
-   - Critical issues.
-   - Warnings.
-   - AI review verdict, only if AI review was explicitly enabled.
-   - Proposed action items.
-
-5. Ask the user:
-
-```text
-Do you want me to fix these review findings, or ignore them for now?
-```
-
-6. Wait for the user's explicit answer.
-   - If the user says **fix** → apply the fixes, stage them, and run
-     `make review-staged` again.
-   - If the user says **ignore** → do not fix the findings. Note which review
-     findings remain open. Static critical blockers still cannot be committed
-     unless the user explicitly approves an override.
-
-**Critical rule: Codex must never silently fix or dismiss review findings.**
-
-## Pre-Commit Review Workflow (Read This Before Every Commit)
-
-This repository has an offline pre-commit hook that acts as a senior engineer
-review gate. It runs automatically on `git commit` — you cannot skip it without
-an explicit override.
-
-**Before every commit, you must:**
-
-1. Check if `REVIEW.md` exists in the repo root.
-   - If it exists, read it. It contains findings from the previous review.
-   - Address all **❌ Critical** items before staging new changes.
-   - Address **⚠️ Warning** items in the same or next commit.
-
-2. Stage your changes with `git add`.
-
-3. Run `git commit`. The pre-commit hook fires automatically and will:
-   - **Stage 1 — Static checks** (offline, always runs):
-     - Ruff lint and format checks on staged Python files.
-     - Hardcoded secrets / DEBUG=True / raw SQL / stack trace leak scan.
-     - Neo4j provenance field check.
-     - SpiceDB permission bypass check.
-     - Celery task model-passing check.
-     - Docker Compose validation.
-     - pytest (skip with `SKIP_TESTS=1 git commit ...`).
-   - **Stage 2 — AI deep review** is disabled by default:
-     - It runs only when a human operator explicitly sets
-       `ENABLE_AI_REVIEW=1`.
-     - Do not enable it automatically during normal agent work.
-   - Writes all findings to `REVIEW.md`.
-   - **Blocks the commit** if any critical issue is found.
-
-4. After the hook runs — whether the commit passed or was blocked:
-   - Read `REVIEW.md` in full.
-   - **Present the findings to the user clearly.** Show them the critical issues,
-     warnings, and the AI review verdict.
-   - **Ask the user:** "Do you want me to fix these issues? (yes/no)"
-   - **Wait for the user's explicit answer before touching any code.**
-   - If the user says **yes** → apply the fixes, then retry the commit.
-   - If the user says **no** → leave the code as-is and note open warnings.
-
-**Critical rule: Never fix review findings silently or automatically.**
-**Never use `--no-verify` or `SKIP_REVIEW=1` unless the user explicitly says so.**
-
-To reinstall the hook after a fresh clone:
-```bash
-make install-hooks
-```
+Do not fix or dismiss audit findings unless the human operator explicitly asks
+for that follow-up work.
 
 ## Daily Report (Write Before Ending A Work Session)
 
@@ -194,14 +102,15 @@ graphify cluster-only apps/backend
 
 ## Current Architecture Status
 
-The backend foundation has been built with Django + Django REST Framework.
+The backend foundation and controlled Google Drive ingestion code are built.
+Phase 3 graph construction is active on `phase-3/graph-foundation`: the graph
+app, ontology, Neo4j setup, extraction adapter, document, chunk, entity, and
+relationship writers, provenance guard, and vector-index setup are in place.
 
-The next implementation step should be controlled Google Drive onboarding work:
+The next implementation steps are:
 
-1. Add the admin flow that lists eligible Drive folders/shared drives available
-   to the configured service account.
-2. Persist the selected root scope in `DriveConnection`; manual root IDs are
-   only a bootstrap/developer fallback.
-3. Keep sync triggers server-side and audited; never accept arbitrary Drive
-   scope changes from untrusted request bodies.
-4. Preserve future permission/provenance requirements in every model.
+1. Finish the Phase 3/Phase 5 seam: real retrieval queries must compose the
+   provenance guard and an allowed-source-document list.
+2. Start Phase 4 SpiceDB permission sync before exposing any answer path.
+3. Keep `.env.example` and tracked docs OpenRouter-shaped.
+4. Preserve provenance on every graph write and keep retrieval fail-closed.

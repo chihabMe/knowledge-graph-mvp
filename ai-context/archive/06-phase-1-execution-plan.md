@@ -241,7 +241,7 @@ Build Django backend foundation
 
 Validation before commit:
 
-- `git status` reviewed.
+- `git status` checked.
 - No `.env`, credentials, generated cache, database volumes, or logs staged.
 - Compose config passes.
 - Tests pass.
@@ -269,4 +269,3 @@ GET /api/health/
 ```
 
 returns dependency status without leaking sensitive configuration.
-

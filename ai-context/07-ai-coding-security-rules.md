@@ -193,17 +193,9 @@ Later required tests:
 
 ## Validation Rules
 
-After making code changes, stage the intended change set and run the review gate:
-
-```bash
-make review-staged
-```
-
-The default gate is deterministic local validation only. Claude/AI review is
-opt-in (`ENABLE_AI_REVIEW=1 make review-staged`) and must not run
-automatically. Then read `REVIEW.md`, present any static findings to the user,
-and wait for the user to choose whether Codex should fix the findings or ignore
-them for now.
+Run targeted validation that matches the risk of the change. Do not run
+repository audit commands automatically; the human operator decides when an
+audit is needed and will ask for it explicitly.
 
 Before committing code, run the relevant subset:
 

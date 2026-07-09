@@ -54,18 +54,21 @@ Phase 0 and Phase 1 established the repository, Docker Compose infrastructure,
 Django + DRF backend, Celery worker, PostgreSQL, Redis, Neo4j, SpiceDB, health
 checks, and repeatable validation commands.
 
-Phase 2 is now in progress: controlled Google Drive ingestion. The current
-foundation includes Drive configuration settings, PostgreSQL metadata/sync
-models, source permission version hashing, and mocked metadata-sync tests.
-Remaining Phase 2 work includes:
+Phase 2 code is complete for controlled Google Drive ingestion: per-client
+service-account configuration, admin root selection, server-side scoped sync,
+content export/storage, metadata capture, permission-version hashing,
+audit records, and post-commit extraction queueing are implemented. Live
+Drive validation confirmed the expected folder-sharing limitation:
+`permissions.list()` can fail under folder-only sharing, so full permission
+metadata capture for the pilot still depends on domain-wide delegation in a
+real Workspace.
 
-- Google Drive ingestion
-- Drive file, folder, owner/creator, and sharing metadata capture
-- Real provenance metadata
-- SpiceDB permission sync
-- Permission-safe retrieval
-- Open WebUI integration
-- Evaluation and leak tests
+Phase 3 is active on `phase-3/graph-foundation`: the graph app, ontology,
+Neo4j setup, extraction adapter, document/chunk/entity/relationship writers,
+source provenance guard, and Chunk vector-index setup are implemented and
+covered by tests. The next product-risk dependency is Phase 4 SpiceDB
+permission sync, followed by Phase 5 retrieval that composes SpiceDB's
+allowed-document list with Neo4j provenance filtering before any LLM call.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -508,21 +511,33 @@ commands.
 
 ### Phase 2: Google Drive Ingestion
 
-Status: in progress.
+Status: code complete; live client validation still depends on a Drive setup
+where file permission metadata is readable.
 
 Purpose: ingest supported Google Drive files and metadata while preserving
 source identity and sync state. This phase must capture Drive file metadata,
 owner/creator metadata, folder ancestry, sharing metadata, source permissions
 version, modified time, and content hash.
 
-Current foundation: Drive configuration settings, PostgreSQL metadata/sync
-models, source permission version hashing, and mocked metadata-sync tests.
+Current foundation: service-account Drive access, admin root selection,
+server-side scoped sync, content export/storage, PostgreSQL metadata, source
+permission version hashing, audit records, and extraction queueing. Folder-only
+sharing can list/read files but generally cannot read per-file permission
+metadata; domain-wide delegation is expected for safe live client ingestion.
 
 ### Phase 3: Neo4j Graph And Provenance
+
+Status: in progress on `phase-3/graph-foundation`.
 
 Purpose: build the document, chunk, entity, relationship, and vector
 representation in Neo4j. Evaluate `neo4j-graphrag`, Graphify, and Graphiti
 behind an adapter, then choose based on provenance quality and maturity.
+
+Current foundation: `neo4j-graphrag` is selected behind the adapter, graph
+setup applies constraints plus the Chunk vector index, and live smoke testing
+has written chunks, entities, and relationships with complete source
+provenance. Remaining work is the retrieval seam where Phase 5 queries compose
+the provenance guard with SpiceDB allowed-document IDs.
 
 Minimum extraction bar: fact-level source attribution must identify which source
 document and chunk produced the fact. Document-level-only provenance is not
@@ -602,9 +617,8 @@ When asked to build a feature:
 6. Add tests for permission behavior when touching retrieval or ingestion.
 7. Add or update docs when changing public endpoints or data contracts.
 8. Avoid building UI polish before the core Drive/graph/permission loop works.
-9. Automated validation gates should run deterministic local checks by default.
-   Claude/AI review is opt-in only (`ENABLE_AI_REVIEW=1`) and must not run
-   automatically during normal staged review or commits.
+9. Run deterministic local validation that matches the change. Extra audit
+   commands are human-triggered only.
 
 ## 20. Definition Of Done
 

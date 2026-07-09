@@ -20,7 +20,7 @@ by SpiceDB **before** any context reaches the LLM.
 ## Before Making Changes
 
 Read `AGENTS.md` — it is the entry point for agents and defines the required
-reading order, the pre-commit review workflow, and the working rules.
+reading order, manual audit policy, and working rules.
 For Drive onboarding scope, follow the canonical brief and ADR-009 rather than
 assuming manual root IDs are the client-facing path.
 
