@@ -765,6 +765,47 @@ class BuildDriveServiceTests(SimpleTestCase):
                 with self.assertRaises(MissingServiceAccountKeyError):
                     build_drive_service(connection=None)
 
+    @patch("googleapiclient.discovery.build")
+    @patch("google.oauth2.service_account.Credentials.from_service_account_file")
+    def test_blank_connection_subject_does_not_delegate_even_with_env_subject(
+        self, mock_from_file, mock_build
+    ):
+        # The env var must not silently re-enable delegation once the connection
+        # field has been cleared — otherwise the delegated-subject endpoint's
+        # "cleared" response would lie about the effective auth identity.
+        credentials = mock_from_file.return_value
+        connection = DriveConnection(delegated_subject_email="")
+        with NamedTemporaryFile(mode="w", encoding="utf-8") as key_file:
+            key_file.write("{}")
+            key_file.flush()
+            with override_settings(
+                GOOGLE_SERVICE_ACCOUNT_FILE=key_file.name,
+                GOOGLE_DRIVE_DELEGATED_SUBJECT="env-admin@example.com",
+            ):
+                build_drive_service(connection)
+
+        credentials.with_subject.assert_not_called()
+        _, build_kwargs = mock_build.call_args
+        self.assertIs(build_kwargs["credentials"], credentials)
+
+    @patch("googleapiclient.discovery.build")
+    @patch("google.oauth2.service_account.Credentials.from_service_account_file")
+    def test_connection_subject_is_applied(self, mock_from_file, mock_build):
+        credentials = mock_from_file.return_value
+        connection = DriveConnection(delegated_subject_email="delegated@example.com")
+        with NamedTemporaryFile(mode="w", encoding="utf-8") as key_file:
+            key_file.write("{}")
+            key_file.flush()
+            with override_settings(
+                GOOGLE_SERVICE_ACCOUNT_FILE=key_file.name,
+                GOOGLE_DRIVE_DELEGATED_SUBJECT="env-admin@example.com",
+            ):
+                build_drive_service(connection)
+
+        credentials.with_subject.assert_called_once_with("delegated@example.com")
+        _, build_kwargs = mock_build.call_args
+        self.assertIs(build_kwargs["credentials"], credentials.with_subject.return_value)
+
 
 class ExportFileContentTests(SimpleTestCase):
     def test_google_doc_exports_to_plain_text(self):
@@ -1411,7 +1452,9 @@ class DriveRootApiTests(TestCase):
         GOOGLE_SHARED_DRIVE_ID="",
     )
     @patch("integrations.views.GoogleDriveMetadataClient")
-    def test_root_listing_bootstraps_connection_when_none_exists(self, mock_client_class):
+    def test_root_listing_does_not_persist_a_connection_when_none_exists(self, mock_client_class):
+        # Root discovery is a read: it answers from a transient connection built
+        # from settings and must not create a DriveConnection row on a GET.
         self.connection.delete()
         fake_client = FakeDriveRootClient(self._candidates())
         mock_client_class.return_value = fake_client
@@ -1420,11 +1463,16 @@ class DriveRootApiTests(TestCase):
         response = self.client.get("/api/ingest/drive/roots/")
 
         self.assertEqual(response.status_code, 200)
-        connection = DriveConnection.objects.get()
-        self.assertEqual(connection.workspace_domain, "example.com")
-        self.assertEqual(connection.delegated_subject_email, "admin@example.com")
-        self.assertEqual(connection.credential_reference, "GOOGLE_SERVICE_ACCOUNT_FILE")
-        self.assertEqual(fake_client.connections, [connection])
+        self.assertEqual(response.json()["connection_id"], None)
+        self.assertEqual(DriveConnection.objects.count(), 0)
+        # The transient connection still carries the settings-derived values the
+        # Drive client needs (delegated subject, scope) even though it is unsaved.
+        self.assertEqual(len(fake_client.connections), 1)
+        transient = fake_client.connections[0]
+        self.assertIsNone(transient.pk)
+        self.assertEqual(transient.workspace_domain, "example.com")
+        self.assertEqual(transient.delegated_subject_email, "admin@example.com")
+        self.assertEqual(transient.credential_reference, "GOOGLE_SERVICE_ACCOUNT_FILE")
 
     @patch("integrations.views.GoogleDriveMetadataClient")
     def test_drive_api_errors_return_controlled_bad_gateway(self, mock_client_class):
@@ -1555,9 +1603,11 @@ class DriveRootApiTests(TestCase):
         self.assertEqual(response.json()["permission_metadata_access"], "blocked")
 
     @patch("integrations.views.GoogleDriveMetadataClient")
-    def test_permission_check_reports_blocked_when_only_folder_listing_fails(
+    def test_permission_check_reports_listing_failed_when_only_folder_listing_fails(
         self, mock_client_class
     ):
+        # Nothing could be sampled because folder listing itself failed — a
+        # distinct signal from "blocked" (files sampled but ACLs unreadable).
         mock_client_class.return_value = FakeDriveRootClient(self._candidates())
         mock_client_class.return_value.check_permission_access = lambda connection: (
             DrivePermissionAccessReport(
@@ -1573,7 +1623,7 @@ class DriveRootApiTests(TestCase):
         response = self.client.get("/api/ingest/drive/permissions/check/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["permission_metadata_access"], "blocked")
+        self.assertEqual(response.json()["permission_metadata_access"], "listing_failed")
         self.assertEqual(response.json()["folder_listing_errors"], 1)
 
     @patch("integrations.views.GoogleDriveMetadataClient")
@@ -1589,6 +1639,23 @@ class DriveRootApiTests(TestCase):
             response.json(),
             {"detail": "No Drive root has been selected for this connection."},
         )
+        mock_client_class.assert_not_called()
+
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_permission_check_requires_a_connection_and_never_bootstraps(self, mock_client_class):
+        # The diagnostic is a GET: with no connection it reports the missing
+        # precondition instead of creating a DriveConnection row as a side effect.
+        self.connection.delete()
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/api/ingest/drive/permissions/check/")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json(),
+            {"detail": "No enabled Drive connection is configured."},
+        )
+        self.assertEqual(DriveConnection.objects.count(), 0)
         mock_client_class.assert_not_called()
 
     @patch("integrations.views.GoogleDriveMetadataClient")

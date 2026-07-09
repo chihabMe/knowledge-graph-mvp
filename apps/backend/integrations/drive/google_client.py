@@ -108,7 +108,14 @@ def build_drive_service(connection: DriveConnection):
             "GOOGLE_SERVICE_ACCOUNT_FILE could not be read as a service-account "
             "key. Check that the mounted file contains valid key JSON."
         ) from exc
-    subject = connection.delegated_subject_email or settings.GOOGLE_DRIVE_DELEGATED_SUBJECT
+    # The connection's field is authoritative: a bootstrap connection is
+    # already seeded from settings.GOOGLE_DRIVE_DELEGATED_SUBJECT at creation
+    # time, so falling back to the env var here would make clearing the subject
+    # (via the delegated-subject endpoint) a silent no-op — the endpoint would
+    # report "" and invalidate documents while the built service still delegated
+    # to the env subject. Read only the connection field so the effective auth
+    # identity always matches what the endpoint reports.
+    subject = connection.delegated_subject_email
     if subject:
         credentials = credentials.with_subject(subject)
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
@@ -123,44 +130,25 @@ class GoogleDriveMetadataClient:
     def list_files(self, connection: DriveConnection) -> list[DriveFileMetadata]:
         service = self._service or build_drive_service(connection)
         root_id = self._root_id(connection)
+        root_name = self._folder_name(service, root_id, connection)
         files: list[DriveFileMetadata] = []
 
-        # Breadth-first folder walk. Works for both My Drive folders and
-        # shared drives (the shared drive id acts as the root folder id).
-        root_name = self._folder_name(service, root_id, connection)
-        pending_folders: list[tuple[str, str]] = [(root_id, f"/{root_name}")]
-        seen_folders = {root_id}
-        # A multi-parented file is listed under each of its parents inside the
-        # scanned scope; emit it once (first path wins) so it is never stored,
-        # exported, or queued for extraction twice in one run.
-        seen_files: set[str] = set()
-
-        while pending_folders:
-            folder_id, folder_path = pending_folders.pop(0)
-            for entry in self._list_children(service, connection, folder_id):
-                if entry.get("mimeType") == FOLDER_MIME_TYPE:
-                    if entry["id"] not in seen_folders:
-                        seen_folders.add(entry["id"])
-                        pending_folders.append(
-                            (entry["id"], f"{folder_path}/{entry.get('name', '')}")
-                        )
-                    continue
-                if entry["id"] in seen_files:
-                    continue
-                seen_files.add(entry["id"])
-                # A single file's permission ACL can be unreadable even when the
-                # file itself is listable (e.g. folder-level sharing without
-                # "manage permissions" rights) — isolate that to this one file
-                # instead of aborting the whole sync; sync.py fails it closed.
-                try:
-                    permissions = self._list_permissions(service, entry["id"])
-                    permissions_fetch_failed = False
-                except DRIVE_API_ERRORS:
-                    permissions = []
-                    permissions_fetch_failed = True
-                files.append(
-                    self._to_metadata(entry, folder_path, permissions, permissions_fetch_failed)
-                )
+        # A folder-listing failure here propagates (no on_listing_error), so the
+        # sync fails and sync.py fails it closed — never a partial "success".
+        for entry, folder_path in self._walk_files(service, connection, root_id, f"/{root_name}"):
+            # A single file's permission ACL can be unreadable even when the
+            # file itself is listable (e.g. folder-level sharing without
+            # "manage permissions" rights) — isolate that to this one file
+            # instead of aborting the whole sync; sync.py fails it closed.
+            try:
+                permissions = self._list_permissions(service, entry["id"])
+                permissions_fetch_failed = False
+            except DRIVE_API_ERRORS:
+                permissions = []
+                permissions_fetch_failed = True
+            files.append(
+                self._to_metadata(entry, folder_path, permissions, permissions_fetch_failed)
+            )
 
         return files
 
@@ -319,6 +307,60 @@ class GoogleDriveMetadataClient:
             if not page_token:
                 return permissions
 
+    def _walk_files(
+        self,
+        service,
+        connection: DriveConnection,
+        root_id: str,
+        root_path: str,
+        *,
+        on_listing_error=None,
+    ):
+        """Breadth-first walk of the scoped tree, yielding (file_entry, folder_path).
+
+        Works for both My Drive folders and shared drives (the shared drive id
+        acts as the root folder id). A multi-parented file is listed under each
+        of its parents inside the scanned scope; it is emitted once (first path
+        wins) so it is never stored, exported, or sampled twice in one run.
+
+        When `on_listing_error` is None a folder-listing failure propagates (the
+        content-sync caller wants the whole run to fail closed). When provided,
+        the callback is invoked per failed folder and the walk continues — the
+        diagnostic caller counts those failures instead of aborting. Callers
+        that cap the walk simply stop iterating (e.g. `break`).
+        """
+        pending_folders: list[tuple[str, str]] = [(root_id, root_path)]
+        seen_folders = {root_id}
+        seen_files: set[str] = set()
+
+        while pending_folders:
+            folder_id, folder_path = pending_folders.pop(0)
+            children = self._list_children(service, connection, folder_id)
+            # next() rather than a for-loop so a failure raised *during*
+            # pagination is caught here and routed to on_listing_error, while
+            # entries already yielded from earlier pages are preserved.
+            while True:
+                try:
+                    entry = next(children)
+                except StopIteration:
+                    break
+                except DRIVE_API_ERRORS:
+                    if on_listing_error is None:
+                        raise
+                    on_listing_error()
+                    break
+                if entry.get("mimeType") == FOLDER_MIME_TYPE:
+                    if entry["id"] not in seen_folders:
+                        seen_folders.add(entry["id"])
+                        pending_folders.append(
+                            (entry["id"], f"{folder_path}/{entry.get('name', '')}")
+                        )
+                    continue
+                if entry["id"] in seen_files:
+                    continue
+                seen_files.add(entry["id"])
+                yield entry, folder_path
+
     def _check_permission_access(
         self,
         service,
@@ -328,48 +370,36 @@ class GoogleDriveMetadataClient:
     ) -> DrivePermissionAccessReport:
         max_files = max(1, max_files)
         root_id = self._root_id(connection)
-        pending_folders: list[str] = [root_id]
-        seen_folders = {root_id}
-        seen_files: set[str] = set()
         sampled_files = 0
         readable_files = 0
         unreadable_files = 0
         folder_listing_errors = 0
+        hit_sample_limit = False
 
-        while pending_folders:
-            folder_id = pending_folders.pop(0)
+        def _note_listing_error() -> None:
+            nonlocal folder_listing_errors
+            folder_listing_errors += 1
+
+        # root_path is unused by the diagnostic (it only counts ACL readability),
+        # so pass "" and skip the extra _folder_name lookup list_files needs.
+        for entry, _folder_path in self._walk_files(
+            service, connection, root_id, "", on_listing_error=_note_listing_error
+        ):
+            sampled_files += 1
             try:
-                for entry in self._list_children(service, connection, folder_id):
-                    if entry.get("mimeType") == FOLDER_MIME_TYPE:
-                        if entry["id"] not in seen_folders:
-                            seen_folders.add(entry["id"])
-                            pending_folders.append(entry["id"])
-                        continue
-                    if entry["id"] in seen_files:
-                        continue
-                    seen_files.add(entry["id"])
-                    sampled_files += 1
-                    try:
-                        self._list_permissions(service, entry["id"])
-                        readable_files += 1
-                    except DRIVE_API_ERRORS:
-                        unreadable_files += 1
-                    if sampled_files >= max_files:
-                        return DrivePermissionAccessReport(
-                            sampled_files=sampled_files,
-                            readable_files=readable_files,
-                            unreadable_files=unreadable_files,
-                            checked_all_available_files=False,
-                            folder_listing_errors=folder_listing_errors,
-                        )
+                self._list_permissions(service, entry["id"])
+                readable_files += 1
             except DRIVE_API_ERRORS:
-                folder_listing_errors += 1
+                unreadable_files += 1
+            if sampled_files >= max_files:
+                hit_sample_limit = True
+                break
 
         return DrivePermissionAccessReport(
             sampled_files=sampled_files,
             readable_files=readable_files,
             unreadable_files=unreadable_files,
-            checked_all_available_files=folder_listing_errors == 0,
+            checked_all_available_files=(not hit_sample_limit and folder_listing_errors == 0),
             folder_listing_errors=folder_listing_errors,
         )
 

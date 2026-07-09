@@ -18,28 +18,44 @@ from integrations.serializers import DriveDelegatedSubjectSerializer, DriveRootS
 from integrations.tasks import run_drive_sync
 
 
-def _active_or_bootstrap_connection() -> DriveConnection:
-    connection = DriveConnection.objects.filter(enabled=True).order_by("pk").first()
-    if connection is not None:
-        return connection
+def _active_connection() -> DriveConnection | None:
+    return DriveConnection.objects.filter(enabled=True).order_by("pk").first()
 
-    return DriveConnection.objects.create(
-        workspace_domain=settings.GOOGLE_WORKSPACE_DOMAIN,
-        delegated_subject_email=settings.GOOGLE_DRIVE_DELEGATED_SUBJECT,
-        credential_reference="GOOGLE_SERVICE_ACCOUNT_FILE",
-        scope_type=settings.GOOGLE_DRIVE_SCOPE_TYPE,
-        root_folder_id=(
+
+def _connection_defaults_from_settings() -> dict[str, object]:
+    return {
+        "workspace_domain": settings.GOOGLE_WORKSPACE_DOMAIN,
+        "delegated_subject_email": settings.GOOGLE_DRIVE_DELEGATED_SUBJECT,
+        "credential_reference": "GOOGLE_SERVICE_ACCOUNT_FILE",
+        "scope_type": settings.GOOGLE_DRIVE_SCOPE_TYPE,
+        "root_folder_id": (
             settings.GOOGLE_DRIVE_ROOT_ID
             if settings.GOOGLE_DRIVE_SCOPE_TYPE == DriveConnection.ScopeType.FOLDER
             else ""
         ),
-        shared_drive_id=(
+        "shared_drive_id": (
             settings.GOOGLE_SHARED_DRIVE_ID
             if settings.GOOGLE_DRIVE_SCOPE_TYPE == DriveConnection.ScopeType.SHARED_DRIVE
             else ""
         ),
-        enabled=True,
-    )
+        "enabled": True,
+    }
+
+
+def _transient_connection_from_settings() -> DriveConnection:
+    # An unsaved connection for read-only root discovery: listing candidates
+    # only reads the delegated subject and scope, never the pk, so a GET can
+    # answer without persisting anything (see _active_or_bootstrap_connection
+    # for the write path used by the POST endpoints).
+    return DriveConnection(**_connection_defaults_from_settings())
+
+
+def _active_or_bootstrap_connection() -> DriveConnection:
+    connection = _active_connection()
+    if connection is not None:
+        return connection
+
+    return DriveConnection.objects.create(**_connection_defaults_from_settings())
 
 
 def _root_candidate_payload(candidate: DriveRootCandidate) -> dict[str, str]:
@@ -79,6 +95,12 @@ def _permission_metadata_access_status(report) -> str:
         return "no_files"
     if report.unreadable_files == 0 and report.folder_listing_errors == 0:
         return "ok"
+    # No file was reachable to sample and folder listing itself failed: the
+    # problem is walking the tree, not ACL visibility. Keep this distinct from
+    # "blocked" (ACLs sampled but unreadable) so the summary label alone points
+    # at the right remediation; folder_listing_errors carries the count either way.
+    if report.sampled_files == 0:
+        return "listing_failed"
     if report.readable_files == 0:
         return "blocked"
     return "partial"
@@ -90,7 +112,10 @@ class DriveRootListView(APIView):
     throttle_scope = "drive-roots"
 
     def get(self, request):
-        connection = _active_or_bootstrap_connection()
+        # Root discovery must not persist anything: an admin lists candidates
+        # before any root is chosen, so a transient (unsaved) connection built
+        # from settings answers the read without a write side-effect.
+        connection = _active_connection() or _transient_connection_from_settings()
         try:
             candidates = GoogleDriveMetadataClient().list_root_candidates(connection)
         except MissingServiceAccountKeyError as exc:
@@ -219,7 +244,15 @@ class DrivePermissionCheckView(APIView):
     throttle_scope = "drive-roots"
 
     def get(self, request):
-        connection = _active_or_bootstrap_connection()
+        # A read-only diagnostic: it never bootstraps. Without a persisted,
+        # root-selected connection there is nothing to sample, so report the
+        # missing precondition instead of creating a connection row on a GET.
+        connection = _active_connection()
+        if connection is None:
+            return Response(
+                {"detail": "No enabled Drive connection is configured."},
+                status=status.HTTP_409_CONFLICT,
+            )
         if not _connection_has_selected_root(connection):
             return Response(
                 {"detail": "No Drive root has been selected for this connection."},
