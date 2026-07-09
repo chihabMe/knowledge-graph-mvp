@@ -57,7 +57,7 @@ Build a graph representation of documents, chunks, entities, and relationships w
   (Enforced for Document, Chunk, Entity nodes and relationship edges —
   `MissingProvenanceError` refuses incomplete identity; every element
   carries the identity triple + `source_permissions_version`.)
-- [~] Add retrieval guard that excludes graph records missing source provenance. Effort: Extra High. (`graph/guard.py`: `provenance_where` Cypher fragment + `record_has_provenance` post-query check; wired into real queries when the retrieval path exists.)
+- [x] Add retrieval guard that excludes graph records missing source provenance. Effort: Extra High. (`graph/guard.py`: `provenance_where` Cypher fragment + `record_has_provenance` post-query check, both tested. Wiring the guard into real retrieval queries is tracked in Phase 5, where those queries are written — this phase delivers the guard itself.)
 - [x] Add vector index support. Effort: High. (`graph_setup` applies an
   idempotent Chunk embedding vector index; `graph/embeddings.py` defines the
   adapter boundary and validates optional chunk embeddings before writes.)
@@ -77,8 +77,15 @@ Build a graph representation of documents, chunks, entities, and relationships w
 
 ## Completion Status
 
-In progress (started 2026-07-09, branch `phase-3/graph-foundation`).
-Foundation laid: `graph` Django app with a process-wide Neo4j driver
+Code complete (2026-07-09, branch `phase-3/graph-foundation`, unmerged).
+Two caveats: LLM extraction and the vector index are built and
+smoke-validated but not yet operational in a production configuration (no
+production OpenRouter model configured; the default embedding adapter is
+no-op, so no real embeddings exist yet), and the provenance guard becomes
+enforceable only when Phase 5 composes it into real retrieval queries —
+that wiring task, with its leak tests, now lives in the Phase 5 tracker.
+
+What was built: `graph` Django app with a process-wide Neo4j driver
 (`graph/db.py`), idempotent constraint + vector-index setup (`manage.py
 graph_setup`), ontology as code mirroring the brief's section 8, an
 engine-agnostic extraction adapter boundary with a deterministic
@@ -91,5 +98,3 @@ relationships into Neo4j with zero missing provenance records before cleanup.
 Engine decision made (ADR-010): `neo4j-graphrag` behind the adapter
 (`graph/graphrag.py`), selected via `GRAPH_EXTRACTION_ENGINE=neo4j_graphrag`,
 with per-document-scoped entities and `mentions` fact-level provenance.
-Remaining: wire the guard into a real retrieval query and real answer path
-(Phase 5 seam), then add leak tests around that retrieval path.

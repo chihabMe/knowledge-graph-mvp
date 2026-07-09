@@ -26,6 +26,13 @@ Answer user questions using only graph/vector context derived from documents the
 - [ ] Ask SpiceDB for allowed documents before retrieval. Effort: Extra High.
 - [ ] Exclude documents whose `SourceDocument.retrieval_eligible` is false
   before querying Neo4j chunks, vectors, or graph paths. Effort: Extra High.
+- [ ] Compose the Phase 3 provenance guard into every Neo4j retrieval query.
+  Effort: Extra High. (Moved from Phase 3, which built and tested the guard —
+  `graph/guard.py`: `provenance_where` Cypher fragment +
+  `record_has_provenance` post-query check. Every vector search and graph
+  traversal must apply the guard alongside the SpiceDB allowed-document
+  filter; leak tests must prove records missing provenance can never reach
+  LLM context.)
 - [ ] Filter Neo4j vector search by allowed provenance. Effort: Extra High.
 - [ ] Filter graph traversal by allowed provenance. Effort: Extra High.
 - [ ] Assemble cited context. Effort: Extra High.
@@ -43,6 +50,8 @@ Answer user questions using only graph/vector context derived from documents the
   still exist.
 - [ ] Citations point only to allowed Drive files.
 - [ ] Insufficient context returns a clear no-answer response.
+- [ ] Graph records missing source provenance are excluded from every
+  retrieval query (guard composed, not just available), proven by leak tests.
 
 ## Completion Status
 

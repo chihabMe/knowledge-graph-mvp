@@ -117,7 +117,9 @@ Internal services bind to localhost-only alternate ports by default:
 
 Phases 1 and 2 are code complete (Phase 2's live content-export validation
 waits on domain-wide delegation — see ADR-009). Phase 3, Neo4j graph and
-provenance, is in progress.
+provenance, is code complete on `phase-3/graph-foundation` (unmerged); its
+guard-wiring seam moved to the Phase 5 tracker. Next: Phase 4 SpiceDB
+permission sync, then Phase 5 permission-safe retrieval.
 
 Read:
 

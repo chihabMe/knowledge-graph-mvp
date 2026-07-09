@@ -103,14 +103,16 @@ graphify cluster-only apps/backend
 ## Current Architecture Status
 
 The backend foundation and controlled Google Drive ingestion code are built.
-Phase 3 graph construction is active on `phase-3/graph-foundation`: the graph
-app, ontology, Neo4j setup, extraction adapter, document, chunk, entity, and
-relationship writers, provenance guard, and vector-index setup are in place.
+Phase 3 graph construction is code complete on `phase-3/graph-foundation`
+(unmerged): the graph app, ontology, Neo4j setup, extraction adapter,
+document, chunk, entity, and relationship writers, provenance guard, and
+vector-index setup are in place.
 
 The next implementation steps are:
 
-1. Finish the Phase 3/Phase 5 seam: real retrieval queries must compose the
-   provenance guard and an allowed-source-document list.
-2. Start Phase 4 SpiceDB permission sync before exposing any answer path.
+1. Start Phase 4 SpiceDB permission sync before exposing any answer path.
+2. Then Phase 5: real retrieval queries must compose the provenance guard
+   and the SpiceDB allowed-source-document list (task moved from Phase 3
+   into the Phase 5 tracker, with leak tests).
 3. Keep `.env.example` and tracked docs OpenRouter-shaped.
 4. Preserve provenance on every graph write and keep retrieval fail-closed.
