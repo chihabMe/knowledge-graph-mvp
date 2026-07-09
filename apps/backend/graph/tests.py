@@ -251,6 +251,7 @@ class WriterTests(SimpleTestCase):
         for call, chunk in zip(calls[2:], chunks, strict=True):
             self.assertIn("CREATE (c:Chunk", call.args[0])
             self.assertIn(f":{CHUNK_DOCUMENT_RELATIONSHIP}", call.args[0])
+            self.assertIn("r.source_document_id", call.args[0])
             kwargs = call.kwargs
             self.assertEqual(kwargs["chunk_id"], f"7:{chunk.index}")
             self.assertEqual(kwargs["text"], chunk.text)
@@ -342,6 +343,25 @@ class GraphRAGExtractorTests(SimpleTestCase):
 
         self.assertEqual([e.chunk_index for e in result.entities], [0, 1])
 
+    @override_settings(
+        GRAPH_EXTRACTION_MODEL="test-model",
+        OPENROUTER_BASE_URL="https://openrouter.ai/api/v1",
+        OPENROUTER_API_KEY="test-key",
+    )
+    @patch("neo4j_graphrag.llm.OpenAILLM")
+    def test_build_extractor_uses_openrouter_settings(self, mock_llm):
+        from graph.graphrag import build_graphrag_extractor
+
+        extractor = build_graphrag_extractor()
+
+        self.assertIsInstance(extractor, GraphRAGExtractor)
+        mock_llm.assert_called_once_with(
+            model_name="test-model",
+            model_params={"temperature": 0.0, "response_format": {"type": "json_object"}},
+            api_key="test-key",
+            base_url="https://openrouter.ai/api/v1",
+        )
+
 
 class ExtractionEngineSelectionTests(SimpleTestCase):
     @override_settings(GRAPH_EXTRACTION_ENGINE="paragraph")
@@ -397,7 +417,8 @@ class ReplaceDocumentEntitiesTests(SimpleTestCase):
         self.assertEqual(counts, {"entities": 1, "relationships": 0, "relationships_skipped": 0})
         delete_call, entity_call = db_session.run.call_args_list
         self.assertIn("DETACH DELETE e", delete_call.args[0])
-        self.assertIn(f"[:{CHUNK_ENTITY_RELATIONSHIP}]", entity_call.args[0])
+        self.assertIn(f":{CHUNK_ENTITY_RELATIONSHIP}", entity_call.args[0])
+        self.assertIn("m.source_document_id", entity_call.args[0])
         kwargs = entity_call.kwargs
         self.assertEqual(kwargs["entity_id"], "7:Person:ada lovelace")
         self.assertEqual(kwargs["chunk_id"], "7:0")

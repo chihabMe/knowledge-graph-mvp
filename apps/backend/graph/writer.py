@@ -109,7 +109,11 @@ def replace_document_chunks(
             "                 connection_id: $connection_id, "
             "                 drive_file_id: $drive_file_id, "
             "                 source_permissions_version: $source_permissions_version}) "
-            f"CREATE (c)-[:{CHUNK_DOCUMENT_RELATIONSHIP}]->(d)",
+            f"CREATE (c)-[r:{CHUNK_DOCUMENT_RELATIONSHIP}]->(d) "
+            "SET r.source_document_id = $source_document_id, "
+            "    r.connection_id = $connection_id, "
+            "    r.drive_file_id = $drive_file_id, "
+            "    r.source_permissions_version = $source_permissions_version",
             **provenance,
             chunk_id=f"{provenance['source_document_id']}:{chunk.index}",
             chunk_index=chunk.index,
@@ -164,7 +168,11 @@ def replace_document_entities(
             "    e.connection_id = $connection_id, "
             "    e.drive_file_id = $drive_file_id, "
             "    e.source_permissions_version = $source_permissions_version "
-            f"MERGE (c)-[:{CHUNK_ENTITY_RELATIONSHIP}]->(e) "
+            f"MERGE (c)-[m:{CHUNK_ENTITY_RELATIONSHIP}]->(e) "
+            "SET m.source_document_id = $source_document_id, "
+            "    m.connection_id = $connection_id, "
+            "    m.drive_file_id = $drive_file_id, "
+            "    m.source_permissions_version = $source_permissions_version "
             "RETURN count(e) AS n",
             **provenance,
             entity_id=entity_id,
