@@ -29,11 +29,15 @@ Build a graph representation of documents, chunks, entities, and relationships w
 - [ ] Evaluate `neo4j-graphrag`, Graphify, and Graphiti for provenance support. Effort: Extra High.
 - [x] Create an extraction adapter boundary before committing to one engine. Effort: High. (`graph/extraction.py`: `ExtractionAdapter` protocol, typed result dataclasses, deterministic `ParagraphChunkExtractor` baseline.)
 - [x] Add Neo4j migration/setup command. Effort: High. (`manage.py graph_setup`, idempotent.)
-- [~] Store Document and Chunk nodes. Effort: High. (Writers in
+- [x] Store Document and Chunk nodes. Effort: High. (Writers in
   `graph/writer.py` with fail-closed provenance, wired into
   `queue_document_extraction` via `graph/pipeline.py` — text/* content only,
-  unsupported/undecodable content skips with a status; live Neo4j
-  validation pending. Deliberate decision: extraction runs regardless of
+  unsupported/undecodable content skips with a status. Live-validated
+  2026-07-09: `graph_setup` applied both constraints to the real Neo4j, and
+  a synthetic document ran through the real Celery worker end-to-end —
+  Document + 2 Chunk nodes written with full provenance and `belongs_to`
+  edges, no content in worker logs; smoke data then removed from both
+  stores. Deliberate decision: extraction runs regardless of
   `retrieval_eligible`, because enforcement lives at retrieval and Phase 2
   only re-queues extraction on content change — skipping ineligible
   documents would leave them permanently missing from the graph once their
