@@ -32,7 +32,11 @@ from integrations.models import (
     SourceDocument,
     SourceDocumentContent,
 )
-from integrations.tasks import run_drive_sync, sweep_stale_drive_sync_runs
+from integrations.tasks import (
+    queue_document_extraction,
+    run_drive_sync,
+    sweep_stale_drive_sync_runs,
+)
 
 
 class FakeDriveMetadataClient:
@@ -1813,8 +1817,12 @@ class RunDriveSyncTaskTests(TestCase):
         )
         self.run = DriveSyncRun.create_for_connection(self.connection)
 
+    # The extraction pipeline is patched because eager Celery would run it
+    # inline against a real Neo4j connection; it has its own tests in graph/.
+    @patch("integrations.tasks.extract_document_to_graph")
     @patch("integrations.tasks.build_drive_service")
-    def test_task_syncs_metadata_and_content_through_one_service(self, mock_build):
+    def test_task_syncs_metadata_and_content_through_one_service(self, mock_build, mock_extract):
+        mock_extract.return_value = {"source_document_id": 1, "status": "extracted", "chunks": 1}
         mock_build.return_value = FakeGoogleDriveService(
             folder_names={"folder-root": "Pilot"},
             children_pages={
@@ -1854,6 +1862,9 @@ class RunDriveSyncTaskTests(TestCase):
         self.assertEqual(bytes(document.content.content), b"hello")
         self.assertFalse(document.retrieval_eligible)
         self.assertEqual(result["status"], DriveSyncRun.Status.SUCCEEDED)
+        # Eager Celery runs the queued extraction inline, so the handoff into
+        # the graph pipeline is observable here.
+        mock_extract.assert_called_once_with(document.pk)
 
     @patch("integrations.tasks.build_drive_service", side_effect=RuntimeError("boom"))
     def test_setup_failure_marks_the_audit_run_failed(self, _mock_build):
@@ -1886,6 +1897,21 @@ class RunDriveSyncTaskTests(TestCase):
 
         mock_build.assert_not_called()
         self.assertEqual(result["status"], DriveSyncRun.Status.RUNNING)
+
+
+class QueueDocumentExtractionTaskTests(SimpleTestCase):
+    @patch("integrations.tasks.extract_document_to_graph")
+    def test_delegates_to_the_graph_pipeline(self, mock_extract):
+        mock_extract.return_value = {
+            "source_document_id": 5,
+            "status": "extracted",
+            "chunks": 1,
+        }
+
+        result = queue_document_extraction(5)
+
+        mock_extract.assert_called_once_with(5)
+        self.assertEqual(result["status"], "extracted")
 
 
 class SweepStaleDriveSyncRunsTaskTests(TestCase):

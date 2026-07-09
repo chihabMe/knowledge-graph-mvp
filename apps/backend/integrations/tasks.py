@@ -4,6 +4,7 @@ from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 
+from graph.pipeline import extract_document_to_graph
 from integrations.drive.export import export_file_content
 from integrations.drive.google_client import (
     GoogleDriveMetadataClient,
@@ -86,9 +87,9 @@ def sweep_stale_drive_sync_runs() -> dict[str, int]:
 
 @shared_task(name="integrations.queue_document_extraction")
 def queue_document_extraction(source_document_id: int) -> dict[str, int | str]:
-    """Phase 3 stub: text extraction and chunking hook per stored document.
+    """Extract one stored document into the Neo4j graph (Phase 3 pipeline).
 
     Return value is persisted by the Celery result backend, so it must only
-    ever carry ids and status — never document content.
+    ever carry ids, status, and counts — never document content.
     """
-    return {"source_document_id": source_document_id, "status": "pending_extraction"}
+    return extract_document_to_graph(source_document_id)

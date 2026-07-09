@@ -30,8 +30,14 @@ Build a graph representation of documents, chunks, entities, and relationships w
 - [x] Create an extraction adapter boundary before committing to one engine. Effort: High. (`graph/extraction.py`: `ExtractionAdapter` protocol, typed result dataclasses, deterministic `ParagraphChunkExtractor` baseline.)
 - [x] Add Neo4j migration/setup command. Effort: High. (`manage.py graph_setup`, idempotent.)
 - [~] Store Document and Chunk nodes. Effort: High. (Writers in
-  `graph/writer.py` with fail-closed provenance; not yet wired into the
-  Celery extraction task or live-validated against Neo4j.)
+  `graph/writer.py` with fail-closed provenance, wired into
+  `queue_document_extraction` via `graph/pipeline.py` — text/* content only,
+  unsupported/undecodable content skips with a status; live Neo4j
+  validation pending. Deliberate decision: extraction runs regardless of
+  `retrieval_eligible`, because enforcement lives at retrieval and Phase 2
+  only re-queues extraction on content change — skipping ineligible
+  documents would leave them permanently missing from the graph once their
+  permissions become readable.)
 - [ ] Store extracted entity nodes. Effort: High.
 - [ ] Store extracted relationship edges. Effort: Extra High.
 - [~] Attach source provenance to every graph element. Effort: Extra High.
@@ -60,7 +66,8 @@ Foundation laid: `graph` Django app with a process-wide Neo4j driver
 ontology as code mirroring the brief's section 8, an engine-agnostic
 extraction adapter boundary with a deterministic paragraph-chunk baseline,
 fail-closed Document/Chunk writers keyed by `source_document_id`, and the
-provenance retrieval guard. All offline-tested (24 tests). Next: wire
-extraction into `queue_document_extraction`, evaluate extraction engines
-behind the adapter, entity/relationship writers, vector index, live Neo4j
-validation.
+provenance retrieval guard. The pipeline is wired: Phase 2's
+`queue_document_extraction` now runs `graph/pipeline.py` end-to-end
+(stored text content → paragraph chunks → Neo4j with provenance). All
+offline-tested. Next: evaluate extraction engines behind the adapter,
+entity/relationship writers, vector index, live Neo4j validation.

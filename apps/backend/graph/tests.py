@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 import graph.db as graph_db
 from graph.extraction import (
@@ -26,6 +26,7 @@ from graph.ontology import (
     validate_entity_type,
     validate_relationship_type,
 )
+from graph.pipeline import extract_document_to_graph
 from graph.schema import CONSTRAINTS
 from graph.writer import (
     CHUNK_DOCUMENT_RELATIONSHIP,
@@ -35,7 +36,7 @@ from graph.writer import (
     replace_document_chunks,
     upsert_document,
 )
-from integrations.models import SourceDocument
+from integrations.models import DriveConnection, SourceDocument, SourceDocumentContent
 
 
 class OntologyGuardTests(SimpleTestCase):
@@ -251,6 +252,77 @@ class WriterTests(SimpleTestCase):
             self.assertEqual(kwargs["text"], chunk.text)
             for field in PROVENANCE_FIELDS:
                 self.assertIsNotNone(kwargs[field])
+
+
+class ExtractionPipelineTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-root",
+        )
+        self.document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="file-1",
+            title="Notes",
+            mime_type="application/vnd.google-apps.document",
+            source_permissions_version="a" * 64,
+        )
+
+    def _store_content(self, data: bytes, exported_mime_type: str = "text/plain"):
+        return SourceDocumentContent.objects.create(
+            source_document=self.document,
+            content=data,
+            exported_mime_type=exported_mime_type,
+            content_hash="hash",
+        )
+
+    def test_document_without_stored_content_is_skipped(self):
+        result = extract_document_to_graph(self.document.pk)
+
+        self.assertEqual(
+            result,
+            {"source_document_id": self.document.pk, "status": "skipped_no_content"},
+        )
+
+    def test_non_text_content_is_skipped(self):
+        self._store_content(b"%PDF-1.7 ...", exported_mime_type="application/pdf")
+
+        result = extract_document_to_graph(self.document.pk)
+
+        self.assertEqual(result["status"], "skipped_unsupported_mime_type")
+
+    def test_undecodable_content_is_skipped_without_leaking_bytes(self):
+        self._store_content(b"\xff\xfe\xfa broken")
+
+        result = extract_document_to_graph(self.document.pk)
+
+        self.assertEqual(result["status"], "skipped_decode_error")
+
+    @patch("graph.pipeline.session")
+    def test_text_content_is_written_as_document_and_chunks(self, mock_session_ctx):
+        db_session = MagicMock()
+        mock_session_ctx.return_value.__enter__.return_value = db_session
+        self._store_content(b"First paragraph.\n\nSecond paragraph.")
+
+        result = extract_document_to_graph(self.document.pk)
+
+        self.assertEqual(
+            result,
+            {
+                "source_document_id": self.document.pk,
+                "status": "extracted",
+                "chunks": 2,
+            },
+        )
+        statements = [call.args[0] for call in db_session.run.call_args_list]
+        self.assertTrue(any("MERGE (d:Document" in statement for statement in statements))
+        create_calls = [
+            call for call in db_session.run.call_args_list if "CREATE (c:Chunk" in call.args[0]
+        ]
+        self.assertEqual(len(create_calls), 2)
+        for call in create_calls:
+            self.assertEqual(call.kwargs["source_document_id"], self.document.pk)
+            self.assertEqual(call.kwargs["drive_file_id"], "file-1")
 
 
 class RetrievalGuardTests(SimpleTestCase):
