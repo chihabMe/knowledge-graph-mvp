@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     "core",
     "health",
     "integrations",
+    "graph",
 ]
 
 MIDDLEWARE = [

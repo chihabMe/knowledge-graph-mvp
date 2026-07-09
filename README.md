@@ -115,10 +115,13 @@ Internal services bind to localhost-only alternate ports by default:
 
 ## Current Phase
 
-Phase 1 is complete. Phase 2, Google Drive ingestion, is in progress.
+Phases 1 and 2 are code complete (Phase 2's live content-export validation
+waits on domain-wide delegation — see ADR-009). Phase 3, Neo4j graph and
+provenance, is in progress.
 
 Read:
 
+- `ai-context/phases/phase-3-neo4j-graph-and-provenance.md`
 - `ai-context/phases/phase-2-google-drive-ingestion.md`
 - `docs/google-drive-next.md`
 - `ai-context/07-ai-coding-security-rules.md`
