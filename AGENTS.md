@@ -85,17 +85,20 @@ Graphify is used as a local AI navigation tool, not as a runtime dependency.
 
 - Generated Graphify output is ignored by Git.
 - Backend code graph location: `apps/backend/graphify-out/`.
-- For backend architecture questions, run Graphify queries from `apps/backend/`:
+- For backend codebase or architecture questions, query the graph before broad
+  searches or multi-file reads. Run queries from `apps/backend/` and keep the
+  result small; then open the source files needed to verify or change code:
 
 ```bash
-graphify query "SmokeTaskView HealthView urlpatterns"
+graphify query "SmokeTaskView HealthView urlpatterns" --budget 800
 ```
 
-- To refresh the backend graph after meaningful backend changes:
+- The local post-commit and post-checkout hooks refresh this backend-only graph
+  after code changes, using AST extraction only. For uncommitted meaningful
+  backend changes, or if a refresh fails, update it manually:
 
 ```bash
-graphify apps/backend
-graphify cluster-only apps/backend
+graphify update apps/backend
 ```
 
 - A full repository graph requires an LLM API key because the repo contains markdown documentation. Do not run full-repo semantic extraction over client data unless the user explicitly approves the model/backend.

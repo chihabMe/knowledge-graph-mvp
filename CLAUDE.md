@@ -24,6 +24,20 @@ reading order, manual audit policy, and working rules.
 For Drive onboarding scope, follow the canonical brief and ADR-009 rather than
 assuming manual root IDs are the client-facing path.
 
+## Backend Code Navigation
+
+For questions about backend code or architecture, first query the local
+Graphify graph from `apps/backend/` with a narrow budget, for example:
+
+```bash
+graphify query "how does Drive sync reach graph extraction?" --budget 800
+```
+
+Use the graph for orientation, then read the specific source files needed to
+verify or modify code. The graph is local-only at `apps/backend/graphify-out/`;
+do not build a full-repository semantic graph or treat Graphify as a runtime
+dependency.
+
 ## End Of Session
 
 Before the final commit of a work session, write/update the daily report in
