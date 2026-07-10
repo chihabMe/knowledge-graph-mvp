@@ -3,7 +3,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 from django.conf import settings
-from neo4j import Driver, GraphDatabase, Session
+from neo4j import Driver, GraphDatabase, Session, Transaction
 
 _driver: Driver | None = None
 _driver_lock = threading.Lock()
@@ -41,3 +41,11 @@ def close_driver() -> None:
 def session() -> Generator[Session, None, None]:
     with get_driver().session() as db_session:
         yield db_session
+
+
+@contextmanager
+def write_transaction() -> Generator[Transaction, None, None]:
+    """Yield one explicit transaction for an all-or-nothing graph write."""
+    with get_driver().session() as db_session:
+        with db_session.begin_transaction() as transaction:
+            yield transaction

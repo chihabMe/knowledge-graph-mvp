@@ -94,6 +94,20 @@ class GraphDriverTests(SimpleTestCase):
         created.close.assert_called_once()
         self.assertIsNone(graph_db._driver)
 
+    @patch("graph.db.GraphDatabase")
+    def test_write_transaction_yields_the_explicit_transaction(self, mock_graph_database):
+        graph_db._driver = None
+        db_session = MagicMock()
+        transaction = MagicMock()
+        session_context = mock_graph_database.driver.return_value.session.return_value
+        session_context.__enter__.return_value = db_session
+        db_session.begin_transaction.return_value.__enter__.return_value = transaction
+
+        with graph_db.write_transaction() as actual_transaction:
+            self.assertIs(actual_transaction, transaction)
+
+        db_session.begin_transaction.assert_called_once_with()
+
 
 class GraphSetupCommandTests(SimpleTestCase):
     @override_settings(
@@ -645,10 +659,11 @@ class ExtractionPipelineTests(TestCase):
 
         self.assertEqual(result["status"], "skipped_decode_error")
 
-    @patch("graph.pipeline.session")
-    def test_text_content_is_written_as_document_and_chunks(self, mock_session_ctx):
-        db_session = MagicMock()
-        mock_session_ctx.return_value.__enter__.return_value = db_session
+    @override_settings(GRAPH_EXTRACTION_ENGINE="paragraph")
+    @patch("graph.pipeline.write_transaction")
+    def test_text_content_is_written_as_document_and_chunks(self, mock_transaction_ctx):
+        db_transaction = MagicMock()
+        mock_transaction_ctx.return_value.__enter__.return_value = db_transaction
         self._store_content(b"First paragraph.\n\nSecond paragraph.")
 
         result = extract_document_to_graph(self.document.pk)
@@ -664,10 +679,11 @@ class ExtractionPipelineTests(TestCase):
                 "relationships_skipped": 0,
             },
         )
-        statements = [call.args[0] for call in db_session.run.call_args_list]
+        mock_transaction_ctx.assert_called_once_with()
+        statements = [call.args[0] for call in db_transaction.run.call_args_list]
         self.assertTrue(any("MERGE (d:Document" in statement for statement in statements))
         create_calls = [
-            call for call in db_session.run.call_args_list if "CREATE (c:Chunk" in call.args[0]
+            call for call in db_transaction.run.call_args_list if "CREATE (c:Chunk" in call.args[0]
         ]
         self.assertEqual(len(create_calls), 2)
         for call in create_calls:
