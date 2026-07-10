@@ -36,6 +36,13 @@ class DriveConnection(models.Model):
 
 
 class SourceDocument(models.Model):
+    class GraphExtractionStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+
     class ExclusionReason(models.TextChoices):
         PUBLIC_LINK_NOT_SUPPORTED = "public_link_not_supported", "Public link not supported"
         DOMAIN_WIDE_VISIBILITY_NOT_SUPPORTED = (
@@ -74,6 +81,16 @@ class SourceDocument(models.Model):
     creator_email = models.EmailField(blank=True)
     source_permissions_version = models.CharField(max_length=64, blank=True)
     last_permission_sync_time = models.DateTimeField(null=True, blank=True)
+    graph_extraction_status = models.CharField(
+        max_length=16,
+        choices=GraphExtractionStatus.choices,
+        default=GraphExtractionStatus.PENDING,
+    )
+    # Exception class names or controlled skip labels only: document text and
+    # remote error payloads must never become persistent task metadata.
+    graph_extraction_error_summary = models.CharField(max_length=512, blank=True)
+    graph_extraction_started_at = models.DateTimeField(null=True, blank=True)
+    graph_extraction_finished_at = models.DateTimeField(null=True, blank=True)
     retrieval_eligible = models.BooleanField(default=False)
     exclusion_reason = models.CharField(
         max_length=64,

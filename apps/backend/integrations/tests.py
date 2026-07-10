@@ -3,12 +3,14 @@ from datetime import UTC, datetime, timedelta
 from tempfile import NamedTemporaryFile
 from unittest.mock import patch
 
+from celery.exceptions import Retry
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from google.auth.exceptions import RefreshError
+from neo4j.exceptions import ServiceUnavailable
 from rest_framework.throttling import ScopedRateThrottle
 
 from integrations.drive.client import (
@@ -33,6 +35,7 @@ from integrations.models import (
     SourceDocumentContent,
 )
 from integrations.tasks import (
+    RETRYABLE_EXTRACTION_EXCEPTIONS,
     queue_document_extraction,
     run_drive_sync,
     sweep_stale_drive_sync_runs,
@@ -89,6 +92,10 @@ class DriveIngestionModelTests(TestCase):
 
         self.assertFalse(document.retrieval_eligible)
         self.assertEqual(document.exclusion_reason, "")
+        self.assertEqual(
+            document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.PENDING,
+        )
 
     def test_sync_run_snapshots_server_configured_scope_and_actor(self):
         user = get_user_model().objects.create_user(
@@ -915,26 +922,63 @@ class DriveContentSyncTests(TestCase):
         self.assertEqual(content.content_hash, hashlib.sha256(b"exported-bytes").hexdigest())
         self.assertEqual(document.content_hash, content.content_hash)
         self.assertEqual(queued, [document.pk])
+        self.assertEqual(
+            document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.PENDING,
+        )
         # Content storage alone must never make a document retrievable —
         # eligibility is granted later, once permissions are in SpiceDB.
         self.assertFalse(document.retrieval_eligible)
 
-    def test_sync_skips_reexport_when_file_is_unchanged(self):
+    def test_sync_skips_reexport_when_file_is_unchanged_and_extraction_succeeded(self):
         modified_time = datetime(2026, 7, 2, tzinfo=UTC)
         exporter = FakeContentExporter()
         queued = []
         client = FakeDriveMetadataClient([self._doc_metadata(modified_time)])
 
-        for _ in range(2):
-            sync_drive_metadata(
-                connection=self.connection,
-                client=client,
-                content_exporter=exporter,
-                queue_extraction=queued.append,
-            )
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=queued.append,
+        )
+        SourceDocument.objects.update(
+            graph_extraction_status=SourceDocument.GraphExtractionStatus.SUCCEEDED
+        )
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=queued.append,
+        )
 
         self.assertEqual(exporter.calls, ["drive-file-1"])
         self.assertEqual(len(queued), 1)
+
+    def test_sync_requeues_failed_extraction_without_reexporting_content(self):
+        modified_time = datetime(2026, 7, 2, tzinfo=UTC)
+        exporter = FakeContentExporter()
+        queued = []
+        client = FakeDriveMetadataClient([self._doc_metadata(modified_time)])
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=queued.append,
+        )
+        SourceDocument.objects.update(
+            graph_extraction_status=SourceDocument.GraphExtractionStatus.FAILED
+        )
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=queued.append,
+        )
+
+        self.assertEqual(exporter.calls, ["drive-file-1"])
+        self.assertEqual(len(queued), 2)
 
     def test_sync_reexports_when_modified_time_changes(self):
         exporter = FakeContentExporter()
@@ -1899,19 +1943,77 @@ class RunDriveSyncTaskTests(TestCase):
         self.assertEqual(result["status"], DriveSyncRun.Status.RUNNING)
 
 
-class QueueDocumentExtractionTaskTests(SimpleTestCase):
+class QueueDocumentExtractionTaskTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-root",
+        )
+        self.document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="document-1",
+            title="Notes",
+            mime_type="text/plain",
+        )
+
     @patch("integrations.tasks.extract_document_to_graph")
     def test_delegates_to_the_graph_pipeline(self, mock_extract):
         mock_extract.return_value = {
-            "source_document_id": 5,
+            "source_document_id": self.document.pk,
             "status": "extracted",
             "chunks": 1,
         }
 
-        result = queue_document_extraction(5)
+        result = queue_document_extraction(self.document.pk)
 
-        mock_extract.assert_called_once_with(5)
+        mock_extract.assert_called_once_with(self.document.pk)
         self.assertEqual(result["status"], "extracted")
+        self.document.refresh_from_db()
+        self.assertEqual(
+            self.document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.SUCCEEDED,
+        )
+        self.assertIsNotNone(self.document.graph_extraction_started_at)
+        self.assertIsNotNone(self.document.graph_extraction_finished_at)
+
+    @patch("integrations.tasks.extract_document_to_graph", side_effect=RuntimeError("boom"))
+    def test_permanent_failure_is_recorded_without_error_text(self, _mock_extract):
+        with self.assertRaises(RuntimeError):
+            queue_document_extraction(self.document.pk)
+
+        self.document.refresh_from_db()
+        self.assertEqual(
+            self.document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.FAILED,
+        )
+        self.assertEqual(self.document.graph_extraction_error_summary, "builtins.RuntimeError")
+        self.assertIsNotNone(self.document.graph_extraction_finished_at)
+
+    @patch(
+        "integrations.tasks.extract_document_to_graph",
+        side_effect=ServiceUnavailable("temporary Neo4j outage"),
+    )
+    @patch.object(queue_document_extraction, "retry", side_effect=Retry)
+    def test_transient_failure_retries_without_marking_the_document_failed(
+        self, mock_retry, _mock_extract
+    ):
+        with self.assertRaises(Retry):
+            queue_document_extraction(self.document.pk)
+
+        self.assertEqual(mock_retry.call_args.kwargs["countdown"], 2)
+        self.document.refresh_from_db()
+        self.assertEqual(
+            self.document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.RUNNING,
+        )
+        self.assertEqual(self.document.graph_extraction_error_summary, "")
+        self.assertIsNone(self.document.graph_extraction_finished_at)
+
+    def test_retryable_errors_have_bounded_late_acknowledged_delivery(self):
+        self.assertTrue(queue_document_extraction.acks_late)
+        self.assertTrue(queue_document_extraction.reject_on_worker_lost)
+        self.assertEqual(queue_document_extraction.max_retries, 3)
+        self.assertIn(ServiceUnavailable, RETRYABLE_EXTRACTION_EXCEPTIONS)
 
 
 class SweepStaleDriveSyncRunsTaskTests(TestCase):

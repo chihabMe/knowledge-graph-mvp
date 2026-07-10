@@ -42,7 +42,8 @@ def sync_drive_metadata(
     `run` lets a caller (the API view) pre-create the audit record before the
     work is queued. `content_exporter(file_metadata) -> (bytes, mime)` enables
     the content stage; `queue_extraction(document_id)` is called for every
-    document whose content was (re)stored.
+    document whose content was (re)stored and every failed/pending extraction
+    that can be retried without re-exporting unchanged content.
     """
     if run is None:
         run = DriveSyncRun.create_for_connection(connection, triggered_by=triggered_by)
@@ -130,6 +131,13 @@ def sync_drive_metadata(
                     if _needs_content_refresh(document, previous_modified_time):
                         _store_content(document, file_metadata, content_exporter)
                         extraction_candidates.append(document.pk)
+                    elif document.graph_extraction_status in {
+                        SourceDocument.GraphExtractionStatus.PENDING,
+                        SourceDocument.GraphExtractionStatus.FAILED,
+                    }:
+                        # A transient graph/LLM outage must not require a
+                        # content change before this source can recover.
+                        extraction_candidates.append(document.pk)
 
         run.status = DriveSyncRun.Status.SUCCEEDED
         run.total_files = len(files)
@@ -190,7 +198,19 @@ def _store_content(document, file_metadata, content_exporter) -> None:
     # The exported-bytes hash is authoritative: Google-native files have no
     # md5Checksum in their metadata, so this keeps the field uniform.
     document.content_hash = digest
-    document.save(update_fields=["content_hash"])
+    document.graph_extraction_status = SourceDocument.GraphExtractionStatus.PENDING
+    document.graph_extraction_error_summary = ""
+    document.graph_extraction_started_at = None
+    document.graph_extraction_finished_at = None
+    document.save(
+        update_fields=[
+            "content_hash",
+            "graph_extraction_status",
+            "graph_extraction_error_summary",
+            "graph_extraction_started_at",
+            "graph_extraction_finished_at",
+        ]
+    )
 
 
 def _exclusion_reason(

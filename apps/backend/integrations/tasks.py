@@ -3,6 +3,8 @@ import datetime
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
+from neo4j.exceptions import ServiceUnavailable, SessionExpired, TransientError
+from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from graph.pipeline import extract_document_to_graph
 from integrations.drive.export import export_file_content
@@ -11,7 +13,40 @@ from integrations.drive.google_client import (
     build_drive_service,
 )
 from integrations.drive.sync import sync_drive_metadata
-from integrations.models import DriveSyncRun
+from integrations.models import DriveSyncRun, SourceDocument
+
+RETRYABLE_EXTRACTION_EXCEPTIONS = (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+    OSError,
+    ServiceUnavailable,
+    SessionExpired,
+    TransientError,
+)
+_UNSET = object()
+
+
+def _set_graph_extraction_state(
+    source_document_id: int,
+    status: str,
+    *,
+    error_summary: str = "",
+    started_at=_UNSET,
+    finished_at=_UNSET,
+) -> None:
+    """Persist safe extraction-job state without ever retaining error text."""
+    updates = {
+        "graph_extraction_status": status,
+        "graph_extraction_error_summary": error_summary,
+        "updated_at": timezone.now(),
+    }
+    if started_at is not _UNSET:
+        updates["graph_extraction_started_at"] = started_at
+    if finished_at is not _UNSET:
+        updates["graph_extraction_finished_at"] = finished_at
+    SourceDocument.objects.filter(pk=source_document_id).update(**updates)
 
 
 @shared_task(name="integrations.run_drive_sync")
@@ -85,11 +120,63 @@ def sweep_stale_drive_sync_runs() -> dict[str, int]:
     return {"swept": swept}
 
 
-@shared_task(name="integrations.queue_document_extraction")
-def queue_document_extraction(source_document_id: int) -> dict[str, int | str]:
+@shared_task(
+    bind=True,
+    name="integrations.queue_document_extraction",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=3,
+)
+def queue_document_extraction(self, source_document_id: int) -> dict[str, int | str]:
     """Extract one stored document into the Neo4j graph (Phase 3 pipeline).
 
     Return value is persisted by the Celery result backend, so it must only
     ever carry ids, status, and counts — never document content.
     """
-    return extract_document_to_graph(source_document_id)
+    _set_graph_extraction_state(
+        source_document_id,
+        SourceDocument.GraphExtractionStatus.RUNNING,
+        started_at=timezone.now(),
+    )
+    try:
+        result = extract_document_to_graph(source_document_id)
+    except RETRYABLE_EXTRACTION_EXCEPTIONS as exc:
+        if self.request.retries < self.max_retries:
+            # The row stays RUNNING while Celery owns the scheduled retry, so
+            # the next metadata sync does not enqueue a competing recovery job.
+            raise self.retry(
+                exc=exc,
+                countdown=min(2 ** (self.request.retries + 1), 60),
+            ) from exc
+        _set_graph_extraction_state(
+            source_document_id,
+            SourceDocument.GraphExtractionStatus.FAILED,
+            error_summary=f"{type(exc).__module__}.{type(exc).__name__}"[:512],
+            finished_at=timezone.now(),
+        )
+        raise
+    except Exception as exc:
+        _set_graph_extraction_state(
+            source_document_id,
+            SourceDocument.GraphExtractionStatus.FAILED,
+            error_summary=f"{type(exc).__module__}.{type(exc).__name__}"[:512],
+            finished_at=timezone.now(),
+        )
+        raise
+
+    final_status = (
+        SourceDocument.GraphExtractionStatus.SUCCEEDED
+        if result["status"] == "extracted"
+        else SourceDocument.GraphExtractionStatus.SKIPPED
+    )
+    _set_graph_extraction_state(
+        source_document_id,
+        final_status,
+        error_summary=(
+            ""
+            if final_status == SourceDocument.GraphExtractionStatus.SUCCEEDED
+            else result["status"]
+        ),
+        finished_at=timezone.now(),
+    )
+    return result
