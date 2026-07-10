@@ -13,6 +13,7 @@ from google.auth.exceptions import RefreshError
 from neo4j.exceptions import ServiceUnavailable
 from rest_framework.throttling import ScopedRateThrottle
 
+from graph.pipeline import get_retryable_extraction_exceptions
 from integrations.drive.client import (
     DriveFileMetadata,
     DrivePermissionAccessReport,
@@ -35,10 +36,10 @@ from integrations.models import (
     SourceDocumentContent,
 )
 from integrations.tasks import (
-    RETRYABLE_EXTRACTION_EXCEPTIONS,
     queue_document_extraction,
     run_drive_sync,
     sweep_stale_drive_sync_runs,
+    sweep_stale_graph_extractions,
 )
 
 
@@ -903,6 +904,10 @@ class DriveContentSyncTests(TestCase):
             ],
         )
 
+    @staticmethod
+    def _collect_queued(queued):
+        return lambda document_id, content_hash: queued.append((document_id, content_hash))
+
     def test_sync_stores_content_and_queues_extraction(self):
         exporter = FakeContentExporter()
         queued = []
@@ -912,7 +917,7 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=queued.append,
+            queue_extraction=self._collect_queued(queued),
         )
 
         document = SourceDocument.objects.get(drive_file_id="drive-file-1")
@@ -921,7 +926,7 @@ class DriveContentSyncTests(TestCase):
         self.assertEqual(content.exported_mime_type, "text/plain")
         self.assertEqual(content.content_hash, hashlib.sha256(b"exported-bytes").hexdigest())
         self.assertEqual(document.content_hash, content.content_hash)
-        self.assertEqual(queued, [document.pk])
+        self.assertEqual(queued, [(document.pk, content.content_hash)])
         self.assertEqual(
             document.graph_extraction_status,
             SourceDocument.GraphExtractionStatus.PENDING,
@@ -940,7 +945,7 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=queued.append,
+            queue_extraction=self._collect_queued(queued),
         )
         SourceDocument.objects.update(
             graph_extraction_status=SourceDocument.GraphExtractionStatus.SUCCEEDED
@@ -949,7 +954,7 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=queued.append,
+            queue_extraction=self._collect_queued(queued),
         )
 
         self.assertEqual(exporter.calls, ["drive-file-1"])
@@ -965,7 +970,7 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=queued.append,
+            queue_extraction=self._collect_queued(queued),
         )
         SourceDocument.objects.update(
             graph_extraction_status=SourceDocument.GraphExtractionStatus.FAILED
@@ -974,10 +979,84 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=queued.append,
+            queue_extraction=self._collect_queued(queued),
         )
 
         self.assertEqual(exporter.calls, ["drive-file-1"])
+        self.assertEqual(len(queued), 2)
+
+    def test_sync_stops_requeueing_failed_extraction_after_the_attempts_budget(self):
+        modified_time = datetime(2026, 7, 2, tzinfo=UTC)
+        exporter = FakeContentExporter()
+        queued = []
+        client = FakeDriveMetadataClient([self._doc_metadata(modified_time)])
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=self._collect_queued(queued),
+        )
+        SourceDocument.objects.update(
+            graph_extraction_status=SourceDocument.GraphExtractionStatus.FAILED,
+            graph_extraction_attempts=settings.GRAPH_EXTRACTION_MAX_SYNC_ATTEMPTS,
+        )
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=self._collect_queued(queued),
+        )
+
+        self.assertEqual(len(queued), 1)
+
+    def test_sync_does_not_requeue_a_pending_extraction_that_was_just_queued(self):
+        modified_time = datetime(2026, 7, 2, tzinfo=UTC)
+        exporter = FakeContentExporter()
+        queued = []
+        client = FakeDriveMetadataClient([self._doc_metadata(modified_time)])
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=self._collect_queued(queued),
+        )
+        # The row is PENDING with a fresh updated_at: its first task message
+        # is still in the queue, so a second overlapping sync must not
+        # duplicate the extraction.
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=self._collect_queued(queued),
+        )
+
+        self.assertEqual(len(queued), 1)
+
+    def test_sync_requeues_a_pending_extraction_older_than_the_requeue_window(self):
+        modified_time = datetime(2026, 7, 2, tzinfo=UTC)
+        exporter = FakeContentExporter()
+        queued = []
+        client = FakeDriveMetadataClient([self._doc_metadata(modified_time)])
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=self._collect_queued(queued),
+        )
+        SourceDocument.objects.update(
+            graph_extraction_queued_at=timezone.now()
+            - timedelta(minutes=settings.GRAPH_EXTRACTION_PENDING_REQUEUE_AFTER_MINUTES + 1)
+        )
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=self._collect_queued(queued),
+        )
+
         self.assertEqual(len(queued), 2)
 
     def test_sync_reexports_when_modified_time_changes(self):
@@ -988,7 +1067,7 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=queued.append,
+            queue_extraction=self._collect_queued(queued),
         )
 
         client.files = [self._doc_metadata(datetime(2026, 7, 3, tzinfo=UTC))]
@@ -996,7 +1075,7 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=queued.append,
+            queue_extraction=self._collect_queued(queued),
         )
 
         self.assertEqual(exporter.calls, ["drive-file-1", "drive-file-1"])
@@ -1014,7 +1093,7 @@ class DriveContentSyncTests(TestCase):
                 connection=self.connection,
                 client=client,
                 content_exporter=exporter,
-                queue_extraction=lambda document_id: None,
+                queue_extraction=lambda _document_id, _content_hash: None,
             )
             document = SourceDocument.objects.get(drive_file_id="drive-file-1")
             self.assertEqual(document.content_hash, expected_hash)
@@ -1026,7 +1105,7 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=lambda document_id: None,
+            queue_extraction=lambda _document_id, _content_hash: None,
         )
 
         # A later metadata-only sync (no exporter) must not touch the hash.
@@ -1055,7 +1134,7 @@ class DriveContentSyncTests(TestCase):
                 connection=self.connection,
                 client=client,
                 content_exporter=exporter,
-                queue_extraction=lambda document_id: None,
+                queue_extraction=lambda _document_id, _content_hash: None,
             )
 
         document = SourceDocument.objects.get(drive_file_id="drive-file-1")
@@ -1083,7 +1162,7 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=lambda document_id: None,
+            queue_extraction=lambda _document_id, _content_hash: None,
         )
 
         document = SourceDocument.objects.get(drive_file_id="pdf-1")
@@ -1107,7 +1186,9 @@ class DriveContentSyncTests(TestCase):
             connection=self.connection,
             client=client,
             content_exporter=exporter,
-            queue_extraction=lambda document_id: self.fail("must not queue excluded files"),
+            queue_extraction=lambda _document_id, _content_hash: self.fail(
+                "must not queue excluded files"
+            ),
         )
 
         self.assertEqual(exporter.calls, [])
@@ -1123,7 +1204,7 @@ class DriveContentSyncTests(TestCase):
                 connection=self.connection,
                 client=client,
                 content_exporter=exporter,
-                queue_extraction=queued.append,
+                queue_extraction=self._collect_queued(queued),
             )
 
         self.assertEqual(queued, [])
@@ -1908,7 +1989,7 @@ class RunDriveSyncTaskTests(TestCase):
         self.assertEqual(result["status"], DriveSyncRun.Status.SUCCEEDED)
         # Eager Celery runs the queued extraction inline, so the handoff into
         # the graph pipeline is observable here.
-        mock_extract.assert_called_once_with(document.pk)
+        mock_extract.assert_called_once_with(document.pk, document.content_hash)
 
     @patch("integrations.tasks.build_drive_service", side_effect=RuntimeError("boom"))
     def test_setup_failure_marks_the_audit_run_failed(self, _mock_build):
@@ -1954,6 +2035,13 @@ class QueueDocumentExtractionTaskTests(TestCase):
             drive_file_id="document-1",
             title="Notes",
             mime_type="text/plain",
+            content_hash="hash",
+        )
+        SourceDocumentContent.objects.create(
+            source_document=self.document,
+            content=b"text",
+            exported_mime_type="text/plain",
+            content_hash="hash",
         )
 
     @patch("integrations.tasks.extract_document_to_graph")
@@ -1966,7 +2054,7 @@ class QueueDocumentExtractionTaskTests(TestCase):
 
         result = queue_document_extraction(self.document.pk)
 
-        mock_extract.assert_called_once_with(self.document.pk)
+        mock_extract.assert_called_once_with(self.document.pk, "hash")
         self.assertEqual(result["status"], "extracted")
         self.document.refresh_from_db()
         self.assertEqual(
@@ -1987,6 +2075,7 @@ class QueueDocumentExtractionTaskTests(TestCase):
             SourceDocument.GraphExtractionStatus.FAILED,
         )
         self.assertEqual(self.document.graph_extraction_error_summary, "builtins.RuntimeError")
+        self.assertEqual(self.document.graph_extraction_attempts, 1)
         self.assertIsNotNone(self.document.graph_extraction_finished_at)
 
     @patch(
@@ -2013,7 +2102,43 @@ class QueueDocumentExtractionTaskTests(TestCase):
         self.assertTrue(queue_document_extraction.acks_late)
         self.assertTrue(queue_document_extraction.reject_on_worker_lost)
         self.assertEqual(queue_document_extraction.max_retries, 3)
-        self.assertIn(ServiceUnavailable, RETRYABLE_EXTRACTION_EXCEPTIONS)
+        self.assertIn(ServiceUnavailable, get_retryable_extraction_exceptions())
+
+    @override_settings(GRAPH_EXTRACTION_ENGINE="neo4j_graphrag")
+    def test_the_llm_engine_adds_its_own_transient_provider_failures(self):
+        from openai import RateLimitError
+
+        retryable = get_retryable_extraction_exceptions()
+
+        self.assertIn(RateLimitError, retryable)
+        self.assertIn(ServiceUnavailable, retryable)
+
+    @patch("integrations.tasks.extract_document_to_graph")
+    def test_stale_result_does_not_overwrite_the_newer_content_state(self, mock_extract):
+        def replace_content_while_extracting(*_args):
+            SourceDocumentContent.objects.filter(source_document=self.document).update(
+                content=b"new text", content_hash="new-hash"
+            )
+            SourceDocument.objects.filter(pk=self.document.pk).update(
+                content_hash="new-hash",
+                graph_extraction_status=SourceDocument.GraphExtractionStatus.PENDING,
+            )
+            return {
+                "source_document_id": self.document.pk,
+                "status": "skipped_stale_content_version",
+            }
+
+        mock_extract.side_effect = replace_content_while_extracting
+
+        result = queue_document_extraction(self.document.pk, "hash")
+
+        self.assertEqual(result["status"], "skipped_stale_content_version")
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.content_hash, "new-hash")
+        self.assertEqual(
+            self.document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.PENDING,
+        )
 
 
 class SweepStaleDriveSyncRunsTaskTests(TestCase):
@@ -2069,3 +2194,76 @@ class SweepStaleDriveSyncRunsTaskTests(TestCase):
         self.assertEqual(result, {"swept": 0})
         self.assertEqual(queued.status, DriveSyncRun.Status.QUEUED)
         self.assertEqual(succeeded.status, DriveSyncRun.Status.SUCCEEDED)
+
+
+class SweepStaleGraphExtractionsTaskTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-root",
+        )
+
+    def _document(self, drive_file_id, status, started_at):
+        document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id=drive_file_id,
+            title="Notes",
+            mime_type="text/plain",
+            content_hash="hash",
+        )
+        SourceDocument.objects.filter(pk=document.pk).update(
+            graph_extraction_status=status,
+            graph_extraction_started_at=started_at,
+        )
+        document.refresh_from_db()
+        return document
+
+    def test_running_past_the_timeout_is_marked_failed_and_spends_an_attempt(self):
+        stale = timezone.now() - timedelta(
+            minutes=settings.GRAPH_EXTRACTION_STALE_RUNNING_TIMEOUT_MINUTES + 1
+        )
+        document = self._document("doc-1", SourceDocument.GraphExtractionStatus.RUNNING, stale)
+
+        result = sweep_stale_graph_extractions()
+
+        document.refresh_from_db()
+        self.assertEqual(result, {"swept": 1})
+        self.assertEqual(
+            document.graph_extraction_status, SourceDocument.GraphExtractionStatus.FAILED
+        )
+        self.assertEqual(document.graph_extraction_error_summary, "stale_running_timeout")
+        self.assertEqual(document.graph_extraction_attempts, 1)
+        self.assertIsNotNone(document.graph_extraction_finished_at)
+
+    def test_running_within_the_timeout_is_left_alone(self):
+        recent = timezone.now() - timedelta(
+            minutes=settings.GRAPH_EXTRACTION_STALE_RUNNING_TIMEOUT_MINUTES - 1
+        )
+        document = self._document("doc-1", SourceDocument.GraphExtractionStatus.RUNNING, recent)
+
+        result = sweep_stale_graph_extractions()
+
+        document.refresh_from_db()
+        self.assertEqual(result, {"swept": 0})
+        self.assertEqual(
+            document.graph_extraction_status, SourceDocument.GraphExtractionStatus.RUNNING
+        )
+
+    def test_other_statuses_are_never_touched(self):
+        stale = timezone.now() - timedelta(
+            minutes=settings.GRAPH_EXTRACTION_STALE_RUNNING_TIMEOUT_MINUTES + 1
+        )
+        pending = self._document("doc-1", SourceDocument.GraphExtractionStatus.PENDING, stale)
+        succeeded = self._document("doc-2", SourceDocument.GraphExtractionStatus.SUCCEEDED, stale)
+
+        result = sweep_stale_graph_extractions()
+
+        pending.refresh_from_db()
+        succeeded.refresh_from_db()
+        self.assertEqual(result, {"swept": 0})
+        self.assertEqual(
+            pending.graph_extraction_status, SourceDocument.GraphExtractionStatus.PENDING
+        )
+        self.assertEqual(
+            succeeded.graph_extraction_status, SourceDocument.GraphExtractionStatus.SUCCEEDED
+        )

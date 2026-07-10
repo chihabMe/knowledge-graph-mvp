@@ -155,6 +155,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "integrations.sweep_stale_drive_sync_runs",
         "schedule": 900.0,
     },
+    "sweep-stale-graph-extractions": {
+        "task": "integrations.sweep_stale_graph_extractions",
+        "schedule": 900.0,
+    },
 }
 
 NEO4J_URI = env("NEO4J_URI", default="bolt://neo4j:7687")
@@ -187,6 +191,44 @@ if GRAPH_EXTRACTION_ENGINE not in {"paragraph", "neo4j_graphrag"}:
         f"GRAPH_EXTRACTION_ENGINE must be 'paragraph' or 'neo4j_graphrag', "
         f"got {GRAPH_EXTRACTION_ENGINE!r}."
     )
+GRAPH_EXTRACTION_CHUNK_MAX_CHARS = env.int("GRAPH_EXTRACTION_CHUNK_MAX_CHARS", default=12_000)
+if GRAPH_EXTRACTION_CHUNK_MAX_CHARS < 1:
+    raise ImproperlyConfigured("GRAPH_EXTRACTION_CHUNK_MAX_CHARS must be positive.")
+GRAPH_EXTRACTION_CHUNK_OVERLAP_CHARS = env.int(
+    "GRAPH_EXTRACTION_CHUNK_OVERLAP_CHARS", default=1_000
+)
+if not 0 <= GRAPH_EXTRACTION_CHUNK_OVERLAP_CHARS < GRAPH_EXTRACTION_CHUNK_MAX_CHARS:
+    raise ImproperlyConfigured(
+        "GRAPH_EXTRACTION_CHUNK_OVERLAP_CHARS must be non-negative and smaller than "
+        "GRAPH_EXTRACTION_CHUNK_MAX_CHARS."
+    )
+# Extraction recovery. A crashed worker can leave graph_extraction_status
+# stuck in RUNNING once the broker no longer holds the message — the sweep is
+# the recovery path (same failure mode as DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES
+# covers for sync runs). The attempts cap bounds sync-driven requeues of the
+# same content version; the pending window keeps overlapping syncs from
+# double-enqueueing a job a worker simply hasn't started yet.
+GRAPH_EXTRACTION_STALE_RUNNING_TIMEOUT_MINUTES = env.int(
+    "GRAPH_EXTRACTION_STALE_RUNNING_TIMEOUT_MINUTES", default=60
+)
+if GRAPH_EXTRACTION_STALE_RUNNING_TIMEOUT_MINUTES < 1:
+    raise ImproperlyConfigured("GRAPH_EXTRACTION_STALE_RUNNING_TIMEOUT_MINUTES must be positive.")
+GRAPH_EXTRACTION_MAX_SYNC_ATTEMPTS = env.int("GRAPH_EXTRACTION_MAX_SYNC_ATTEMPTS", default=5)
+if GRAPH_EXTRACTION_MAX_SYNC_ATTEMPTS < 1:
+    raise ImproperlyConfigured("GRAPH_EXTRACTION_MAX_SYNC_ATTEMPTS must be positive.")
+GRAPH_EXTRACTION_PENDING_REQUEUE_AFTER_MINUTES = env.int(
+    "GRAPH_EXTRACTION_PENDING_REQUEUE_AFTER_MINUTES", default=15
+)
+if GRAPH_EXTRACTION_PENDING_REQUEUE_AFTER_MINUTES < 1:
+    raise ImproperlyConfigured("GRAPH_EXTRACTION_PENDING_REQUEUE_AFTER_MINUTES must be positive.")
+# Upper bound on concurrent per-chunk LLM calls within one document's
+# extraction — chunk extractions are independent, but the provider rate
+# limit is shared.
+GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS = env.int(
+    "GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS", default=4
+)
+if GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS < 1:
+    raise ImproperlyConfigured("GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS must be positive.")
 OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", default="")
 OPENROUTER_BASE_URL = env("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
 GRAPH_EXTRACTION_MODEL = env("GRAPH_EXTRACTION_MODEL", default="")

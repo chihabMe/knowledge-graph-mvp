@@ -43,7 +43,10 @@ Build a graph representation of documents, chunks, entities, and relationships w
   `retrieval_eligible`, because enforcement lives at retrieval and Phase 2
   only re-queues extraction on content change — skipping ineligible
   documents would leave them permanently missing from the graph once their
-  permissions become readable.)
+  permissions become readable. Extraction jobs carry the exported content
+  hash and re-check it under a short PostgreSQL row lock before replacing the
+  graph, so an older job cannot become the final graph state after a content
+  refresh. Paragraphs and CSV text are bounded before LLM extraction.)
 - [x] Store extracted entity nodes. Effort: High.
   (`replace_document_entities` in `graph/writer.py`: per-document scoped
   `entity_id`, `mentions` edge to the source chunk, chunk-anchor check fails

@@ -89,6 +89,12 @@ class SourceDocument(models.Model):
     # Exception class names or controlled skip labels only: document text and
     # remote error payloads must never become persistent task metadata.
     graph_extraction_error_summary = models.CharField(max_length=512, blank=True)
+    # FAILED transitions for the current content version. Caps the sync-driven
+    # requeue so a deterministic failure cannot burn LLM calls on every sync.
+    graph_extraction_attempts = models.PositiveIntegerField(default=0)
+    # When an extraction task was last enqueued for this row. updated_at can't
+    # serve here: every metadata sync rewrites the row, so it is always fresh.
+    graph_extraction_queued_at = models.DateTimeField(null=True, blank=True)
     graph_extraction_started_at = models.DateTimeField(null=True, blank=True)
     graph_extraction_finished_at = models.DateTimeField(null=True, blank=True)
     retrieval_eligible = models.BooleanField(default=False)

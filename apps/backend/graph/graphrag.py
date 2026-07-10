@@ -27,6 +27,7 @@ from neo4j_graphrag.experimental.components.schema import (
 )
 from neo4j_graphrag.experimental.components.types import TextChunk
 from neo4j_graphrag.llm import LLMInterface
+from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from graph.extraction import (
     ExtractedChunk,
@@ -36,6 +37,15 @@ from graph.extraction import (
     ParagraphChunkExtractor,
 )
 from graph.ontology import ENTITY_TYPES, RELATIONSHIP_TYPES
+
+# Transient provider failures this engine's extraction can hit. Owned here so
+# the task layer never has to know which LLM stack an engine is built on.
+RETRYABLE_LLM_EXCEPTIONS = (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
 
 
 def ontology_graph_schema() -> GraphSchema:
@@ -59,7 +69,13 @@ def ontology_graph_schema() -> GraphSchema:
 class GraphRAGExtractor:
     """ExtractionAdapter backed by neo4j-graphrag's LLM extraction."""
 
-    def __init__(self, llm: LLMInterface):
+    def __init__(
+        self,
+        llm: LLMInterface,
+        *,
+        chunker: ParagraphChunkExtractor | None = None,
+        max_concurrent_llm_calls: int = 4,
+    ):
         # OnError.RAISE: a chunk whose extraction fails aborts the document
         # instead of being silently dropped — fail closed, retry later.
         self._extractor = LLMEntityRelationExtractor(
@@ -68,7 +84,10 @@ class GraphRAGExtractor:
             on_error=OnError.RAISE,
         )
         self._schema = ontology_graph_schema()
-        self._chunker = ParagraphChunkExtractor()
+        self._chunker = chunker or ParagraphChunkExtractor()
+        if max_concurrent_llm_calls < 1:
+            raise ValueError("max_concurrent_llm_calls must be positive")
+        self._max_concurrent_llm_calls = max_concurrent_llm_calls
 
     def extract(self, text: str) -> ExtractionResult:
         chunks = self._chunker.extract(text).chunks
@@ -82,18 +101,29 @@ class GraphRAGExtractor:
     async def _extract_all(
         self, chunks: tuple[ExtractedChunk, ...]
     ) -> tuple[list[ExtractedEntity], list[ExtractedRelationship]]:
+        # Chunk extractions are independent LLM calls; run them concurrently
+        # (bounded, for provider rate limits). gather preserves input order,
+        # so output ordering stays deterministic. Any failure still aborts
+        # the whole document (OnError.RAISE — fail closed).
+        semaphore = asyncio.Semaphore(self._max_concurrent_llm_calls)
+
+        async def extract_chunk(chunk: ExtractedChunk):
+            async with semaphore:
+                return await self._extractor.extract_for_chunk(
+                    self._schema,
+                    "",
+                    TextChunk(text=chunk.text, index=chunk.index),
+                )
+
+        chunk_graphs = await asyncio.gather(*(extract_chunk(chunk) for chunk in chunks))
+
         entities: list[ExtractedEntity] = []
         relationships: list[ExtractedRelationship] = []
-        for chunk in chunks:
-            chunk_graph = await self._extractor.extract_for_chunk(
-                self._schema,
-                "",
-                TextChunk(text=chunk.text, index=chunk.index),
-            )
-            names_by_node_id: dict[str, str] = {}
+        for chunk, chunk_graph in zip(chunks, chunk_graphs, strict=True):
+            endpoints_by_node_id: dict[str, tuple[str, str]] = {}
             for node in chunk_graph.nodes:
                 name = (node.properties or {}).get("name") or node.id
-                names_by_node_id[node.id] = name
+                endpoints_by_node_id[node.id] = (node.label, name)
                 entities.append(
                     ExtractedEntity(
                         entity_type=node.label,
@@ -102,19 +132,25 @@ class GraphRAGExtractor:
                     )
                 )
             for relationship in chunk_graph.relationships:
-                source_name = names_by_node_id.get(relationship.start_node_id)
-                target_name = names_by_node_id.get(relationship.end_node_id)
-                if source_name is None or target_name is None:
+                source = endpoints_by_node_id.get(relationship.start_node_id)
+                target = endpoints_by_node_id.get(relationship.end_node_id)
+                if source is None or target is None:
                     # The LLM referenced a node id it never declared — there
                     # is no entity to anchor the edge to, so it cannot be
                     # stored with valid provenance. Dropped, not guessed.
                     continue
+                source_type, source_name = source
+                target_type, target_name = target
                 relationships.append(
                     ExtractedRelationship(
                         relationship_type=relationship.type,
                         source_name=source_name,
                         target_name=target_name,
                         chunk_index=chunk.index,
+                        # Types ride along so the writer can tell same-named
+                        # entities of different types apart.
+                        source_type=source_type,
+                        target_type=target_type,
                     )
                 )
         return entities, relationships
@@ -129,4 +165,11 @@ def build_graphrag_extractor() -> GraphRAGExtractor:
         api_key=settings.OPENROUTER_API_KEY,
         base_url=settings.OPENROUTER_BASE_URL,
     )
-    return GraphRAGExtractor(llm=llm)
+    return GraphRAGExtractor(
+        llm=llm,
+        chunker=ParagraphChunkExtractor(
+            max_chars=settings.GRAPH_EXTRACTION_CHUNK_MAX_CHARS,
+            overlap_chars=settings.GRAPH_EXTRACTION_CHUNK_OVERLAP_CHARS,
+        ),
+        max_concurrent_llm_calls=settings.GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS,
+    )

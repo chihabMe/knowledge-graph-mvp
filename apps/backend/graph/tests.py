@@ -203,6 +203,29 @@ class ParagraphChunkExtractorTests(SimpleTestCase):
 
         self.assertEqual(result.chunks, ())
 
+    def test_oversized_paragraph_is_split_into_bounded_overlapping_chunks(self):
+        extractor = ParagraphChunkExtractor(max_chars=10, overlap_chars=2)
+        result = extractor.extract("abcdefghijklmnopqrst")
+
+        self.assertEqual(
+            result.chunks,
+            (
+                ExtractedChunk(index=0, text="abcdefghij"),
+                ExtractedChunk(index=1, text="ijklmnopqr"),
+                ExtractedChunk(index=2, text="qrst"),
+            ),
+        )
+        self.assertTrue(all(len(chunk.text) <= 10 for chunk in result.chunks))
+
+    def test_oversized_csv_text_prefers_row_boundaries(self):
+        csv_text = "header,value\\nfirst,123\\nsecond,456\\nthird,789"
+
+        result = ParagraphChunkExtractor(max_chars=18, overlap_chars=3).extract(csv_text)
+
+        self.assertGreater(len(result.chunks), 1)
+        self.assertEqual([chunk.index for chunk in result.chunks], list(range(len(result.chunks))))
+        self.assertTrue(all(len(chunk.text) <= 18 for chunk in result.chunks))
+
 
 class ExtractionResultValidationTests(SimpleTestCase):
     def test_declared_types_pass_through(self):
@@ -298,6 +321,7 @@ class WriterTests(SimpleTestCase):
         self.assertEqual(kwargs["connection_id"], 3)
         self.assertEqual(kwargs["drive_file_id"], "file-1")
         self.assertEqual(kwargs["source_permissions_version"], "a" * 64)
+        self.assertEqual(kwargs["content_hash"], "")
 
     def test_upsert_refuses_documents_without_identity(self):
         db_session = MagicMock()
@@ -327,18 +351,21 @@ class WriterTests(SimpleTestCase):
 
         self.assertEqual(written, 2)
         calls = db_session.run.call_args_list
-        # existence check, delete, then one create per chunk
-        self.assertEqual(len(calls), 4)
+        # existence check, delete, then one batched create for all chunks
+        self.assertEqual(len(calls), 3)
         self.assertIn("DETACH DELETE", calls[1].args[0])
-        for call, chunk in zip(calls[2:], chunks, strict=True):
-            self.assertIn("CREATE (c:Chunk", call.args[0])
-            self.assertIn(f":{CHUNK_DOCUMENT_RELATIONSHIP}", call.args[0])
-            self.assertIn("r.source_document_id", call.args[0])
-            kwargs = call.kwargs
-            self.assertEqual(kwargs["chunk_id"], f"7:{chunk.index}")
-            self.assertEqual(kwargs["text"], chunk.text)
-            for field in PROVENANCE_FIELDS:
-                self.assertIsNotNone(kwargs[field])
+        create_call = calls[2]
+        self.assertIn("UNWIND $chunks", create_call.args[0])
+        self.assertIn("CREATE (c:Chunk", create_call.args[0])
+        self.assertIn(f":{CHUNK_DOCUMENT_RELATIONSHIP}", create_call.args[0])
+        self.assertIn("r.source_document_id", create_call.args[0])
+        kwargs = create_call.kwargs
+        for field in PROVENANCE_FIELDS:
+            self.assertIsNotNone(kwargs[field])
+        for row, chunk in zip(kwargs["chunks"], chunks, strict=True):
+            self.assertEqual(row["chunk_id"], f"7:{chunk.index}")
+            self.assertEqual(row["text"], chunk.text)
+            self.assertIsNone(row["embedding"])
 
     def test_replace_chunks_can_write_embeddings(self):
         db_session = MagicMock()
@@ -355,8 +382,8 @@ class WriterTests(SimpleTestCase):
 
         self.assertEqual(written, 1)
         create_call = db_session.run.call_args_list[-1]
-        self.assertIn("embedding: $embedding", create_call.args[0])
-        self.assertEqual(create_call.kwargs["embedding"], [0.1, 0.2, 0.3])
+        self.assertIn("embedding: chunk.embedding", create_call.args[0])
+        self.assertEqual(create_call.kwargs["chunks"][0]["embedding"], [0.1, 0.2, 0.3])
 
     def test_replace_chunks_refuses_malformed_embeddings_before_writing(self):
         db_session = MagicMock()
@@ -430,6 +457,8 @@ class GraphRAGExtractorTests(SimpleTestCase):
                     source_name="Ada Lovelace",
                     target_name="Analytical Engine",
                     chunk_index=0,
+                    source_type="Person",
+                    target_type="Project",
                 ),
             ),
         )
@@ -458,6 +487,18 @@ class GraphRAGExtractorTests(SimpleTestCase):
         result = extractor.extract("Paragraph one.\n\nParagraph two.")
 
         self.assertEqual([e.chunk_index for e in result.entities], [0, 1])
+
+    def test_llm_extraction_uses_bounded_chunks(self):
+        payload = '{"nodes": [], "relationships": []}'
+        extractor = GraphRAGExtractor(
+            llm=_fake_llm(payload),
+            chunker=ParagraphChunkExtractor(max_chars=10, overlap_chars=2),
+        )
+
+        result = extractor.extract("abcdefghijklmnopqrst")
+
+        self.assertEqual([chunk.index for chunk in result.chunks], [0, 1, 2])
+        self.assertTrue(all(len(chunk.text) <= 10 for chunk in result.chunks))
 
     @override_settings(
         GRAPH_EXTRACTION_MODEL="test-model",
@@ -494,9 +535,11 @@ class ExtractionEngineSelectionTests(SimpleTestCase):
 
 
 class ReplaceDocumentEntitiesTests(SimpleTestCase):
-    def _session(self, chunk_found=True):
+    def _session(self, anchored=1):
+        # The batched entity write reports how many mentions found their
+        # anchoring chunk; tests set it to the mention count they pass in.
         db_session = MagicMock()
-        db_session.run.return_value.single.return_value = {"n": 1 if chunk_found else 0}
+        db_session.run.return_value.single.return_value = {"n": anchored}
         return db_session
 
     def test_undeclared_entity_type_is_rejected_before_any_write(self):
@@ -533,23 +576,24 @@ class ReplaceDocumentEntitiesTests(SimpleTestCase):
         self.assertEqual(counts, {"entities": 1, "relationships": 0, "relationships_skipped": 0})
         delete_call, entity_call = db_session.run.call_args_list
         self.assertIn("DETACH DELETE e", delete_call.args[0])
+        self.assertIn("UNWIND $entities", entity_call.args[0])
         self.assertIn(f":{CHUNK_ENTITY_RELATIONSHIP}", entity_call.args[0])
         self.assertIn("m.source_document_id", entity_call.args[0])
         kwargs = entity_call.kwargs
-        self.assertEqual(kwargs["entity_id"], "7:Person:ada lovelace")
-        self.assertEqual(kwargs["chunk_id"], "7:0")
+        self.assertEqual(kwargs["entities"][0]["entity_id"], "7:Person:ada lovelace")
+        self.assertEqual(kwargs["entities"][0]["chunk_id"], "7:0")
         for field in PROVENANCE_FIELDS:
             self.assertIsNotNone(kwargs[field])
 
     def test_missing_chunk_anchor_fails_loudly(self):
-        db_session = self._session(chunk_found=False)
+        db_session = self._session(anchored=0)
         entities = (ExtractedEntity(entity_type="Person", name="Ada", chunk_index=3),)
 
         with self.assertRaises(ChunkNodeMissingError):
             replace_document_entities(db_session, _document(), entities, ())
 
     def test_same_entity_in_two_chunks_counts_once_with_two_mentions(self):
-        db_session = self._session()
+        db_session = self._session(anchored=2)
         entities = (
             ExtractedEntity(entity_type="Person", name="Ada", chunk_index=0),
             ExtractedEntity(entity_type="Person", name="Ada", chunk_index=1),
@@ -558,11 +602,13 @@ class ReplaceDocumentEntitiesTests(SimpleTestCase):
         counts = replace_document_entities(db_session, _document(), entities, ())
 
         self.assertEqual(counts["entities"], 1)
-        # delete + one write per mention
-        self.assertEqual(db_session.run.call_count, 3)
+        # delete + one batched write covering both mentions
+        self.assertEqual(db_session.run.call_count, 2)
+        mention_rows = db_session.run.call_args_list[-1].kwargs["entities"]
+        self.assertEqual(len(mention_rows), 2)
 
     def test_resolvable_relationship_is_written_with_provenance(self):
-        db_session = self._session()
+        db_session = self._session(anchored=2)
         entities = (
             ExtractedEntity(entity_type="Person", name="Ada", chunk_index=0),
             ExtractedEntity(entity_type="Project", name="Engine", chunk_index=0),
@@ -582,13 +628,15 @@ class ReplaceDocumentEntitiesTests(SimpleTestCase):
         self.assertEqual(counts["relationships_skipped"], 0)
         relationship_call = db_session.run.call_args_list[-1]
         self.assertIn("[r:works_on]", relationship_call.args[0])
-        self.assertEqual(relationship_call.kwargs["source_id"], "7:Person:ada")
-        self.assertEqual(relationship_call.kwargs["target_id"], "7:Project:engine")
+        rows = relationship_call.kwargs["relationships"]
+        self.assertEqual(
+            rows, [{"source_id": "7:Person:ada", "target_id": "7:Project:engine", "chunk_index": 0}]
+        )
         for field in PROVENANCE_FIELDS:
             self.assertIsNotNone(relationship_call.kwargs[field])
 
     def test_unresolvable_or_ambiguous_relationships_are_counted_and_skipped(self):
-        db_session = self._session()
+        db_session = self._session(anchored=2)
         entities = (
             # Same name under two types → ambiguous endpoint.
             ExtractedEntity(entity_type="Person", name="Mercury", chunk_index=0),
@@ -614,6 +662,33 @@ class ReplaceDocumentEntitiesTests(SimpleTestCase):
         self.assertEqual(counts["relationships"], 0)
         self.assertEqual(counts["relationships_skipped"], 2)
 
+    def test_endpoint_types_disambiguate_same_named_entities(self):
+        db_session = self._session(anchored=2)
+        entities = (
+            ExtractedEntity(entity_type="Person", name="Mercury", chunk_index=0),
+            ExtractedEntity(entity_type="Topic", name="Mercury", chunk_index=0),
+        )
+        relationships = (
+            ExtractedRelationship(
+                relationship_type="related_to",
+                source_name="Mercury",
+                target_name="Mercury",
+                chunk_index=0,
+                # The engine knows which "Mercury" each endpoint is — the
+                # writer must not drop the edge as ambiguous.
+                source_type="Person",
+                target_type="Topic",
+            ),
+        )
+
+        counts = replace_document_entities(db_session, _document(), entities, relationships)
+
+        self.assertEqual(counts["relationships"], 1)
+        self.assertEqual(counts["relationships_skipped"], 0)
+        rows = db_session.run.call_args_list[-1].kwargs["relationships"]
+        self.assertEqual(rows[0]["source_id"], "7:Person:mercury")
+        self.assertEqual(rows[0]["target_id"], "7:Topic:mercury")
+
 
 class ExtractionPipelineTests(TestCase):
     def setUp(self):
@@ -629,12 +704,16 @@ class ExtractionPipelineTests(TestCase):
             source_permissions_version="a" * 64,
         )
 
-    def _store_content(self, data: bytes, exported_mime_type: str = "text/plain"):
+    def _store_content(
+        self, data: bytes, exported_mime_type: str = "text/plain", content_hash: str = "hash"
+    ):
+        self.document.content_hash = content_hash
+        self.document.save(update_fields=["content_hash"])
         return SourceDocumentContent.objects.create(
             source_document=self.document,
             content=data,
             exported_mime_type=exported_mime_type,
-            content_hash="hash",
+            content_hash=content_hash,
         )
 
     def test_document_without_stored_content_is_skipped(self):
@@ -685,10 +764,33 @@ class ExtractionPipelineTests(TestCase):
         create_calls = [
             call for call in db_transaction.run.call_args_list if "CREATE (c:Chunk" in call.args[0]
         ]
-        self.assertEqual(len(create_calls), 2)
-        for call in create_calls:
-            self.assertEqual(call.kwargs["source_document_id"], self.document.pk)
-            self.assertEqual(call.kwargs["drive_file_id"], "file-1")
+        self.assertEqual(len(create_calls), 1)
+        create_call = create_calls[0]
+        self.assertEqual(len(create_call.kwargs["chunks"]), 2)
+        self.assertEqual(create_call.kwargs["source_document_id"], self.document.pk)
+        self.assertEqual(create_call.kwargs["drive_file_id"], "file-1")
+
+    @override_settings(GRAPH_EXTRACTION_ENGINE="paragraph")
+    @patch("graph.pipeline.write_transaction")
+    @patch("graph.pipeline.get_extraction_adapter")
+    def test_content_changed_during_extraction_never_replaces_the_newer_graph(
+        self, mock_adapter, mock_transaction_ctx
+    ):
+        self._store_content(b"old content", content_hash="old-hash")
+
+        def replace_content_while_extracting(_text):
+            SourceDocumentContent.objects.filter(source_document=self.document).update(
+                content=b"new content", content_hash="new-hash"
+            )
+            SourceDocument.objects.filter(pk=self.document.pk).update(content_hash="new-hash")
+            return ExtractionResult(chunks=(ExtractedChunk(index=0, text="old content"),))
+
+        mock_adapter.return_value.extract.side_effect = replace_content_while_extracting
+
+        result = extract_document_to_graph(self.document.pk, "old-hash")
+
+        self.assertEqual(result["status"], "skipped_stale_content_version")
+        mock_transaction_ctx.assert_not_called()
 
 
 class RetrievalGuardTests(SimpleTestCase):
@@ -698,6 +800,11 @@ class RetrievalGuardTests(SimpleTestCase):
         for field in PROVENANCE_FIELDS:
             self.assertIn(f"c.{field} IS NOT NULL", fragment)
         self.assertIn(f"c.source_document_id IN ${ALLOWED_DOCUMENTS_PARAMETER}", fragment)
+
+    def test_non_identifier_alias_is_rejected_at_the_interpolation_point(self):
+        for alias in ("", "c ", "c.x", "1c", "c) OR true //"):
+            with self.assertRaises(ValueError):
+                provenance_where(alias)
 
     def test_record_with_full_provenance_passes(self):
         properties = {field: "value" for field in PROVENANCE_FIELDS}

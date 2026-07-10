@@ -65,10 +65,12 @@ def upsert_document(db_session, document: SourceDocument) -> None:
         "SET d.connection_id = $connection_id, "
         "    d.drive_file_id = $drive_file_id, "
         "    d.source_permissions_version = $source_permissions_version, "
+        "    d.content_hash = $content_hash, "
         "    d.title = $title, "
         "    d.mime_type = $mime_type, "
         "    d.drive_url = $drive_url",
         **provenance,
+        content_hash=document.content_hash,
         title=document.title,
         mime_type=document.mime_type,
         drive_url=document.drive_url,
@@ -94,7 +96,8 @@ def replace_document_chunks(
     )
     # MATCH + CREATE against an absent Document node would silently create
     # nothing while this function reports success — check explicitly and fail
-    # loudly instead. Callers upsert_document() first.
+    # loudly instead (also covers the empty-chunks case, which never reaches
+    # the batched create below). Callers upsert_document() first.
     found = db_session.run(
         "MATCH (d:Document {source_document_id: $source_document_id}) RETURN d.source_document_id",
         source_document_id=provenance["source_document_id"],
@@ -108,30 +111,38 @@ def replace_document_chunks(
         "MATCH (c:Chunk {source_document_id: $source_document_id}) DETACH DELETE c",
         source_document_id=provenance["source_document_id"],
     )
-    for chunk in chunks:
-        embedding = embedding_vectors.get(chunk.index)
-        embedding_property = ", embedding: $embedding" if embedding is not None else ""
-        db_session.run(
-            "MATCH (d:Document {source_document_id: $source_document_id}) "
-            "CREATE (c:Chunk {chunk_id: $chunk_id, "
-            "                 chunk_index: $chunk_index, "
-            "                 text: $text, "
-            "                 source_document_id: $source_document_id, "
-            "                 connection_id: $connection_id, "
-            "                 drive_file_id: $drive_file_id, "
-            "                 source_permissions_version: $source_permissions_version"
-            f"{embedding_property}}}) "
-            f"CREATE (c)-[r:{CHUNK_DOCUMENT_RELATIONSHIP}]->(d) "
-            "SET r.source_document_id = $source_document_id, "
-            "    r.connection_id = $connection_id, "
-            "    r.drive_file_id = $drive_file_id, "
-            "    r.source_permissions_version = $source_permissions_version",
-            **provenance,
-            chunk_id=f"{provenance['source_document_id']}:{chunk.index}",
-            chunk_index=chunk.index,
-            text=chunk.text,
-            embedding=embedding,
-        )
+    if not chunks:
+        return 0
+    # One UNWIND batch instead of a round-trip per chunk. A null embedding in
+    # the map simply stores no property — same shape as before for chunks
+    # without vectors.
+    db_session.run(
+        "MATCH (d:Document {source_document_id: $source_document_id}) "
+        "UNWIND $chunks AS chunk "
+        "CREATE (c:Chunk {chunk_id: chunk.chunk_id, "
+        "                 chunk_index: chunk.chunk_index, "
+        "                 text: chunk.text, "
+        "                 embedding: chunk.embedding, "
+        "                 source_document_id: $source_document_id, "
+        "                 connection_id: $connection_id, "
+        "                 drive_file_id: $drive_file_id, "
+        "                 source_permissions_version: $source_permissions_version}) "
+        f"CREATE (c)-[r:{CHUNK_DOCUMENT_RELATIONSHIP}]->(d) "
+        "SET r.source_document_id = $source_document_id, "
+        "    r.connection_id = $connection_id, "
+        "    r.drive_file_id = $drive_file_id, "
+        "    r.source_permissions_version = $source_permissions_version",
+        **provenance,
+        chunks=[
+            {
+                "chunk_id": f"{provenance['source_document_id']}:{chunk.index}",
+                "chunk_index": chunk.index,
+                "text": chunk.text,
+                "embedding": embedding_vectors.get(chunk.index),
+            }
+            for chunk in chunks
+        ],
+    )
     return len(chunks)
 
 
@@ -149,10 +160,11 @@ def replace_document_entities(
     as an entity type, and its uniqueness constraint is keyed on the same
     source_document_id every entity carries as provenance).
 
-    Relationships resolve their endpoints by name against this document's
-    own entities; an unresolvable or ambiguous name is counted and skipped —
-    an edge that can't be anchored to known entities can't be stored with
-    valid provenance.
+    Relationships resolve their endpoints against this document's own
+    entities — by (entity_type, name) when the engine supplied endpoint
+    types, by bare name otherwise. An unresolvable or ambiguous endpoint is
+    counted and skipped — an edge that can't be anchored to known entities
+    can't be stored with valid provenance.
     """
     for entity in entities:
         validate_entity_type(entity.entity_type)
@@ -167,16 +179,34 @@ def replace_document_entities(
     )
 
     entity_ids_by_name: dict[str, set[str]] = {}
+    entity_ids_by_type_and_name: dict[tuple[str, str], set[str]] = {}
     written_entity_ids: set[str] = set()
+    entity_rows = []
     for entity in entities:
         entity_id = _entity_id(source_document_id, entity)
         entity_ids_by_name.setdefault(entity.name, set()).add(entity_id)
+        entity_ids_by_type_and_name.setdefault((entity.entity_type, entity.name), set()).add(
+            entity_id
+        )
         written_entity_ids.add(entity_id)
-        created = db_session.run(
-            "MATCH (c:Chunk {chunk_id: $chunk_id}) "
-            "MERGE (e:Entity {entity_id: $entity_id}) "
-            "SET e.name = $name, "
-            "    e.entity_type = $entity_type, "
+        entity_rows.append(
+            {
+                "entity_id": entity_id,
+                "name": entity.name,
+                "entity_type": entity.entity_type,
+                "chunk_id": f"{source_document_id}:{entity.chunk_index}",
+            }
+        )
+    if entity_rows:
+        # One UNWIND batch per document. MATCH drops rows whose anchoring
+        # chunk is missing, so a shortfall in the returned count is the same
+        # loud failure the per-row write used to raise.
+        anchored = db_session.run(
+            "UNWIND $entities AS entity "
+            "MATCH (c:Chunk {chunk_id: entity.chunk_id}) "
+            "MERGE (e:Entity {entity_id: entity.entity_id}) "
+            "SET e.name = entity.name, "
+            "    e.entity_type = entity.entity_type, "
             "    e.source_document_id = $source_document_id, "
             "    e.connection_id = $connection_id, "
             "    e.drive_file_id = $drive_file_id, "
@@ -186,41 +216,57 @@ def replace_document_entities(
             "    m.connection_id = $connection_id, "
             "    m.drive_file_id = $drive_file_id, "
             "    m.source_permissions_version = $source_permissions_version "
-            "RETURN count(e) AS n",
+            "RETURN count(*) AS n",
             **provenance,
-            entity_id=entity_id,
-            name=entity.name,
-            entity_type=entity.entity_type,
-            chunk_id=f"{source_document_id}:{entity.chunk_index}",
+            entities=entity_rows,
         ).single()
-        if created is None or created["n"] == 0:
+        if anchored is None or anchored["n"] != len(entity_rows):
             raise ChunkNodeMissingError(
-                f"No Chunk node {source_document_id}:{entity.chunk_index} to anchor an entity."
+                f"{len(entity_rows) - (0 if anchored is None else anchored['n'])} of "
+                f"{len(entity_rows)} entity mentions reference Chunk nodes that were "
+                f"never written for source_document_id={source_document_id}."
             )
+
+    def endpoint_ids(name: str, entity_type: str) -> set[str]:
+        if entity_type:
+            return entity_ids_by_type_and_name.get((entity_type, name), set())
+        return entity_ids_by_name.get(name, set())
 
     written_relationships = 0
     skipped_relationships = 0
+    relationship_rows_by_type: dict[str, list[dict[str, int | str]]] = {}
     for relationship in relationships:
-        source_ids = entity_ids_by_name.get(relationship.source_name, set())
-        target_ids = entity_ids_by_name.get(relationship.target_name, set())
+        source_ids = endpoint_ids(relationship.source_name, relationship.source_type)
+        target_ids = endpoint_ids(relationship.target_name, relationship.target_type)
         if len(source_ids) != 1 or len(target_ids) != 1:
             skipped_relationships += 1
             continue
+        relationship_rows_by_type.setdefault(relationship.relationship_type, []).append(
+            {
+                "source_id": next(iter(source_ids)),
+                "target_id": next(iter(target_ids)),
+                "chunk_index": relationship.chunk_index,
+            }
+        )
+        written_relationships += 1
+
+    # Relationship types cannot be Cypher parameters, so batching is per type
+    # (bounded by the ontology). Every interpolated type passed
+    # validate_relationship_type at the top of this function.
+    for relationship_type, relationship_rows in relationship_rows_by_type.items():
         db_session.run(
-            "MATCH (a:Entity {entity_id: $source_id}) "
-            "MATCH (b:Entity {entity_id: $target_id}) "
-            f"MERGE (a)-[r:{relationship.relationship_type}]->(b) "
+            "UNWIND $relationships AS rel "
+            "MATCH (a:Entity {entity_id: rel.source_id}) "
+            "MATCH (b:Entity {entity_id: rel.target_id}) "
+            f"MERGE (a)-[r:{relationship_type}]->(b) "
             "SET r.source_document_id = $source_document_id, "
             "    r.connection_id = $connection_id, "
             "    r.drive_file_id = $drive_file_id, "
             "    r.source_permissions_version = $source_permissions_version, "
-            "    r.chunk_index = $chunk_index",
+            "    r.chunk_index = rel.chunk_index",
             **provenance,
-            source_id=next(iter(source_ids)),
-            target_id=next(iter(target_ids)),
-            chunk_index=relationship.chunk_index,
+            relationships=relationship_rows,
         )
-        written_relationships += 1
 
     return {
         "entities": len(written_entity_ids),

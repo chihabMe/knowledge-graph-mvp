@@ -2,29 +2,18 @@ import datetime
 
 from celery import shared_task
 from django.conf import settings
+from django.db.models import F
 from django.utils import timezone
-from neo4j.exceptions import ServiceUnavailable, SessionExpired, TransientError
-from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-from graph.pipeline import extract_document_to_graph
+from graph.pipeline import extract_document_to_graph, get_retryable_extraction_exceptions
 from integrations.drive.export import export_file_content
 from integrations.drive.google_client import (
     GoogleDriveMetadataClient,
     build_drive_service,
 )
 from integrations.drive.sync import sync_drive_metadata
-from integrations.models import DriveSyncRun, SourceDocument
+from integrations.models import DriveSyncRun, SourceDocument, SourceDocumentContent
 
-RETRYABLE_EXTRACTION_EXCEPTIONS = (
-    APIConnectionError,
-    APITimeoutError,
-    InternalServerError,
-    RateLimitError,
-    OSError,
-    ServiceUnavailable,
-    SessionExpired,
-    TransientError,
-)
 _UNSET = object()
 
 
@@ -32,21 +21,42 @@ def _set_graph_extraction_state(
     source_document_id: int,
     status: str,
     *,
+    expected_content_hash: str | None = None,
     error_summary: str = "",
     started_at=_UNSET,
     finished_at=_UNSET,
-) -> None:
+) -> bool:
     """Persist safe extraction-job state without ever retaining error text."""
     updates = {
         "graph_extraction_status": status,
         "graph_extraction_error_summary": error_summary,
         "updated_at": timezone.now(),
     }
+    if status == SourceDocument.GraphExtractionStatus.FAILED:
+        # Every FAILED transition spends one unit of the sync-requeue budget
+        # (GRAPH_EXTRACTION_MAX_SYNC_ATTEMPTS); new content resets it.
+        updates["graph_extraction_attempts"] = F("graph_extraction_attempts") + 1
     if started_at is not _UNSET:
         updates["graph_extraction_started_at"] = started_at
     if finished_at is not _UNSET:
         updates["graph_extraction_finished_at"] = finished_at
-    SourceDocument.objects.filter(pk=source_document_id).update(**updates)
+    documents = SourceDocument.objects.filter(pk=source_document_id)
+    if expected_content_hash is not None:
+        documents = documents.filter(content_hash=expected_content_hash)
+    return bool(documents.update(**updates))
+
+
+def _current_content_hash(source_document_id: int) -> str:
+    return (
+        SourceDocumentContent.objects.filter(source_document_id=source_document_id)
+        .values_list("content_hash", flat=True)
+        .first()
+        or ""
+    )
+
+
+def _stale_content_result(source_document_id: int) -> dict[str, int | str]:
+    return {"source_document_id": source_document_id, "status": "skipped_stale_content_version"}
 
 
 @shared_task(name="integrations.run_drive_sync")
@@ -120,6 +130,31 @@ def sweep_stale_drive_sync_runs() -> dict[str, int]:
     return {"swept": swept}
 
 
+@shared_task(name="integrations.sweep_stale_graph_extractions")
+def sweep_stale_graph_extractions() -> dict[str, int]:
+    """Fail closed on extractions a crashed worker left stuck in RUNNING.
+
+    acks_late redelivery only covers a lost worker while the broker still
+    holds the task message; once it is gone the row would stay RUNNING
+    forever, invisible to the sync requeue (which recovers PENDING/FAILED
+    only). Marking it FAILED hands it back to that recovery path.
+    """
+    cutoff = timezone.now() - datetime.timedelta(
+        minutes=settings.GRAPH_EXTRACTION_STALE_RUNNING_TIMEOUT_MINUTES
+    )
+    swept = SourceDocument.objects.filter(
+        graph_extraction_status=SourceDocument.GraphExtractionStatus.RUNNING,
+        graph_extraction_started_at__lt=cutoff,
+    ).update(
+        graph_extraction_status=SourceDocument.GraphExtractionStatus.FAILED,
+        graph_extraction_error_summary="stale_running_timeout",
+        graph_extraction_attempts=F("graph_extraction_attempts") + 1,
+        graph_extraction_finished_at=timezone.now(),
+        updated_at=timezone.now(),
+    )
+    return {"swept": swept}
+
+
 @shared_task(
     bind=True,
     name="integrations.queue_document_extraction",
@@ -127,56 +162,73 @@ def sweep_stale_drive_sync_runs() -> dict[str, int]:
     reject_on_worker_lost=True,
     max_retries=3,
 )
-def queue_document_extraction(self, source_document_id: int) -> dict[str, int | str]:
+def queue_document_extraction(
+    self, source_document_id: int, expected_content_hash: str | None = None
+) -> dict[str, int | str]:
     """Extract one stored document into the Neo4j graph (Phase 3 pipeline).
 
     Return value is persisted by the Celery result backend, so it must only
     ever carry ids, status, and counts — never document content.
     """
-    _set_graph_extraction_state(
+    expected_content_hash = expected_content_hash or _current_content_hash(source_document_id)
+    if not expected_content_hash:
+        _set_graph_extraction_state(
+            source_document_id,
+            SourceDocument.GraphExtractionStatus.SKIPPED,
+            error_summary="skipped_no_content",
+            finished_at=timezone.now(),
+        )
+        return {"source_document_id": source_document_id, "status": "skipped_no_content"}
+
+    if not _set_graph_extraction_state(
         source_document_id,
         SourceDocument.GraphExtractionStatus.RUNNING,
+        expected_content_hash=expected_content_hash,
         started_at=timezone.now(),
-    )
+    ):
+        return _stale_content_result(source_document_id)
     try:
-        result = extract_document_to_graph(source_document_id)
-    except RETRYABLE_EXTRACTION_EXCEPTIONS as exc:
-        if self.request.retries < self.max_retries:
-            # The row stays RUNNING while Celery owns the scheduled retry, so
-            # the next metadata sync does not enqueue a competing recovery job.
-            raise self.retry(
-                exc=exc,
-                countdown=min(2 ** (self.request.retries + 1), 60),
-            ) from exc
-        _set_graph_extraction_state(
-            source_document_id,
-            SourceDocument.GraphExtractionStatus.FAILED,
-            error_summary=f"{type(exc).__module__}.{type(exc).__name__}"[:512],
-            finished_at=timezone.now(),
-        )
-        raise
+        result = extract_document_to_graph(source_document_id, expected_content_hash)
     except Exception as exc:
-        _set_graph_extraction_state(
+        if isinstance(exc, get_retryable_extraction_exceptions()):
+            if _current_content_hash(source_document_id) != expected_content_hash:
+                return _stale_content_result(source_document_id)
+            if self.request.retries < self.max_retries:
+                # The row stays RUNNING while Celery owns the scheduled retry,
+                # so the next metadata sync does not enqueue a competing
+                # recovery job.
+                raise self.retry(
+                    exc=exc,
+                    countdown=min(2 ** (self.request.retries + 1), 60),
+                ) from exc
+        if not _set_graph_extraction_state(
             source_document_id,
             SourceDocument.GraphExtractionStatus.FAILED,
+            expected_content_hash=expected_content_hash,
             error_summary=f"{type(exc).__module__}.{type(exc).__name__}"[:512],
             finished_at=timezone.now(),
-        )
+        ):
+            return _stale_content_result(source_document_id)
         raise
+
+    if result["status"] == "skipped_stale_content_version":
+        return result
 
     final_status = (
         SourceDocument.GraphExtractionStatus.SUCCEEDED
         if result["status"] == "extracted"
         else SourceDocument.GraphExtractionStatus.SKIPPED
     )
-    _set_graph_extraction_state(
+    if not _set_graph_extraction_state(
         source_document_id,
         final_status,
+        expected_content_hash=expected_content_hash,
         error_summary=(
             ""
             if final_status == SourceDocument.GraphExtractionStatus.SUCCEEDED
             else result["status"]
         ),
         finished_at=timezone.now(),
-    )
+    ):
+        return _stale_content_result(source_document_id)
     return result

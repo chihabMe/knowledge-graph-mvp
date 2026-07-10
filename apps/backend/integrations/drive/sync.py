@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -41,7 +42,7 @@ def sync_drive_metadata(
 
     `run` lets a caller (the API view) pre-create the audit record before the
     work is queued. `content_exporter(file_metadata) -> (bytes, mime)` enables
-    the content stage; `queue_extraction(document_id)` is called for every
+    the content stage; `queue_extraction(document_id, content_hash)` is called for every
     document whose content was (re)stored and every failed/pending extraction
     that can be retried without re-exporting unchanged content.
     """
@@ -55,7 +56,7 @@ def sync_drive_metadata(
         run.started_at = timezone.now()
         run.save(update_fields=["status", "started_at"])
 
-    extraction_candidates: list[int] = []
+    extraction_candidates: list[tuple[int, str]] = []
 
     try:
         files = client.list_files(connection)
@@ -129,15 +130,12 @@ def sync_drive_metadata(
 
                 if content_exporter is not None and not exclusion_reason:
                     if _needs_content_refresh(document, previous_modified_time):
-                        _store_content(document, file_metadata, content_exporter)
-                        extraction_candidates.append(document.pk)
-                    elif document.graph_extraction_status in {
-                        SourceDocument.GraphExtractionStatus.PENDING,
-                        SourceDocument.GraphExtractionStatus.FAILED,
-                    }:
+                        content_hash = _store_content(document, file_metadata, content_exporter)
+                        extraction_candidates.append((document.pk, content_hash))
+                    elif _extraction_needs_requeue(document):
                         # A transient graph/LLM outage must not require a
                         # content change before this source can recover.
-                        extraction_candidates.append(document.pk)
+                        extraction_candidates.append((document.pk, document.content_hash))
 
         run.status = DriveSyncRun.Status.SUCCEEDED
         run.total_files = len(files)
@@ -170,11 +168,39 @@ def sync_drive_metadata(
     # sync can never leave queued jobs pointing at missing rows. A mid-batch
     # failure cannot reach this line: the except block above re-raises, which
     # exits the function before any queueing happens (covered by test).
-    if queue_extraction is not None:
-        for document_id in extraction_candidates:
-            queue_extraction(document_id)
+    if queue_extraction is not None and extraction_candidates:
+        for document_id, content_hash in extraction_candidates:
+            queue_extraction(document_id, content_hash)
+        # Stamp the enqueue so the PENDING requeue gate can tell "queued just
+        # now" from "queued long ago and the message evidently went missing".
+        SourceDocument.objects.filter(
+            pk__in=[document_id for document_id, _ in extraction_candidates]
+        ).update(graph_extraction_queued_at=timezone.now())
 
     return run
+
+
+def _extraction_needs_requeue(document) -> bool:
+    """Recover unfinished extraction without duplicating or looping work.
+
+    FAILED is retried only within the per-content-version attempts budget —
+    a deterministic failure must not re-run on every sync forever. PENDING is
+    retried only once its last enqueue is old enough that the task message is
+    plainly gone; a fresh PENDING usually just means a worker hasn't started
+    yet, and requeueing it would run the same extraction twice. RUNNING is
+    the worker's (or the stale-extraction sweeper's) to resolve.
+    """
+    status = document.graph_extraction_status
+    if status == SourceDocument.GraphExtractionStatus.FAILED:
+        return document.graph_extraction_attempts < settings.GRAPH_EXTRACTION_MAX_SYNC_ATTEMPTS
+    if status == SourceDocument.GraphExtractionStatus.PENDING:
+        if document.graph_extraction_queued_at is None:
+            return True
+        cutoff = timezone.now() - timezone.timedelta(
+            minutes=settings.GRAPH_EXTRACTION_PENDING_REQUEUE_AFTER_MINUTES
+        )
+        return document.graph_extraction_queued_at < cutoff
+    return False
 
 
 def _needs_content_refresh(document, previous_modified_time) -> bool:
@@ -183,7 +209,7 @@ def _needs_content_refresh(document, previous_modified_time) -> bool:
     return not SourceDocumentContent.objects.filter(source_document=document).exists()
 
 
-def _store_content(document, file_metadata, content_exporter) -> None:
+def _store_content(document, file_metadata, content_exporter) -> str:
     data, effective_mime = content_exporter(file_metadata)
     digest = content_sha256(data)
     SourceDocumentContent.objects.update_or_create(
@@ -200,17 +226,23 @@ def _store_content(document, file_metadata, content_exporter) -> None:
     document.content_hash = digest
     document.graph_extraction_status = SourceDocument.GraphExtractionStatus.PENDING
     document.graph_extraction_error_summary = ""
+    document.graph_extraction_attempts = 0
     document.graph_extraction_started_at = None
     document.graph_extraction_finished_at = None
+    # updated_at is listed so auto_now refreshes it: the PENDING requeue gate
+    # reads it as "when did this row last transition".
     document.save(
         update_fields=[
             "content_hash",
             "graph_extraction_status",
             "graph_extraction_error_summary",
+            "graph_extraction_attempts",
             "graph_extraction_started_at",
             "graph_extraction_finished_at",
+            "updated_at",
         ]
     )
+    return digest
 
 
 def _exclusion_reason(

@@ -9,6 +9,8 @@ retrieval path; no content leaves the graph store.
 """
 
 from django.conf import settings
+from django.db import transaction
+from neo4j.exceptions import ServiceUnavailable, SessionExpired, TransientError
 
 from graph.db import write_transaction
 from graph.embeddings import EmbeddingAdapter, NoOpEmbeddingAdapter
@@ -24,20 +26,41 @@ def get_extraction_adapter() -> ExtractionAdapter:
         from graph.graphrag import build_graphrag_extractor
 
         return build_graphrag_extractor()
-    return ParagraphChunkExtractor()
+    return ParagraphChunkExtractor(
+        max_chars=settings.GRAPH_EXTRACTION_CHUNK_MAX_CHARS,
+        overlap_chars=settings.GRAPH_EXTRACTION_CHUNK_OVERLAP_CHARS,
+    )
 
 
 def get_embedding_adapter() -> EmbeddingAdapter:
     return NoOpEmbeddingAdapter()
 
 
-def extract_document_to_graph(source_document_id: int) -> dict[str, int | str]:
+def get_retryable_extraction_exceptions() -> tuple[type[BaseException], ...]:
+    """Transient failure types for the configured engine plus graph-store infra.
+
+    The engine-specific set lives with the engine (the task layer must not
+    know which provider stack an adapter is built on); the graph store and
+    network layers are this pipeline's own infrastructure, so they are
+    classified here.
+    """
+    infrastructure = (OSError, ServiceUnavailable, SessionExpired, TransientError)
+    if settings.GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag":
+        from graph.graphrag import RETRYABLE_LLM_EXCEPTIONS
+
+        return infrastructure + RETRYABLE_LLM_EXCEPTIONS
+    return infrastructure
+
+
+def extract_document_to_graph(
+    source_document_id: int, expected_content_hash: str | None = None
+) -> dict[str, int | str]:
     """Extract one stored document into Document + Chunk nodes.
 
     The return value flows into the Celery result backend — ids, status, and
     counts only, never text.
     """
-    document = SourceDocument.objects.get(pk=source_document_id)
+    document = SourceDocument.objects.select_related("content").get(pk=source_document_id)
 
     try:
         stored = document.content
@@ -55,23 +78,57 @@ def extract_document_to_graph(source_document_id: int) -> dict[str, int | str]:
         # logs or the result backend via the exception message.
         return {"source_document_id": source_document_id, "status": "skipped_decode_error"}
 
+    expected_content_hash = expected_content_hash or stored.content_hash
+    if (
+        not expected_content_hash
+        or document.content_hash != expected_content_hash
+        or stored.content_hash != expected_content_hash
+    ):
+        return {"source_document_id": source_document_id, "status": "skipped_stale_content_version"}
+
     result = validate_extraction_result(get_extraction_adapter().extract(text))
     chunk_embeddings = get_embedding_adapter().embed_chunks(result.chunks)
 
-    # The four writer stages are one replacement operation. In particular,
-    # chunk deletion must never commit before replacement chunks/entities do.
-    with write_transaction() as db_transaction:
-        upsert_document(db_transaction, document)
-        written = replace_document_chunks(
-            db_transaction,
-            document,
-            result.chunks,
-            chunk_embeddings=chunk_embeddings,
-            embedding_dimensions=settings.GRAPH_CHUNK_EMBEDDING_DIMENSIONS,
+    # Do not hold a Postgres row lock while the LLM runs. Instead, lock only
+    # around the final version check and graph replacement. A concurrent content
+    # refresh then waits, resets the new version to PENDING, and queues its own
+    # extraction after this older write releases the lock.
+    with transaction.atomic():
+        current_document = (
+            SourceDocument.objects.select_for_update()
+            .select_related("content")
+            .get(pk=source_document_id)
         )
-        entity_counts = replace_document_entities(
-            db_transaction, document, result.entities, result.relationships
-        )
+        try:
+            current_stored = current_document.content
+        except SourceDocumentContent.DoesNotExist:
+            return {
+                "source_document_id": source_document_id,
+                "status": "skipped_stale_content_version",
+            }
+        if (
+            current_document.content_hash != expected_content_hash
+            or current_stored.content_hash != expected_content_hash
+        ):
+            return {
+                "source_document_id": source_document_id,
+                "status": "skipped_stale_content_version",
+            }
+
+        # The four writer stages are one replacement operation. In particular,
+        # chunk deletion must never commit before replacement chunks/entities do.
+        with write_transaction() as db_transaction:
+            upsert_document(db_transaction, current_document)
+            written = replace_document_chunks(
+                db_transaction,
+                current_document,
+                result.chunks,
+                chunk_embeddings=chunk_embeddings,
+                embedding_dimensions=settings.GRAPH_CHUNK_EMBEDDING_DIMENSIONS,
+            )
+            entity_counts = replace_document_entities(
+                db_transaction, current_document, result.entities, result.relationships
+            )
 
     return {
         "source_document_id": source_document_id,
