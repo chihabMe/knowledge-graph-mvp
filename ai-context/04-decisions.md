@@ -233,8 +233,9 @@ Reason:
   engine's own schema grounding is a second fence, not the enforcement
   point.
 
-Status: Accepted (2026-07-09). LLM-backed extraction cannot be
-live-validated until an OpenRouter API key exists; the deterministic
+Status: Accepted (2026-07-09). LLM-backed extraction was smoke-validated
+live on 2026-07-09 (see the Phase 3 tracker); what remains is a production
+OpenRouter configuration (real key and model). The deterministic
 `ParagraphChunkExtractor` remains the default engine until then.
 
 ## Open / Needs Explicit Confirmation
