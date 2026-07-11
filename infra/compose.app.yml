@@ -50,6 +50,8 @@ services:
         condition: service_healthy
       spicedb:
         condition: service_healthy
+      spicedb-schema:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -112,6 +114,24 @@ services:
     networks:
       - kg-private
       - kg-egress
+
+  spicedb-schema:
+    build:
+      context: ../apps/backend
+      target: prod
+    restart: "no"
+    logging: *default-logging
+    env_file:
+      - ../.env
+    command:
+      - python
+      - manage.py
+      - spicedb_schema_apply
+    depends_on:
+      spicedb:
+        condition: service_healthy
+    networks:
+      - kg-private
 
   celery-beat:
     build:
