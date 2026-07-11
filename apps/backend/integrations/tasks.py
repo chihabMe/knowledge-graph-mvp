@@ -159,6 +159,28 @@ def run_drive_sync(run_id: int) -> dict[str, int | str]:
     return {"run_id": run.pk, "status": run.status}
 
 
+@shared_task(name="integrations.sweep_stale_permission_sync_runs")
+def sweep_stale_permission_sync_runs() -> dict[str, int]:
+    """Fail closed on permission runs a crashed worker left stuck in RUNNING.
+
+    acks_late redelivery only covers a lost worker while the broker still
+    holds the task message; once it is gone the run would stay RUNNING
+    forever, blocking rerun visibility while no reconciliation happens.
+    """
+    cutoff = timezone.now() - datetime.timedelta(
+        minutes=settings.PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES
+    )
+    swept = PermissionSyncRun.objects.filter(
+        status=PermissionSyncRun.Status.RUNNING,
+        started_at__lt=cutoff,
+    ).update(
+        status=PermissionSyncRun.Status.FAILED,
+        error_code="stale_run_timeout",
+        finished_at=timezone.now(),
+    )
+    return {"swept": swept}
+
+
 @shared_task(name="integrations.sweep_stale_drive_sync_runs")
 def sweep_stale_drive_sync_runs() -> dict[str, int]:
     """Fail closed on runs a crashed worker left stuck in RUNNING.

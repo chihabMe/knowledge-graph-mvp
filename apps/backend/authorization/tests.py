@@ -1,3 +1,4 @@
+import datetime
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
@@ -20,7 +21,7 @@ from integrations.drive.groups import GoogleGroupResolver, GroupMembership, Grou
 from integrations.drive.permissions import source_permissions_version
 from integrations.drive.sync import sync_drive_metadata
 from integrations.models import DriveConnection, DriveSyncRun, PermissionSyncRun, SourceDocument
-from integrations.tasks import run_permission_sync
+from integrations.tasks import run_permission_sync, sweep_stale_permission_sync_runs
 
 
 class FakeDriveClient:
@@ -273,6 +274,32 @@ class PermissionSyncTests(TestCase):
         self.assertEqual(run.documents_verified, 0)
         self.assertFalse(self.document.retrieval_eligible)
 
+    def test_failed_run_keeps_previously_verified_state(self):
+        SourceDocument.objects.filter(pk=self.document.pk).update(
+            retrieval_eligible=True,
+            spicedb_verified_at=timezone.now(),
+        )
+
+        class FailingDrive:
+            def list_permission_resources(self, connection):
+                raise OSError
+
+        run = PermissionSyncRun.objects.create(
+            connection=self.connection, status=PermissionSyncRun.Status.RUNNING
+        )
+        with self.assertRaises(OSError):
+            synchronize_permissions(
+                run,
+                drive_client=FailingDrive(),
+                group_resolver=FakeGroupResolver(),
+                spicedb=FakeSpiceDB(),
+            )
+        self.document.refresh_from_db()
+        run.refresh_from_db()
+        self.assertEqual(run.status, PermissionSyncRun.Status.FAILED)
+        self.assertTrue(self.document.retrieval_eligible)
+        self.assertIsNotNone(self.document.spicedb_verified_at)
+
     def test_partial_scan_exception_never_marks_unseen_document_inactive(self):
         class FailingDrive:
             def list_permission_resources(self, connection):
@@ -460,6 +487,25 @@ class PermissionTaskTests(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, PermissionSyncRun.Status.QUEUED)
         self.assertEqual(run.error_code, "")
+
+    def test_stale_running_run_is_swept_failed(self):
+        stale = PermissionSyncRun.objects.create(
+            connection=self.connection,
+            status=PermissionSyncRun.Status.RUNNING,
+            started_at=timezone.now() - datetime.timedelta(hours=3),
+        )
+        fresh = PermissionSyncRun.objects.create(
+            connection=self.connection,
+            status=PermissionSyncRun.Status.RUNNING,
+            started_at=timezone.now(),
+        )
+        result = sweep_stale_permission_sync_runs.run()
+        stale.refresh_from_db()
+        fresh.refresh_from_db()
+        self.assertEqual(result, {"swept": 1})
+        self.assertEqual(stale.status, PermissionSyncRun.Status.FAILED)
+        self.assertEqual(stale.error_code, "stale_run_timeout")
+        self.assertEqual(fresh.status, PermissionSyncRun.Status.RUNNING)
 
 
 class SchemaCommandTests(TestCase):

@@ -60,16 +60,16 @@ def synchronize_permissions(
 ) -> PermissionSyncRun:
     """Scan, reconcile, verify, then CAS-enable documents.
 
+    A failed run keeps the previous verified state rather than blanking the
+    connection: eligibility flips only in _commit_verified_documents (CAS on
+    the ACL version) plus the marker sweep, and the live fully-consistent
+    SpiceDB lookup remains the query-time gate either way.
+
     External payloads never escape this service or enter task results/logs.
     """
     connection = run.connection
     spicedb = spicedb or AuthzedSpiceDB()
     group_resolver = group_resolver or GoogleGroupResolver()
-    SourceDocument.objects.filter(connection=connection).update(
-        retrieval_eligible=False,
-        spicedb_verified_at=None,
-        updated_at=timezone.now(),
-    )
     try:
         resources = drive_client.list_permission_resources(connection)
         _persist_complete_scan(connection, resources)

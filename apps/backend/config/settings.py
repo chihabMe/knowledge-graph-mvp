@@ -204,9 +204,16 @@ CELERY_TIMEZONE = TIME_ZONE
 # A worker crash mid-task leaves the DriveSyncRun row stuck in RUNNING
 # forever with no other signal that it died. The sweep is the recovery path.
 DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int("DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120)
+PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int(
+    "PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120
+)
 CELERY_BEAT_SCHEDULE = {
     "sweep-stale-drive-sync-runs": {
         "task": "integrations.sweep_stale_drive_sync_runs",
+        "schedule": 900.0,
+    },
+    "sweep-stale-permission-sync-runs": {
+        "task": "integrations.sweep_stale_permission_sync_runs",
         "schedule": 900.0,
     },
     "sweep-stale-graph-extractions": {
