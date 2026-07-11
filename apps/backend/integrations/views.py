@@ -77,9 +77,7 @@ def _drive_api_error_response(exc: GoogleDriveApiError) -> Response:
 
 
 def _connection_has_selected_root(connection: DriveConnection) -> bool:
-    if connection.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
-        return bool(connection.shared_drive_id)
-    return bool(connection.root_folder_id)
+    return bool(connection.effective_root_id)
 
 
 def _selected_root_payload(connection: DriveConnection) -> dict[str, str]:

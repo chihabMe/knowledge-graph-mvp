@@ -245,9 +245,7 @@ class GoogleDriveMetadataClient:
             ) from exc
 
     def _root_id(self, connection: DriveConnection) -> str:
-        if connection.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
-            return connection.shared_drive_id
-        return connection.root_folder_id
+        return connection.effective_root_id
 
     def _folder_name(self, service, folder_id: str, connection: DriveConnection) -> str:
         if connection.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:

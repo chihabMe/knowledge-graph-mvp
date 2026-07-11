@@ -36,7 +36,7 @@ class PermissionSyncView(APIView):
                 {"detail": "No enabled Drive connection is configured."},
                 status=status.HTTP_409_CONFLICT,
             )
-        if not (connection.root_folder_id or connection.shared_drive_id):
+        if not connection.effective_root_id:
             return Response(
                 {"detail": "No Drive root has been selected for this connection."},
                 status=status.HTTP_409_CONFLICT,

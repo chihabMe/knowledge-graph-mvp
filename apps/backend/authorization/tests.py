@@ -412,6 +412,16 @@ class PermissionApiTests(TestCase):
         self.assertEqual(run.connection_id, self.connection.pk)
         delay.assert_called_once_with(run.pk)
 
+    def test_scope_root_mismatch_is_rejected_before_dispatch(self):
+        DriveConnection.objects.filter(pk=self.connection.pk).update(
+            scope_type=DriveConnection.ScopeType.SHARED_DRIVE, shared_drive_id=""
+        )
+        self.client.force_authenticate(self.admin)
+        with patch("authorization.views.run_permission_sync.delay") as delay:
+            response = self.client.post("/api/permissions/sync/")
+        self.assertEqual(response.status_code, 409)
+        delay.assert_not_called()
+
     def test_detail_response_contains_controlled_fields_only(self):
         run = PermissionSyncRun.objects.create(
             connection=self.connection,

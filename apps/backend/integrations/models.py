@@ -34,6 +34,13 @@ class DriveConnection(models.Model):
     def __str__(self) -> str:
         return self.name
 
+    @property
+    def effective_root_id(self) -> str:
+        """The Drive root matching scope_type; empty when misconfigured."""
+        if self.scope_type == self.ScopeType.SHARED_DRIVE:
+            return self.shared_drive_id
+        return self.root_folder_id
+
 
 class SourceDocument(models.Model):
     class GraphExtractionStatus(models.TextChoices):
