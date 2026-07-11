@@ -66,10 +66,13 @@ real Workspace.
 Phase 3 is code complete and merged into `main`: the graph app, ontology,
 Neo4j setup, extraction adapter, document/chunk/entity/relationship writers,
 source provenance guard, Chunk vector-index setup, and extraction-recovery
-hardening are implemented and covered by tests. The next product-risk
-dependency is Phase 4 SpiceDB permission sync, followed by Phase 5 retrieval
-that composes SpiceDB's allowed-document list with Neo4j provenance filtering
-before any LLM call.
+hardening are implemented and covered by tests. Phase 4 SpiceDB permission
+sync is code complete with live delegated Workspace validation pending: the
+schema lifecycle, Drive/folder ACL scan, nested group resolution, exact tuple
+reconciliation, verification gate, admin audit API, and fully consistent
+allowed-document lookup are implemented. The next product-risk dependency is
+Phase 5 retrieval, which must compose that allowlist with Neo4j provenance
+filtering before any LLM call.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -267,7 +270,8 @@ regardless of file type.
 
 Use SpiceDB. Do not invent a custom permission system.
 
-Phase 4 uses checked-in Authzed schema definitions prefixed with `kg/`. Drive
+Phase 4 uses checked-in Authzed schema definitions prefixed with `kgm/` (`kg/`
+is rejected by SpiceDB's minimum namespace-segment length). Drive
 roles remain distinct relationships (`reader`, `commenter`, `writer`,
 `file_organizer`, `organizer`, and `owner`) and combine into a `view`
 permission. Folder `parent->view` inheritance and recursive Google Group
@@ -583,6 +587,9 @@ strict rule requiring all source documents for a graph element to be visible.
 
 ### Phase 4: SpiceDB Permissions
 
+Status: code complete (2026-07-11); live delegated Google Workspace ACL and
+Directory group validation remains an external gate.
+
 Purpose: model Google Drive visibility in SpiceDB and expose allowed-document
 lookup for retrieval. Do not replace this with ad hoc PostgreSQL permission
 checks.
@@ -590,6 +597,14 @@ checks.
 If SpiceDB is unavailable or a document's SpiceDB relationships are not written
 and verified, retrieval must fail closed and return no context for that
 document.
+
+Current foundation: checked-in `kgm/` schema and idempotent lifecycle commands,
+opaque connection-scoped identifiers, permission-only Drive folder/document
+snapshots, read-only nested group resolution, exact TOUCH/DELETE reconciliation,
+at-least-as-fresh verification and ACL-version CAS, durable admin sync runs,
+SpiceDB health, and the internal fully consistent
+`allowed_source_document_ids()` Phase 5 handoff. Public/domain visibility and
+incomplete permissions remain excluded.
 
 ### Phase 5: Permission-Safe Retrieval
 
