@@ -272,6 +272,34 @@ Status: Accepted (2026-07-11). Docs-only resolution — brief section 7 and
 `ai-context/07-ai-coding-security-rules.md` updated to match the
 implementation; no graph or writer changes.
 
+## ADR-012: Drive Roles And Recursive Groups In A Fail-Closed SpiceDB Model
+
+Decision: Phase 4 models each supported Google Drive role as a distinct
+SpiceDB relationship and composes them into `view`; folders inherit through
+explicit parent relationships, and Google Groups use recursive subject sets.
+Only ACL-referenced groups are resolved through the read-only Admin SDK.
+Public/anyone and domain principals are deliberately absent from the schema.
+All subject and Drive resource identifiers are connection-scoped and opaque.
+
+Permission synchronization is evidence-gated: candidate documents are made
+ineligible before relationship changes and become eligible only after the
+complete desired tuple set is verified at least as fresh as the final write.
+Stale resources are revoked only following a complete scan. Authorization
+lookups use fully consistent SpiceDB `LookupResources`; PostgreSQL can reject
+stale/unverified results but can never grant access by itself.
+
+Reason:
+
+- Preserving Drive roles avoids destroying source semantics while retaining a
+  single Phase 5 `view` decision.
+- Explicit parents and recursive subject sets match Drive inheritance and
+  nested Workspace groups without application-side allow decisions.
+- Omitting wildcard/domain subjects prevents accidental public visibility.
+- The pre-invalidation, verification, version-CAS, and fully consistent read
+  rules make incomplete Google or SpiceDB state fail closed.
+
+Status: Accepted (2026-07-11).
+
 ## Open / Needs Explicit Confirmation
 
 Not yet decisions — flagged so they don't get silently locked in by omission:

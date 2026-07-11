@@ -113,7 +113,7 @@ recovery hardening are in place.
 
 The next implementation steps are:
 
-1. Start Phase 4 SpiceDB permission sync before exposing any answer path.
+1. Complete Phase 4 SpiceDB permission sync before exposing any answer path.
 2. Then Phase 5: real retrieval queries must compose the provenance guard
    and the SpiceDB allowed-source-document list (task moved from Phase 3
    into the Phase 5 tracker, with leak tests).

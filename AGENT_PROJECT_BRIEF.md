@@ -267,6 +267,14 @@ regardless of file type.
 
 Use SpiceDB. Do not invent a custom permission system.
 
+Phase 4 uses checked-in Authzed schema definitions prefixed with `kg/`. Drive
+roles remain distinct relationships (`reader`, `commenter`, `writer`,
+`file_organizer`, `organizer`, and `owner`) and combine into a `view`
+permission. Folder `parent->view` inheritance and recursive Google Group
+subject sets are modeled explicitly. Object IDs are deterministic hashes or
+database-key-derived opaque values; raw Drive IDs and email addresses never
+appear in SpiceDB object IDs, logs, or API responses.
+
 The permission model must represent:
 
 - Users
@@ -276,7 +284,8 @@ The permission model must represent:
 - Folder inheritance
 - Group membership
 - Direct sharing
-- Link/domain sharing if supported in the pilot
+- No public, anyone-link, or domain-wide principal in Phase 4; those resources
+  remain retrieval-ineligible until an explicit later policy models them
 
 The sync process should:
 
@@ -285,11 +294,23 @@ The sync process should:
 - Refresh document permissions separately from content extraction.
 - Handle permission-only changes without re-embedding documents.
 - Prefer live or frequently refreshed group membership resolution.
+- Resolve only ACL-referenced Google Groups through the read-only Admin SDK,
+  including pagination and nested membership with cycle protection.
+- Revoke stale relationships only after a complete Drive permission scan;
+  absence from partial or failed scans is never evidence for revocation.
+- Mark candidate documents ineligible before tuple mutation and only restore
+  eligibility after exact tuple verification using the final SpiceDB ZedToken.
+- Treat missing ACLs, unsupported roles/types, unresolved groups, hierarchy
+  cycles, SpiceDB failures, and verification mismatches as deny conditions.
 
 The query process should:
 
 - Ask SpiceDB which documents a user can see.
 - Restrict retrieval to Neo4j graph elements whose provenance is allowed.
+- Use fully consistent `LookupResources` calls and then gate returned opaque
+  resources against active PostgreSQL rows whose verified permission version
+  still matches. PostgreSQL stores synchronization evidence only and never
+  answers the authorization question.
 
 ## 11. Retrieval Requirements
 
@@ -450,13 +471,16 @@ Expected behavior:
 
 ### `POST /permissions/sync`
 
-Refreshes Drive permissions into SpiceDB.
+Creates an admin-only, rate-limited permission-sync audit run and queues it.
+The request cannot supply or widen Drive scope.
 
 Expected behavior:
 
-- Pull sharing metadata.
-- Update SpiceDB relationships.
-- Return counts for users, groups, folders, files, relationships.
+- Return HTTP 202 with only `run_id`, `status`, and `connection_id`.
+- A companion admin-only `GET /permissions/sync/{run_id}/` returns controlled
+  status/count fields and never names, emails, Drive IDs, ACLs, or exceptions.
+- Pull Drive ACL/folder metadata and referenced group membership, update and
+  verify SpiceDB relationships, and keep unverified documents ineligible.
 
 ### `POST /query`
 
