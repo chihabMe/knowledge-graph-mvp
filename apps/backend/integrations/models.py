@@ -61,6 +61,7 @@ class SourceDocument(models.Model):
             "Group membership unresolved",
         )
         INACTIVE_IN_SCOPE = "inactive_in_scope", "Inactive in selected scope"
+        NO_EFFECTIVE_GRANTS = "no_effective_grants", "No effective grants"
 
     connection = models.ForeignKey(
         DriveConnection,

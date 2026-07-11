@@ -202,6 +202,18 @@ class PermissionSyncTests(TestCase):
                 self.assertFalse(self.document.retrieval_eligible)
                 self.assertEqual(self.document.exclusion_reason, reason)
 
+    def test_document_without_any_grant_path_is_not_eligible(self):
+        run = self.run_sync(
+            [
+                DrivePermissionResource("folder", "root", permissions=[]),
+                DrivePermissionResource("document", "doc-1", [], permissions=[]),
+            ]
+        )
+        self.document.refresh_from_db()
+        self.assertEqual(run.status, PermissionSyncRun.Status.PARTIAL)
+        self.assertFalse(self.document.retrieval_eligible)
+        self.assertEqual(self.document.exclusion_reason, "no_effective_grants")
+
     def test_null_email_principal_fails_closed_without_crash(self):
         permissions = [{"id": "p", "type": "user", "role": "reader", "emailAddress": None}]
         run = self.run_sync(

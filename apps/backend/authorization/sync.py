@@ -282,9 +282,10 @@ def _desired_state(connection, group_resolver) -> SyncResult:
         if reason:
             excluded[document.pk] = reason
             continue
+        document_tuples: set[PermissionTuple] = set()
         for parent_id in document.parent_folder_ids:
             if parent_id in folder_by_drive_id:
-                desired.add(
+                document_tuples.add(
                     PermissionTuple(
                         "kgm/document",
                         resource_id,
@@ -293,7 +294,7 @@ def _desired_state(connection, group_resolver) -> SyncResult:
                         folder_object_id(connection.pk, parent_id),
                     )
                 )
-        desired.update(
+        document_tuples.update(
             _acl_tuples(
                 connection.pk,
                 "kgm/document",
@@ -303,6 +304,13 @@ def _desired_state(connection, group_resolver) -> SyncResult:
                 folder_by_drive_id,
             )
         )
+        # retrieval_eligible must imply at least one verified SpiceDB grant
+        # path; an empty tuple set would otherwise leave the flag trusted
+        # with nothing backing it.
+        if not document_tuples:
+            excluded[document.pk] = SourceDocument.ExclusionReason.NO_EFFECTIVE_GRANTS
+            continue
+        desired.update(document_tuples)
         eligible[document.pk] = document.source_permissions_version
     return SyncResult(frozenset(desired), eligible, excluded, len(memberships))
 
