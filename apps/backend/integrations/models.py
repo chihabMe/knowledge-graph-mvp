@@ -55,6 +55,12 @@ class SourceDocument(models.Model):
             "permission_metadata_incomplete",
             "Permission metadata incomplete",
         )
+        UNSUPPORTED_PERMISSION = "unsupported_permission", "Unsupported permission"
+        GROUP_MEMBERSHIP_UNRESOLVED = (
+            "group_membership_unresolved",
+            "Group membership unresolved",
+        )
+        INACTIVE_IN_SCOPE = "inactive_in_scope", "Inactive in selected scope"
 
     connection = models.ForeignKey(
         DriveConnection,
@@ -81,6 +87,11 @@ class SourceDocument(models.Model):
     creator_email = models.EmailField(blank=True)
     source_permissions_version = models.CharField(max_length=64, blank=True)
     last_permission_sync_time = models.DateTimeField(null=True, blank=True)
+    active_in_scope = models.BooleanField(default=True)
+    last_seen_sync_marker = models.CharField(max_length=36, blank=True)
+    spicedb_permissions_version = models.CharField(max_length=64, blank=True)
+    spicedb_revision = models.CharField(max_length=1024, blank=True)
+    spicedb_verified_at = models.DateTimeField(null=True, blank=True)
     graph_extraction_status = models.CharField(
         max_length=16,
         choices=GraphExtractionStatus.choices,
@@ -118,6 +129,7 @@ class SourceDocument(models.Model):
             models.Index(fields=["drive_file_id"]),
             models.Index(fields=["retrieval_eligible"]),
             models.Index(fields=["source_permissions_version"]),
+            models.Index(fields=["connection", "active_in_scope"]),
         ]
 
     def __str__(self) -> str:
@@ -134,6 +146,7 @@ class DrivePermissionSnapshot(models.Model):
     # SECURITY: contains the raw Drive permission entries, including client
     # email addresses. Never expose via an API serializer and never log it.
     raw_permissions = models.JSONField(default=list, blank=True)
+    permissions_complete = models.BooleanField(default=True)
     has_public_link = models.BooleanField(default=False)
     has_domain_visibility = models.BooleanField(default=False)
     captured_at = models.DateTimeField(default=timezone.now)
@@ -146,6 +159,49 @@ class DrivePermissionSnapshot(models.Model):
 
     def __str__(self) -> str:
         return f"Permissions for {self.source_document_id}"
+
+
+class DriveFolder(models.Model):
+    connection = models.ForeignKey(
+        DriveConnection,
+        on_delete=models.CASCADE,
+        related_name="drive_folders",
+    )
+    drive_folder_id = models.CharField(max_length=255)
+    parent_folder_ids = models.JSONField(default=list, blank=True)
+    source_permissions_version = models.CharField(max_length=64, blank=True)
+    active_in_scope = models.BooleanField(default=True)
+    last_seen_sync_marker = models.CharField(max_length=36, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["connection", "drive_folder_id"],
+                name="unique_drive_folder_per_connection",
+            )
+        ]
+        indexes = [models.Index(fields=["connection", "active_in_scope"])]
+
+    def __str__(self) -> str:
+        return f"Drive folder {self.pk or 'unsaved'}"
+
+
+class DriveFolderPermissionSnapshot(models.Model):
+    drive_folder = models.OneToOneField(
+        DriveFolder,
+        on_delete=models.CASCADE,
+        related_name="permission_snapshot",
+    )
+    source_permissions_version = models.CharField(max_length=64)
+    # SECURITY: raw ACL metadata. Never serialize or log this field.
+    raw_permissions = models.JSONField(default=list, blank=True)
+    permissions_complete = models.BooleanField(default=True)
+    captured_at = models.DateTimeField(default=timezone.now)
+
+    def __str__(self) -> str:
+        return f"Folder permissions {self.drive_folder_id}"
 
 
 class SourceDocumentContent(models.Model):
@@ -227,4 +283,55 @@ class DriveSyncRun(models.Model):
             scope_type=connection.scope_type,
             root_folder_id=connection.root_folder_id,
             shared_drive_id=connection.shared_drive_id,
+        )
+
+
+class PermissionSyncRun(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        PARTIAL = "partial", "Partial"
+        FAILED = "failed", "Failed"
+
+    connection = models.ForeignKey(
+        DriveConnection,
+        on_delete=models.PROTECT,
+        related_name="permission_sync_runs",
+    )
+    triggered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="permission_sync_runs",
+    )
+    actor_email = models.EmailField(blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
+    documents_seen = models.PositiveIntegerField(default=0)
+    folders_seen = models.PositiveIntegerField(default=0)
+    groups_resolved = models.PositiveIntegerField(default=0)
+    relationships_touched = models.PositiveIntegerField(default=0)
+    relationships_deleted = models.PositiveIntegerField(default=0)
+    documents_verified = models.PositiveIntegerField(default=0)
+    documents_excluded = models.PositiveIntegerField(default=0)
+    error_code = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["status", "created_at"])]
+
+    def __str__(self) -> str:
+        return f"Permission sync {self.pk or 'unsaved'} ({self.status})"
+
+    @classmethod
+    def create_for_connection(cls, connection, *, triggered_by=None):
+        actor_email = getattr(triggered_by, "email", "") if triggered_by else ""
+        return cls.objects.create(
+            connection=connection,
+            triggered_by=triggered_by,
+            actor_email=actor_email,
         )
