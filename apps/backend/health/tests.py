@@ -72,3 +72,13 @@ class HealthEndpointTests(SimpleTestCase):
         self.assertEqual(response.json()["services"]["spicedb"], "error")
         self.assertNotIn("dns.internal", response.content.decode())
         self.assertNotIn("secret-key", response.content.decode())
+
+    def test_spicedb_probe_is_bounded_and_reuses_one_client(self):
+        import health.checks as checks
+
+        with patch.object(checks, "_spicedb_probe", None):
+            with patch("health.checks.AuthzedSpiceDB") as client_class:
+                checks.check_spicedb()
+                checks.check_spicedb()
+            client_class.assert_called_once_with(timeout=1)
+            self.assertEqual(client_class.return_value.check.call_count, 2)

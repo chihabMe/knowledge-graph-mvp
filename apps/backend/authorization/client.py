@@ -79,12 +79,12 @@ def _zed_token(response) -> str:
 class AuthzedSpiceDB:
     """Small synchronous adapter around the official Authzed v1 client."""
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, *, timeout=None):
         self._client = client or Client(
             settings.SPICEDB_GRPC_URL,
             grpcutil.insecure_bearer_token_credentials(settings.SPICEDB_GRPC_PRESHARED_KEY),
         )
-        self._timeout = settings.SPICEDB_REQUEST_TIMEOUT_SECONDS
+        self._timeout = timeout if timeout is not None else settings.SPICEDB_REQUEST_TIMEOUT_SECONDS
 
     def apply_schema(self, schema: str) -> str:
         response = self._client.WriteSchema(
