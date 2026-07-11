@@ -88,6 +88,7 @@ INSTALLED_APPS = [
     "health",
     "integrations",
     "graph",
+    "authorization",
 ]
 
 MIDDLEWARE = [
@@ -179,6 +180,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "drive-roots": env("DRIVE_ROOTS_THROTTLE_RATE", default="30/hour"),
         "drive-sync": env("DRIVE_SYNC_THROTTLE_RATE", default="10/hour"),
+        "permission-sync": env("PERMISSION_SYNC_THROTTLE_RATE", default="10/hour"),
     },
 }
 
@@ -212,6 +214,20 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 900.0,
     },
 }
+
+SPICEDB_GRPC_URL = env("SPICEDB_GRPC_URL", default="spicedb:50051")
+SPICEDB_GRPC_PRESHARED_KEY = env("SPICEDB_GRPC_PRESHARED_KEY", default="change-this-spicedb-key")
+_development_context = DEBUG or bool(management_commands.intersection({"test", "pytest"}))
+if not _development_context and SPICEDB_GRPC_PRESHARED_KEY == "change-this-spicedb-key":
+    raise ImproperlyConfigured(
+        "SPICEDB_GRPC_PRESHARED_KEY must not use the development default outside development."
+    )
+SPICEDB_REQUEST_TIMEOUT_SECONDS = env.int("SPICEDB_REQUEST_TIMEOUT_SECONDS", default=10)
+SPICEDB_BATCH_SIZE = env.int("SPICEDB_BATCH_SIZE", default=500)
+if SPICEDB_REQUEST_TIMEOUT_SECONDS < 1:
+    raise ImproperlyConfigured("SPICEDB_REQUEST_TIMEOUT_SECONDS must be positive.")
+if not 1 <= SPICEDB_BATCH_SIZE <= 1000:
+    raise ImproperlyConfigured("SPICEDB_BATCH_SIZE must be between 1 and 1000.")
 
 NEO4J_URI = env("NEO4J_URI", default="bolt://neo4j:7687")
 NEO4J_USER = env("NEO4J_USER", default="neo4j")
