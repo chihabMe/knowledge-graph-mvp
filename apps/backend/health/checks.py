@@ -5,6 +5,8 @@ from django.db import connections
 from neo4j import GraphDatabase
 from redis import Redis
 
+from authorization.client import AuthzedSpiceDB
+
 ServiceCheck = Callable[[], None]
 
 
@@ -39,11 +41,16 @@ def check_neo4j() -> None:
         driver.close()
 
 
+def check_spicedb() -> None:
+    AuthzedSpiceDB().check()
+
+
 SERVICE_CHECKS: dict[str, ServiceCheck] = {
     "django": check_django,
     "postgres": check_postgres,
     "redis": check_redis,
     "neo4j": check_neo4j,
+    "spicedb": check_spicedb,
 }
 
 
