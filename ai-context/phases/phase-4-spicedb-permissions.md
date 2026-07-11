@@ -25,7 +25,7 @@ Model and enforce Google Drive visibility using SpiceDB before any retrieval occ
 
 ## Selected Contract
 
-- Checked-in `kg/`-prefixed schema with distinct Drive roles combined into
+- Checked-in `kgm/`-prefixed schema (`kg/` is invalid in SpiceDB) with distinct Drive roles combined into
   `view`, explicit folder parents, and recursive group subject sets.
 - Deterministic connection-scoped opaque IDs; no raw emails or Drive IDs in
   logs or public responses.
@@ -40,23 +40,25 @@ Model and enforce Google Drive visibility using SpiceDB before any retrieval occ
 
 ## Tasks
 
-- [~] Design SpiceDB schema. Effort: Extra High.
-- [ ] Add schema migration/load workflow. Effort: Extra High.
-- [ ] Sync Drive users and groups. Effort: Extra High.
-- [ ] Sync folder/document relationships. Effort: Extra High.
-- [ ] Sync document permissions. Effort: Extra High.
-- [ ] Implement allowed-document lookup. Effort: Extra High.
-- [ ] Add permission leak tests. Effort: Extra High.
+- [x] Design SpiceDB schema. Effort: Extra High.
+- [x] Add schema migration/load workflow. Effort: Extra High.
+- [x] Sync Drive users and groups. Effort: Extra High.
+- [x] Sync folder/document relationships. Effort: Extra High.
+- [x] Sync document permissions. Effort: Extra High.
+- [x] Implement allowed-document lookup. Effort: Extra High.
+- [x] Add permission leak tests. Effort: Extra High.
 
 ## Validation
 
-- [ ] User A can access allowed documents.
-- [ ] User B cannot access restricted documents.
-- [ ] Folder inheritance works.
-- [ ] Group access works.
-- [ ] Permission-only changes do not require re-embedding.
-- [ ] No restricted document existence is leaked through API responses.
+- [x] User A can access allowed documents.
+- [x] User B cannot access restricted documents.
+- [x] Folder inheritance works.
+- [x] Group access works.
+- [x] Permission-only changes do not require re-embedding.
+- [x] No restricted document existence is leaked through API responses.
 
 ## Completion Status
 
-Not started.
+Code complete with live delegated Google Workspace ACL and Directory group
+validation pending. Local SpiceDB validation passed for direct, nested-group,
+multi-level folder, deny, and consistent-read revocation behavior.
