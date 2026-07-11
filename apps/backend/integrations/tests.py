@@ -440,6 +440,56 @@ class GoogleDriveMetadataClientTests(TestCase):
         self.assertEqual(by_id["file-1"].parent_folder_ids, ["folder-root"])
         self.assertEqual(by_id["file-2"].parent_folder_ids, ["folder-sub"])
 
+    def test_permission_scan_reuses_the_walk_without_refetching_folders(self):
+        # folder_names deliberately covers only the root: a files().get for
+        # any other folder would KeyError, proving the scan builds folder
+        # resources from the listing entries the walk already has.
+        service = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [
+                    [
+                        {**_folder_entry("folder-sub", "Reports"), "parents": ["folder-root"]},
+                        _file_entry(
+                            "file-1", "Overview.pdf", parents=["folder-root", "folder-sub"]
+                        ),
+                    ]
+                ],
+                "folder-sub": [
+                    [
+                        _file_entry(
+                            "file-1", "Overview.pdf", parents=["folder-root", "folder-sub"]
+                        ),
+                        _file_entry("file-2", "Q2.pdf", parents=["folder-sub"]),
+                    ],
+                ],
+            },
+            permission_pages={
+                "file-2": [[{"id": "perm-1", "type": "user", "role": "reader"}]],
+            },
+        )
+
+        resources = GoogleDriveMetadataClient(service=service).list_permission_resources(
+            self._folder_connection()
+        )
+
+        self.assertEqual(
+            {(resource.resource_type, resource.drive_id) for resource in resources},
+            {
+                ("folder", "folder-root"),
+                ("folder", "folder-sub"),
+                ("document", "file-1"),
+                ("document", "file-2"),
+            },
+        )
+        self.assertEqual(len(resources), 4)  # multi-parent file-1 emitted once
+        by_id = {resource.drive_id: resource for resource in resources}
+        self.assertEqual(by_id["folder-sub"].parent_folder_ids, ["folder-root"])
+        self.assertEqual(
+            [permission["id"] for permission in by_id["file-2"].permissions],
+            ["perm-1"],
+        )
+
     def test_paginates_file_listings_and_permission_listings(self):
         service = FakeGoogleDriveService(
             folder_names={"folder-root": "Pilot"},

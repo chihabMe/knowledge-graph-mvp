@@ -189,28 +189,21 @@ class GoogleDriveMetadataClient:
         """Scan metadata and ACLs only; never export or queue document content."""
         service = self._service or build_drive_service(connection)
         root_id = self._root_id(connection)
-        resources: list[DrivePermissionResource] = []
-        pending = [root_id]
-        seen: set[str] = set()
-        while pending:
-            folder_id = pending.pop(0)
-            if folder_id in seen:
-                continue
-            seen.add(folder_id)
-            folder_entry = (
-                service.files()
-                .get(fileId=folder_id, fields="id, mimeType, parents", supportsAllDrives=True)
-                .execute()
-            )
-            resources.append(self._permission_resource(service, folder_entry, "folder"))
-            for entry in self._list_children(service, connection, folder_id):
-                if entry.get("mimeType") == FOLDER_MIME_TYPE:
-                    pending.append(entry["id"])
-                    continue
-                if entry.get("id") in seen:
-                    continue
-                seen.add(entry["id"])
-                resources.append(self._permission_resource(service, entry, "document"))
+        # Only the root needs a lookup; every other entry (folders included)
+        # arrives with id/mimeType/parents from the shared walk's listings.
+        root_entry = (
+            service.files()
+            .get(fileId=root_id, fields="id, mimeType, parents", supportsAllDrives=True)
+            .execute()
+        )
+        resources = [self._permission_resource(service, root_entry, "folder")]
+        # No on_listing_error: a folder-listing failure propagates so the
+        # permission run fails closed instead of revoking from a partial scan.
+        for entry, _folder_path in self._walk_files(
+            service, connection, root_id, "", include_folders=True
+        ):
+            resource_type = "folder" if entry.get("mimeType") == FOLDER_MIME_TYPE else "document"
+            resources.append(self._permission_resource(service, entry, resource_type))
         return resources
 
     def _permission_resource(self, service, entry, resource_type):
@@ -360,6 +353,7 @@ class GoogleDriveMetadataClient:
         root_path: str,
         *,
         on_listing_error=None,
+        include_folders=False,
     ):
         """Breadth-first walk of the scoped tree, yielding (file_entry, folder_path).
 
@@ -373,6 +367,9 @@ class GoogleDriveMetadataClient:
         the callback is invoked per failed folder and the walk continues — the
         diagnostic caller counts those failures instead of aborting. Callers
         that cap the walk simply stop iterating (e.g. `break`).
+
+        With `include_folders` each discovered folder entry (not the root) is
+        also yielded once, before its own children.
         """
         pending_folders: list[tuple[str, str]] = [(root_id, root_path)]
         seen_folders = {root_id}
@@ -400,6 +397,8 @@ class GoogleDriveMetadataClient:
                         pending_folders.append(
                             (entry["id"], f"{folder_path}/{entry.get('name', '')}")
                         )
+                        if include_folders:
+                            yield entry, folder_path
                     continue
                 if entry["id"] in seen_files:
                     continue
