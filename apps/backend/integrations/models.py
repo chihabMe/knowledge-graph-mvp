@@ -176,24 +176,31 @@ class SourceDocument(models.Model):
         )
 
 
-class DrivePermissionSnapshot(models.Model):
+class PermissionSnapshotBase(models.Model):
+    """Raw ACL capture for one Drive resource; the parent row keeps the
+    authoritative source_permissions_version so it is not duplicated here."""
+
+    # SECURITY: contains the raw Drive permission entries, including client
+    # email addresses. Never expose via an API serializer and never log it.
+    raw_permissions = models.JSONField(default=list, blank=True)
+    permissions_complete = models.BooleanField(default=True)
+    captured_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        abstract = True
+
+
+class DrivePermissionSnapshot(PermissionSnapshotBase):
     source_document = models.OneToOneField(
         SourceDocument,
         on_delete=models.CASCADE,
         related_name="permission_snapshot",
     )
-    source_permissions_version = models.CharField(max_length=64)
-    # SECURITY: contains the raw Drive permission entries, including client
-    # email addresses. Never expose via an API serializer and never log it.
-    raw_permissions = models.JSONField(default=list, blank=True)
-    permissions_complete = models.BooleanField(default=True)
     has_public_link = models.BooleanField(default=False)
     has_domain_visibility = models.BooleanField(default=False)
-    captured_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         indexes = [
-            models.Index(fields=["source_permissions_version"]),
             models.Index(fields=["has_public_link", "has_domain_visibility"]),
         ]
 
@@ -228,17 +235,12 @@ class DriveFolder(models.Model):
         return f"Drive folder {self.pk or 'unsaved'}"
 
 
-class DriveFolderPermissionSnapshot(models.Model):
+class DriveFolderPermissionSnapshot(PermissionSnapshotBase):
     drive_folder = models.OneToOneField(
         DriveFolder,
         on_delete=models.CASCADE,
         related_name="permission_snapshot",
     )
-    source_permissions_version = models.CharField(max_length=64)
-    # SECURITY: raw ACL metadata. Never serialize or log this field.
-    raw_permissions = models.JSONField(default=list, blank=True)
-    permissions_complete = models.BooleanField(default=True)
-    captured_at = models.DateTimeField(default=timezone.now)
 
     def __str__(self) -> str:
         return f"Folder permissions {self.drive_folder_id}"

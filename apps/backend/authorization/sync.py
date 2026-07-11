@@ -2,6 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from uuid import uuid4
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from django.utils import timezone
 
@@ -141,7 +142,6 @@ def _persist_complete_scan(connection, resources: list[DrivePermissionResource])
                 DriveFolderPermissionSnapshot.objects.update_or_create(
                     drive_folder=folder,
                     defaults={
-                        "source_permissions_version": version,
                         "raw_permissions": resource.permissions,
                         "permissions_complete": not resource.permissions_fetch_failed,
                         "captured_at": now,
@@ -165,7 +165,6 @@ def _persist_complete_scan(connection, resources: list[DrivePermissionResource])
                 DrivePermissionSnapshot.objects.update_or_create(
                     source_document=document,
                     defaults={
-                        "source_permissions_version": version,
                         "raw_permissions": resource.permissions,
                         "permissions_complete": not resource.permissions_fetch_failed,
                         "has_public_link": has_public_link(resource.permissions),
@@ -318,7 +317,7 @@ def _desired_state(connection, group_resolver) -> SyncResult:
 def _snapshot(resource):
     try:
         return resource.permission_snapshot
-    except (DrivePermissionSnapshot.DoesNotExist, DriveFolderPermissionSnapshot.DoesNotExist):
+    except ObjectDoesNotExist:
         return None
 
 

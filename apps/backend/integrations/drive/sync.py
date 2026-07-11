@@ -142,7 +142,6 @@ def sync_drive_metadata(
                 DrivePermissionSnapshot.objects.update_or_create(
                     source_document=document,
                     defaults={
-                        "source_permissions_version": permissions_version,
                         "raw_permissions": permissions,
                         "permissions_complete": not file_metadata.permissions_fetch_failed,
                         "has_public_link": public_link,
