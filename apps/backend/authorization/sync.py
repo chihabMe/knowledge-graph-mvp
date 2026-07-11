@@ -314,6 +314,11 @@ def _snapshot(resource):
         return None
 
 
+def _principal_email(permission) -> str:
+    email = permission.get("emailAddress")
+    return email.strip().lower() if isinstance(email, str) else ""
+
+
 def _referenced_groups(folders, documents) -> set[str]:
     result: set[str] = set()
     for resource in [*folders, *documents]:
@@ -321,8 +326,8 @@ def _referenced_groups(folders, documents) -> set[str]:
         if not snapshot:
             continue
         for permission in snapshot.raw_permissions:
-            if permission.get("type") == "group" and permission.get("emailAddress"):
-                result.add(permission["emailAddress"].strip().lower())
+            if permission.get("type") == "group" and _principal_email(permission):
+                result.add(_principal_email(permission))
     return result
 
 
@@ -339,7 +344,7 @@ def _resource_acl_reason(snapshot, unresolved_groups: set[str]) -> str:
             continue
         role = permission.get("role")
         principal_type = permission.get("type")
-        email = str(permission.get("emailAddress", "")).strip().lower()
+        email = _principal_email(permission)
         if role not in SUPPORTED_ROLES or principal_type not in {"user", "group"} or not email:
             return SourceDocument.ExclusionReason.UNSUPPORTED_PERMISSION
         if permission.get("pendingOwner"):
@@ -374,7 +379,7 @@ def _acl_tuples(
             permission, parent_ids, folder_by_drive_id
         ):
             continue
-        email = permission["emailAddress"].strip().lower()
+        email = _principal_email(permission)
         principal_type = permission["type"]
         subject_type = "kgm/user" if principal_type == "user" else "kgm/group"
         subject_id = (
