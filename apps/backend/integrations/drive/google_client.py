@@ -16,6 +16,7 @@ from django.conf import settings
 from integrations.drive.client import (
     DriveFileMetadata,
     DrivePermissionAccessReport,
+    DrivePermissionResource,
     DriveRootCandidate,
 )
 from integrations.models import DriveConnection
@@ -32,7 +33,8 @@ ROOT_FOLDER_LIST_FIELDS = "nextPageToken, files(id, name, webViewLink, driveId)"
 SHARED_DRIVE_LIST_FIELDS = "nextPageToken, drives(id, name)"
 PERMISSION_FIELDS = (
     "nextPageToken, permissions(id, type, role, emailAddress, domain, "
-    "allowFileDiscovery, deleted, pendingOwner)"
+    "allowFileDiscovery, deleted, pendingOwner, "
+    "permissionDetails(inherited,inheritedFrom,permissionType,role))"
 )
 ROOT_FOLDER_QUERY = (
     "sharedWithMe and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
@@ -179,6 +181,51 @@ class GoogleDriveMetadataClient:
                 candidate.name.lower(),
                 candidate.root_id,
             ),
+        )
+
+    def list_permission_resources(
+        self, connection: DriveConnection
+    ) -> list[DrivePermissionResource]:
+        """Scan metadata and ACLs only; never export or queue document content."""
+        service = self._service or build_drive_service(connection)
+        root_id = self._root_id(connection)
+        resources: list[DrivePermissionResource] = []
+        pending = [root_id]
+        seen: set[str] = set()
+        while pending:
+            folder_id = pending.pop(0)
+            if folder_id in seen:
+                continue
+            seen.add(folder_id)
+            folder_entry = (
+                service.files()
+                .get(fileId=folder_id, fields="id, mimeType, parents", supportsAllDrives=True)
+                .execute()
+            )
+            resources.append(self._permission_resource(service, folder_entry, "folder"))
+            for entry in self._list_children(service, connection, folder_id):
+                if entry.get("mimeType") == FOLDER_MIME_TYPE:
+                    pending.append(entry["id"])
+                    continue
+                if entry.get("id") in seen:
+                    continue
+                seen.add(entry["id"])
+                resources.append(self._permission_resource(service, entry, "document"))
+        return resources
+
+    def _permission_resource(self, service, entry, resource_type):
+        try:
+            permissions = self._list_permissions(service, entry["id"])
+            failed = False
+        except DRIVE_API_ERRORS:
+            permissions = []
+            failed = True
+        return DrivePermissionResource(
+            resource_type=resource_type,
+            drive_id=entry["id"],
+            parent_folder_ids=entry.get("parents") or [],
+            permissions=permissions,
+            permissions_fetch_failed=failed,
         )
 
     def check_permission_access(
