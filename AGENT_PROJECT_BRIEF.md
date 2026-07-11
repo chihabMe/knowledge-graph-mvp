@@ -141,34 +141,46 @@ The LLM should never receive restricted context.
 
 Every piece of knowledge written to Neo4j must know where it came from.
 
-Required provenance fields:
+Required provenance fields on **every** node, relationship, and chunk
+(ADR-011; this is what the retrieval guard filters on):
 
-- `source_documents`
-- `source_chunk_ids`
-- `extraction_run_id`
-- `confidence`
-- `created_at`
-- `updated_at`
+- `source_document_id`
+- `connection_id`
+- `drive_file_id`
+- `source_permissions_version`
 
-Core document metadata:
+Each graph element derives from exactly **one** source document: entities are
+scoped per document and never merged across documents (ADR-010), so a plural
+`source_documents` list cannot occur and is not stored. Chunk-level (fact)
+attribution is structural rather than a field: every entity anchors to the
+chunk it was found in via a `mentions` edge, and every extracted relationship
+edge carries the `chunk_index` of its source chunk.
+
+Core document metadata (on the Document node):
 
 - `source_document_id`
 - `drive_file_id`
 - `drive_url`
 - `title`
 - `mime_type`
-- `modified_time`
-- `content_hash`
+- `content_hash` — identifies the extracted content version; extraction jobs
+  refuse to overwrite a newer version
 - `source_permissions_version`
 
-No orphan facts are allowed. If a node, relationship, chunk, or extracted fact
-cannot point back to source documents, it should not be used for retrieval.
+Deferred audit metadata (optional, not required for permission safety, and
+never a substitute for the required fields above): `extraction_run_id`,
+`confidence`, per-element `created_at`/`updated_at`. Re-extraction fully
+replaces a document's derived graph data, so element age and version follow
+from the Document node's `content_hash`.
 
-Strict default:
+No orphan facts are allowed. If a node, relationship, chunk, or extracted fact
+cannot point back to its source document, it must not be used for retrieval.
+
+Strict default (enforced by construction under per-document scoping):
 
 ```text
-If fact-level provenance is not reliable, require all source documents connected
-to that graph element to be visible before exposing it.
+Every graph element belongs to exactly one source document; expose it only if
+that document is visible to the requesting user.
 ```
 
 Preferred long-term behavior:

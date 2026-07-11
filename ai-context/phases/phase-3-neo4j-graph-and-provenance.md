@@ -88,6 +88,13 @@ no-op, so no real embeddings exist yet), and the provenance guard becomes
 enforceable only when Phase 5 composes it into real retrieval queries —
 that wiring task, with its leak tests, now lives in the Phase 5 tracker.
 
+The provenance-contract question raised in review (the graph stores a
+narrower shape than the brief's original section 7) is resolved: ADR-011
+(2026-07-11) adopts the implemented single-document contract as canonical
+and defers `extraction_run_id`/`confidence`/per-element timestamps to
+optional audit metadata. The brief and the security-rules summary now match
+the code; this is no longer a gate before Phase 4/5.
+
 What was built: `graph` Django app with a process-wide Neo4j driver
 (`graph/db.py`), idempotent constraint + vector-index setup (`manage.py
 graph_setup`), ontology as code mirroring the brief's section 8, an

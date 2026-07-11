@@ -103,7 +103,7 @@ python manage.py check --deploy
 
 - Use Neo4j for graph data, document/chunk graph representation, entity relationships, graph traversal, and vector retrieval.
 - Every graph node, relationship, and chunk derived from source material must include source provenance fields.
-- Required provenance fields are `source_documents`, `source_chunk_ids`, `extraction_run_id`, `confidence`, `created_at`, and `updated_at`.
+- Required provenance fields (ADR-011) are `source_document_id`, `connection_id`, `drive_file_id`, and `source_permissions_version`; chunk attribution is structural (`mentions` edges, `chunk_index` on relationship edges). `extraction_run_id`, `confidence`, and per-element timestamps are deferred audit metadata, never a substitute for the required fields.
 - Do not create graph facts without source document references.
 - Use transactions for multi-step graph writes.
 - Do not fetch large graph result sets all at once.

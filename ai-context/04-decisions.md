@@ -238,6 +238,40 @@ live on 2026-07-09 (see the Phase 3 tracker); what remains is a production
 OpenRouter configuration (real key and model). The deterministic
 `ParagraphChunkExtractor` remains the default engine until then.
 
+## ADR-011: Single-Document Provenance Contract; Audit Metadata Deferred
+
+Decision: The canonical provenance contract (brief section 7) is the shape
+Phase 3 implemented: every Neo4j node, relationship, and chunk carries
+`source_document_id`, `connection_id`, `drive_file_id`, and
+`source_permissions_version`; chunk-level attribution is structural
+(`mentions` edges for entities, `chunk_index` on extracted relationship
+edges); `Document.content_hash` identifies the extracted content version.
+The brief's original `source_documents` / `source_chunk_ids` /
+`extraction_run_id` / `confidence` / per-element timestamp fields are not
+required — the first two are subsumed by the implemented shape, the rest are
+deferred audit metadata.
+
+Reason:
+
+- Under ADR-010's per-document entity scoping, every graph element derives
+  from exactly one source document, so a plural `source_documents` list
+  always holds one value; the singular identity triple is equivalent,
+  simpler, and is what the retrieval guard (`graph/guard.py`) filters on.
+  The brief's strict-default rule ("all connected source documents must be
+  visible") is thereby enforced by construction.
+- `confidence` would be fabricated: neither the deterministic extractor nor
+  the LLM engine emits a calibrated score. Storing a fake value invites
+  someone to trust it later.
+- `extraction_run_id` and per-element timestamps add audit value only;
+  re-extraction fully replaces a document's derived data, so version and age
+  follow from `Document.content_hash`. They may be added later without
+  changing the permission model, and must never substitute for the required
+  identity fields.
+
+Status: Accepted (2026-07-11). Docs-only resolution — brief section 7 and
+`ai-context/07-ai-coding-security-rules.md` updated to match the
+implementation; no graph or writer changes.
+
 ## Open / Needs Explicit Confirmation
 
 Not yet decisions — flagged so they don't get silently locked in by omission:
