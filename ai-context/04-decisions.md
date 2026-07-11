@@ -274,7 +274,8 @@ implementation; no graph or writer changes.
 
 ## ADR-012: Drive Roles And Recursive Groups In A Fail-Closed SpiceDB Model
 
-Decision: Phase 4 models each supported Google Drive role as a distinct
+Decision: Phase 4 uses the valid `kgm/` namespace prefix (`kg/` is too short
+for SpiceDB's namespace grammar) and models each supported Google Drive role as a distinct
 SpiceDB relationship and composes them into `view`; folders inherit through
 explicit parent relationships, and Google Groups use recursive subject sets.
 Only ACL-referenced groups are resolved through the read-only Admin SDK.
