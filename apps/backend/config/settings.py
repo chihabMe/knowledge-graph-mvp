@@ -207,7 +207,14 @@ DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int("DRIVE_SYNC_STALE_RUN_TIMEOUT_MIN
 PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int(
     "PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120
 )
+# Group revocations are invisible to per-document ACL hashes, so this
+# interval bounds how long a revoked group member can retain access.
+PERMISSION_SYNC_INTERVAL_SECONDS = env.int("PERMISSION_SYNC_INTERVAL_SECONDS", default=900)
 CELERY_BEAT_SCHEDULE = {
+    "schedule-permission-syncs": {
+        "task": "integrations.schedule_permission_syncs",
+        "schedule": float(PERMISSION_SYNC_INTERVAL_SECONDS),
+    },
     "sweep-stale-drive-sync-runs": {
         "task": "integrations.sweep_stale_drive_sync_runs",
         "schedule": 900.0,

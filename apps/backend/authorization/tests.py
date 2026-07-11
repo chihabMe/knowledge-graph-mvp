@@ -21,7 +21,11 @@ from integrations.drive.groups import GoogleGroupResolver, GroupMembership, Grou
 from integrations.drive.permissions import source_permissions_version
 from integrations.drive.sync import sync_drive_metadata
 from integrations.models import DriveConnection, DriveSyncRun, PermissionSyncRun, SourceDocument
-from integrations.tasks import run_permission_sync, sweep_stale_permission_sync_runs
+from integrations.tasks import (
+    run_permission_sync,
+    schedule_permission_syncs,
+    sweep_stale_permission_sync_runs,
+)
 
 
 class FakeDriveClient:
@@ -487,6 +491,28 @@ class PermissionTaskTests(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, PermissionSyncRun.Status.QUEUED)
         self.assertEqual(run.error_code, "")
+
+    def test_beat_schedules_permission_sync_and_sweeper(self):
+        from django.conf import settings
+
+        tasks = {entry["task"] for entry in settings.CELERY_BEAT_SCHEDULE.values()}
+        self.assertIn("integrations.schedule_permission_syncs", tasks)
+        self.assertIn("integrations.sweep_stale_permission_sync_runs", tasks)
+
+    def test_scheduler_enqueues_one_run_per_ready_connection(self):
+        DriveConnection.objects.create(workspace_domain="example.com")  # no root
+        busy = DriveConnection.objects.create(
+            workspace_domain="example.com", root_folder_id="busy-root"
+        )
+        PermissionSyncRun.objects.create(
+            connection=busy, status=PermissionSyncRun.Status.RUNNING
+        )
+        with patch("integrations.tasks.run_permission_sync.delay") as delay:
+            result = schedule_permission_syncs.run()
+        self.assertEqual(result, {"scheduled": 1})
+        run = PermissionSyncRun.objects.get(connection=self.connection)
+        delay.assert_called_once_with(run.pk)
+        self.assertEqual(run.status, PermissionSyncRun.Status.QUEUED)
 
     def test_stale_running_run_is_swept_failed(self):
         stale = PermissionSyncRun.objects.create(

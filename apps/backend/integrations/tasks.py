@@ -17,6 +17,7 @@ from integrations.drive.google_client import (
 )
 from integrations.drive.sync import sync_drive_metadata
 from integrations.models import (
+    DriveConnection,
     DriveSyncRun,
     PermissionSyncRun,
     SourceDocument,
@@ -157,6 +158,30 @@ def run_drive_sync(run_id: int) -> dict[str, int | str]:
         queue_extraction=queue_document_extraction.delay,
     )
     return {"run_id": run.pk, "status": run.status}
+
+
+@shared_task(name="integrations.schedule_permission_syncs")
+def schedule_permission_syncs() -> dict[str, int]:
+    """Enqueue a periodic permission run per configured connection.
+
+    Group membership changes never alter a document's own ACL hash, so the
+    drive-sync preserve gate cannot see them; only a periodic reconciliation
+    deletes stale SpiceDB member tuples. This beat task bounds revocation
+    staleness to its schedule interval.
+    """
+    scheduled = 0
+    for connection in DriveConnection.objects.filter(enabled=True).order_by("pk"):
+        if not connection.effective_root_id:
+            continue
+        if PermissionSyncRun.objects.filter(
+            connection=connection,
+            status__in=[PermissionSyncRun.Status.QUEUED, PermissionSyncRun.Status.RUNNING],
+        ).exists():
+            continue
+        run = PermissionSyncRun.create_for_connection(connection)
+        run_permission_sync.delay(run.pk)
+        scheduled += 1
+    return {"scheduled": scheduled}
 
 
 @shared_task(name="integrations.sweep_stale_permission_sync_runs")
