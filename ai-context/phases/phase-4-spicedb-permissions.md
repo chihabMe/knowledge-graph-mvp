@@ -30,9 +30,15 @@ Model and enforce Google Drive visibility using SpiceDB before any retrieval occ
 - Deterministic connection-scoped opaque IDs; no raw emails or Drive IDs in
   logs or public responses.
 - Public/anyone and domain principals remain excluded.
-- Permission runs are durable, admin-only, rate-limited, and server-scoped.
-- Candidate documents are ineligible until the exact tuple set is verified at
-  least as fresh as the final write token and its ACL version still matches.
+- Permission runs are durable, admin-only, rate-limited, and server-scoped;
+  Celery beat also schedules them periodically because group-membership
+  revocations never change a document's ACL hash, so the beat interval is the
+  revocation bound. A sweeper fails runs stuck in RUNNING.
+- Candidate documents become eligible only when the exact tuple set is
+  verified at least as fresh as the final write token, the ACL version still
+  matches, and at least one grant path exists. A failed run keeps the previous
+  verified state instead of blanking the connection; the fully consistent
+  SpiceDB lookup stays the query-time gate.
 - Stale revocation occurs only after a complete scan; all incomplete external
   state fails closed.
 - Phase 5 obtains its allowlist only through fully consistent SpiceDB
