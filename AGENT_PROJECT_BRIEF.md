@@ -63,12 +63,13 @@ Drive validation confirmed the expected folder-sharing limitation:
 metadata capture for the pilot still depends on domain-wide delegation in a
 real Workspace.
 
-Phase 3 is active on `phase-3/graph-foundation`: the graph app, ontology,
+Phase 3 is code complete and merged into `main`: the graph app, ontology,
 Neo4j setup, extraction adapter, document/chunk/entity/relationship writers,
-source provenance guard, and Chunk vector-index setup are implemented and
-covered by tests. The next product-risk dependency is Phase 4 SpiceDB
-permission sync, followed by Phase 5 retrieval that composes SpiceDB's
-allowed-document list with Neo4j provenance filtering before any LLM call.
+source provenance guard, Chunk vector-index setup, and extraction-recovery
+hardening are implemented and covered by tests. The next product-risk
+dependency is Phase 4 SpiceDB permission sync, followed by Phase 5 retrieval
+that composes SpiceDB's allowed-document list with Neo4j provenance filtering
+before any LLM call.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -539,7 +540,7 @@ metadata; domain-wide delegation is expected for safe live client ingestion.
 
 ### Phase 3: Neo4j Graph And Provenance
 
-Status: in progress on `phase-3/graph-foundation`.
+Status: code complete and merged into `main` (2026-07-11).
 
 Purpose: build the document, chunk, entity, relationship, and vector
 representation in Neo4j. Evaluate `neo4j-graphrag`, Graphify, and Graphiti
@@ -548,8 +549,8 @@ behind an adapter, then choose based on provenance quality and maturity.
 Current foundation: `neo4j-graphrag` is selected behind the adapter, graph
 setup applies constraints plus the Chunk vector index, and live smoke testing
 has written chunks, entities, and relationships with complete source
-provenance. Remaining work is the retrieval seam where Phase 5 queries compose
-the provenance guard with SpiceDB allowed-document IDs.
+provenance. The remaining retrieval seam belongs to Phase 5, where queries
+compose the provenance guard with SpiceDB allowed-document IDs.
 
 Minimum extraction bar: fact-level source attribution must identify which source
 document and chunk produced the fact. Document-level-only provenance is not

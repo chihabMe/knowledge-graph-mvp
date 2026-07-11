@@ -1,8 +1,21 @@
+# Same defaults as compose.infrastructure.yml (anchors cannot cross files).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   django:
     build:
       context: ../apps/backend
+      target: prod
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     env_file:
       - ../.env
     # The Google service-account key stays outside the repo on the host and
@@ -21,15 +34,22 @@ services:
       - ${DJANGO_GUNICORN_WORKERS:-2}
       - --timeout
       - "120"
+      # Recycle workers periodically (with jitter so they never restart in
+      # unison) — cheap insurance against slow memory leaks in long-running
+      # single-tenant deployments.
+      - --max-requests
+      - "1000"
+      - --max-requests-jitter
+      - "100"
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       neo4j:
-        condition: service_started
+        condition: service_healthy
       spicedb:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -53,7 +73,15 @@ services:
   celery-worker:
     build:
       context: ../apps/backend
+      target: prod
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          # LLM extraction fans out per chunk; the worker is the hungriest
+          # app process.
+          memory: 1536M
     env_file:
       - ../.env
     # The Drive sync task runs here, so the worker needs the same read-only
@@ -68,13 +96,19 @@ services:
       - config
       - worker
       - --loglevel=INFO
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME --timeout 10"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     depends_on:
       django:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       postgres:
-        condition: service_started
+        condition: service_healthy
     networks:
       - kg-private
       - kg-egress
@@ -82,7 +116,13 @@ services:
   celery-beat:
     build:
       context: ../apps/backend
+      target: prod
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     env_file:
       - ../.env
     command:
@@ -91,13 +131,16 @@ services:
       - config
       - beat
       - --loglevel=INFO
+      # /app is root-owned read-only in the prod image; the schedule file is
+      # derived state (rebuilt from CELERY_BEAT_SCHEDULE), so /tmp is fine.
+      - --schedule=/tmp/celerybeat-schedule
     depends_on:
       django:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       postgres:
-        condition: service_started
+        condition: service_healthy
     profiles:
       - scheduler
     networks:

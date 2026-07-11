@@ -106,10 +106,10 @@ graphify update apps/backend
 ## Current Architecture Status
 
 The backend foundation and controlled Google Drive ingestion code are built.
-Phase 3 graph construction is code complete on `phase-3/graph-foundation`
-(unmerged): the graph app, ontology, Neo4j setup, extraction adapter,
-document, chunk, entity, and relationship writers, provenance guard, and
-vector-index setup are in place.
+Phase 3 graph construction is code complete and merged into `main`: the graph
+app, ontology, Neo4j setup, extraction adapter, document, chunk, entity, and
+relationship writers, provenance guard, vector-index setup, and extraction
+recovery hardening are in place.
 
 The next implementation steps are:
 

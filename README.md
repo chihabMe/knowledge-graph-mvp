@@ -58,6 +58,12 @@ Start the core development services:
 make up
 ```
 
+Start the core services with the production image target:
+
+```bash
+make up-prod
+```
+
 Run migrations:
 
 ```bash
@@ -85,7 +91,9 @@ make smoke
 
 ## Service Startup
 
-`make up` starts the core services needed for backend development:
+`make up` layers `infra/compose.dev.yml` over the base Compose files. It starts
+the core services needed for backend development, bind-mounts backend source,
+and runs Django with autoreload:
 
 - PostgreSQL
 - Redis
@@ -102,6 +110,10 @@ make smoke
 - Traefik
 - Celery beat
 
+Use `make up-prod` or `make up-all-prod` to run the same service sets with the
+production Docker target (Gunicorn, root-owned application source, and no bind
+mounts).
+
 ## Local Ports
 
 Internal services bind to localhost-only alternate ports by default:
@@ -117,9 +129,9 @@ Internal services bind to localhost-only alternate ports by default:
 
 Phases 1 and 2 are code complete (Phase 2's live content-export validation
 waits on domain-wide delegation — see ADR-009). Phase 3, Neo4j graph and
-provenance, is code complete on `phase-3/graph-foundation` (unmerged); its
-guard-wiring seam moved to the Phase 5 tracker. Next: Phase 4 SpiceDB
-permission sync, then Phase 5 permission-safe retrieval.
+provenance, is code complete and merged into `main`; its guard-wiring seam
+moved to the Phase 5 tracker. Next: Phase 4 SpiceDB permission sync, then
+Phase 5 permission-safe retrieval.
 
 Read:
 

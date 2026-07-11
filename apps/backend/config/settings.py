@@ -30,6 +30,28 @@ if DEBUG or management_commands.intersection({"test", "pytest"}):
     SECRET_KEY = env("DJANGO_SECRET_KEY", default="unsafe-local-development-key")
 else:
     SECRET_KEY = env("DJANGO_SECRET_KEY")
+    # Fail closed on weak keys, not just missing ones (Django check W009):
+    # a short or generated-default key undermines every signed artifact.
+    if len(SECRET_KEY) < 50 or SECRET_KEY.startswith(("django-insecure-", "unsafe-")):
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be at least 50 random characters and not a "
+            "development default. Generate one with "
+            '`python -c "import secrets; print(secrets.token_urlsafe(64))"`.'
+        )
+
+    # TLS terminates at Traefik, which sets X-Forwarded-Proto; Django must
+    # trust that header so the redirect below cannot loop, mark its cookies
+    # secure, and bounce any plain-HTTP request that still reaches it.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=True)
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # 30 days by default — long enough to matter, short enough to back out of
+    # if TLS setup changes. Raise it once the deployment is proven stable.
+    SECURE_HSTS_SECONDS = env.int("DJANGO_SECURE_HSTS_SECONDS", default=2_592_000)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool(
+        "DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False
+    )
 
     # Traefik guards the ops UIs (Dozzle, Uptime Kuma) with this basicauth
     # credential. Django never uses it, but it is the one process guaranteed
@@ -47,8 +69,15 @@ else:
             "deploying."
         )
 
+# Needed for POSTed session-auth requests once the API is served over HTTPS
+# behind Traefik, e.g. https://api.<client-domain>.
+CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
+
+# django.contrib.admin is deliberately absent: no ModelAdmin is registered
+# anywhere, and an unused admin is pure attack surface (login form, static
+# assets that are never collected). Re-add it together with real admin
+# registrations and static-file serving if the project ever needs it.
 INSTALLED_APPS = [
-    "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -99,6 +128,11 @@ DATABASES = {
         default="postgres://kg_user:change-this-postgres-password@postgres:5432/knowledge_graph",
     )
 }
+# Persistent connections: without this every request/task opens a fresh
+# Postgres connection. Health checks make a recycled-by-the-server connection
+# reconnect instead of erroring the first request that touches it.
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("DJANGO_DB_CONN_MAX_AGE", default=60)
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -114,6 +148,24 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Everything to stdout/stderr — the containers' log driver owns retention.
+# Without an explicit config, gunicorn workers ship almost no application
+# logs and errors surface only as opaque 500s.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "console": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "console"},
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": env("DJANGO_LOG_LEVEL", default="INFO"),
+    },
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

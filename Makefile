@@ -2,21 +2,33 @@
 # file (infra/), NOT the repo root — without --env-file the service-account
 # key mount silently degrades to its /dev/null bootstrap default.
 COMPOSE_ENV_FLAG = $(if $(wildcard .env),--env-file .env)
-COMPOSE = docker compose $(COMPOSE_ENV_FLAG) -f infra/compose.infrastructure.yml -f infra/compose.app.yml
+COMPOSE_BASE = docker compose $(COMPOSE_ENV_FLAG) -f infra/compose.infrastructure.yml -f infra/compose.app.yml
+COMPOSE_DEV = $(COMPOSE_BASE) -f infra/compose.dev.yml
+COMPOSE_PROD = $(COMPOSE_BASE)
+# Interactive development is the default. Production commands opt into the
+# hardened image explicitly so local source edits never require a rebuild.
+COMPOSE = $(COMPOSE_DEV)
 BACKEND_DIR = apps/backend
 CORE_SERVICES = postgres redis neo4j spicedb django celery-worker
 
-.PHONY: config up up-all down logs migrate django-check test lint format health smoke review-staged review review-branch install-hooks
+.PHONY: config up up-prod up-all up-all-prod down logs migrate django-check test lint format health smoke review-staged review review-branch install-hooks
 
 config:
 	docker compose $(COMPOSE_ENV_FLAG) -f infra/compose.infrastructure.yml config >/tmp/kg-infra-compose-check.txt
-	$(COMPOSE) config >/tmp/kg-combined-compose-check.txt
+	$(COMPOSE_PROD) config >/tmp/kg-prod-compose-check.txt
+	$(COMPOSE_DEV) config >/tmp/kg-dev-compose-check.txt
 
 up:
 	$(COMPOSE) up -d --build $(CORE_SERVICES)
 
+up-prod:
+	$(COMPOSE_PROD) up -d --build $(CORE_SERVICES)
+
 up-all:
 	$(COMPOSE) --profile scheduler up -d --build
+
+up-all-prod:
+	$(COMPOSE_PROD) --profile scheduler up -d --build
 
 down:
 	$(COMPOSE) down
@@ -28,7 +40,7 @@ migrate:
 	$(COMPOSE) run --rm --no-deps django python manage.py migrate --noinput
 
 django-check:
-	cd $(BACKEND_DIR) && uv run python manage.py check
+	cd $(BACKEND_DIR) && DJANGO_DEBUG=true uv run python manage.py check
 
 test:
 	cd $(BACKEND_DIR) && uv run pytest

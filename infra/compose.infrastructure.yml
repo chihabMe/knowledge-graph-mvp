@@ -1,9 +1,24 @@
 name: knowledge-graph-infra
 
+# Shared per-service defaults. Docker's default json-file driver grows
+# without bound — a chatty container fills the host disk. Memory limits stop
+# one runaway service from triggering the kernel OOM killer against its
+# neighbours; raise a service's limit deliberately, not by removing it.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   traefik:
     image: traefik:v3.3
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
@@ -27,6 +42,11 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 768M
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-knowledge_graph}
       POSTGRES_USER: ${POSTGRES_USER:-kg_user}
@@ -47,9 +67,20 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     command: redis-server --appendonly yes
     ports:
       - "127.0.0.1:${REDIS_HOST_PORT:-16379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
     volumes:
       - redis-data:/data
     networks:
@@ -58,6 +89,12 @@ services:
   neo4j:
     image: neo4j:5-community
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          # Heap (1G default) + page cache + JVM overhead; keep ~2x heap.
+          memory: ${NEO4J_MEMORY_LIMIT:-2G}
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/change-this-neo4j-password}
       NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL:-512m}
@@ -65,6 +102,12 @@ services:
     ports:
       - "127.0.0.1:${NEO4J_HTTP_HOST_PORT:-17474}:7474"
       - "127.0.0.1:${NEO4J_BOLT_HOST_PORT:-17687}:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
@@ -74,6 +117,11 @@ services:
   spicedb:
     image: ghcr.io/authzed/spicedb:v1.51.1
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     command:
       - --skip-release-check
       - serve
@@ -84,6 +132,14 @@ services:
       SPICEDB_GRPC_PRESHARED_KEY: ${SPICEDB_GRPC_PRESHARED_KEY:-change-this-spicedb-key}
       SPICEDB_DATASTORE_ENGINE: postgres
       SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-kg_user}:${POSTGRES_PASSWORD:-change-this-postgres-password}@postgres:5432/${POSTGRES_DB:-knowledge_graph}?sslmode=disable
+    # Exec form only: the SpiceDB image ships no shell, but includes
+    # grpc_health_probe (verified against the running image).
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     ports:
       - "127.0.0.1:${SPICEDB_GRPC_HOST_PORT:-15051}:50051"
       - "127.0.0.1:${SPICEDB_HTTP_HOST_PORT:-18443}:8443"
@@ -93,6 +149,7 @@ services:
   spicedb-migrate:
     image: ghcr.io/authzed/spicedb:v1.51.1
     restart: "no"
+    logging: *default-logging
     command:
       - --skip-release-check
       - datastore
@@ -108,8 +165,14 @@ services:
       - kg-private
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    # Pinned: "main" is whatever was pushed last and can break on any pull.
+    image: ghcr.io/open-webui/open-webui:0.10.2
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-this-webui-secret}
     # Public access goes through Traefik; the direct port is local-dev only.
@@ -127,8 +190,13 @@ services:
       - traefik.http.services.open-webui.loadbalancer.server.port=8080
 
   dozzle:
-    image: amir20/dozzle:latest
+    image: amir20/dozzle:v10.6.7
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     # The direct port bypasses the ops-auth middleware below (it exposes every
@@ -149,6 +217,11 @@ services:
   uptime-kuma:
     image: louislam/uptime-kuma:1
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     # Same rule as dozzle: the direct port skips ops-auth, localhost only.
     ports:
       - "127.0.0.1:${UPTIME_KUMA_HOST_PORT:-3001}:3001"

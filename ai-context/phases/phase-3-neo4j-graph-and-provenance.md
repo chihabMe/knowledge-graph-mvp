@@ -80,7 +80,7 @@ Build a graph representation of documents, chunks, entities, and relationships w
 
 ## Completion Status
 
-Code complete (2026-07-09, branch `phase-3/graph-foundation`, unmerged).
+Code complete (2026-07-09) and merged into `main` on 2026-07-11.
 Two caveats: LLM extraction and the vector index are built and
 smoke-validated but not yet operational in a production configuration (no
 production OpenRouter model configured; the default embedding adapter is

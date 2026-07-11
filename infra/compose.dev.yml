@@ -1,0 +1,48 @@
+# Development overlay — never used alone, always layered on the base files:
+#   make up-dev  →  compose -f compose.infrastructure.yml -f compose.app.yml \
+#                           -f compose.dev.yml up -d --build
+#
+# It swaps the app containers onto the Dockerfile's `dev` target and
+# bind-mounts the source packages for hot reload. Individual packages are
+# mounted (not the whole backend directory) so the image's /app/.venv is
+# never shadowed by the host checkout.
+x-dev-source: &dev-source
+  - ../apps/backend/config:/app/config
+  - ../apps/backend/core:/app/core
+  - ../apps/backend/graph:/app/graph
+  - ../apps/backend/health:/app/health
+  - ../apps/backend/integrations:/app/integrations
+  - ../apps/backend/manage.py:/app/manage.py
+
+services:
+  django:
+    build:
+      context: ../apps/backend
+      target: dev
+    environment:
+      # The dev overlay is the one explicit place allowed to relax production
+      # startup checks (weak local secret, HTTPS redirect, secure cookies).
+      DJANGO_DEBUG: "true"
+    # runserver autoreloads on every source change — no rebuild needed.
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    volumes: *dev-source
+    ports:
+      - "127.0.0.1:${DJANGO_DEV_HOST_PORT:-8000}:8000"
+
+  celery-worker:
+    build:
+      context: ../apps/backend
+      target: dev
+    environment:
+      DJANGO_DEBUG: "true"
+    # Celery has no autoreload: after changing task code, restart the worker
+    # (docker compose restart celery-worker) — still no image rebuild.
+    volumes: *dev-source
+
+  celery-beat:
+    build:
+      context: ../apps/backend
+      target: dev
+    environment:
+      DJANGO_DEBUG: "true"
+    volumes: *dev-source

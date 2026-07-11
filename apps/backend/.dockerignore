@@ -8,4 +8,10 @@ htmlcov
 db.sqlite3
 media
 staticfiles
+.git
+Dockerfile
+.dockerignore
+# Tests run on the host/CI, never from a deployed image. The dev container
+# still sees them through the compose.dev.yml bind mounts.
+**/tests.py
 
