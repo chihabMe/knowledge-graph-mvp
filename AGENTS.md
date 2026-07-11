@@ -113,9 +113,10 @@ recovery hardening are in place.
 
 The next implementation steps are:
 
-1. Complete Phase 4 SpiceDB permission sync before exposing any answer path.
-2. Then Phase 5: real retrieval queries must compose the provenance guard
+1. Start Phase 5: real retrieval queries must compose the provenance guard
    and the SpiceDB allowed-source-document list (task moved from Phase 3
    into the Phase 5 tracker, with leak tests).
-3. Keep `.env.example` and tracked docs OpenRouter-shaped.
-4. Preserve provenance on every graph write and keep retrieval fail-closed.
+2. Keep `.env.example` and tracked docs OpenRouter-shaped.
+3. Preserve provenance on every graph write and keep retrieval fail-closed.
+4. Complete live delegated Workspace ACL and nested-group validation when
+   client credentials become available.
