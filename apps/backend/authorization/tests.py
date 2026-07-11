@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -120,6 +120,32 @@ class VerifiedPredicateTests(TestCase):
         verified_pks = SourceDocument.objects.permission_verified().values_list("pk", flat=True)
         self.assertNotIn(document.pk, verified_pks)
         self.assertFalse(document.is_permission_verified("v1"))
+
+
+class ClientTransportTests(TestCase):
+    def test_tls_setting_selects_bearer_credentials(self):
+        from authorization import client as client_module
+
+        with override_settings(SPICEDB_GRPC_TLS=True):
+            with (
+                patch.object(client_module, "Client"),
+                patch.object(client_module.grpcutil, "bearer_token_credentials") as bearer,
+            ):
+                client_module.AuthzedSpiceDB()
+        bearer.assert_called_once()
+
+    def test_default_stays_on_the_insecure_channel(self):
+        from authorization import client as client_module
+
+        with override_settings(SPICEDB_GRPC_TLS=False):
+            with (
+                patch.object(client_module, "Client"),
+                patch.object(
+                    client_module.grpcutil, "insecure_bearer_token_credentials"
+                ) as insecure,
+            ):
+                client_module.AuthzedSpiceDB()
+        insecure.assert_called_once()
 
 
 class ManagedTupleReadTests(TestCase):

@@ -80,10 +80,12 @@ class AuthzedSpiceDB:
     """Small synchronous adapter around the official Authzed v1 client."""
 
     def __init__(self, client=None, *, timeout=None):
-        self._client = client or Client(
-            settings.SPICEDB_GRPC_URL,
-            grpcutil.insecure_bearer_token_credentials(settings.SPICEDB_GRPC_PRESHARED_KEY),
+        credentials = (
+            grpcutil.bearer_token_credentials(settings.SPICEDB_GRPC_PRESHARED_KEY)
+            if settings.SPICEDB_GRPC_TLS
+            else grpcutil.insecure_bearer_token_credentials(settings.SPICEDB_GRPC_PRESHARED_KEY)
         )
+        self._client = client or Client(settings.SPICEDB_GRPC_URL, credentials)
         self._timeout = timeout if timeout is not None else settings.SPICEDB_REQUEST_TIMEOUT_SECONDS
 
     def apply_schema(self, schema: str) -> str:

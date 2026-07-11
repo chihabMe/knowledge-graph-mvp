@@ -236,6 +236,15 @@ if not _development_context and SPICEDB_GRPC_PRESHARED_KEY == "change-this-spice
     raise ImproperlyConfigured(
         "SPICEDB_GRPC_PRESHARED_KEY must not use the development default outside development."
     )
+# Plaintext gRPC sends the preshared key and every permission tuple in the
+# clear; outside development that requires an explicit private-network waiver.
+SPICEDB_GRPC_TLS = env.bool("SPICEDB_GRPC_TLS", default=False)
+SPICEDB_GRPC_ALLOW_INSECURE = env.bool("SPICEDB_GRPC_ALLOW_INSECURE", default=False)
+if not _development_context and not SPICEDB_GRPC_TLS and not SPICEDB_GRPC_ALLOW_INSECURE:
+    raise ImproperlyConfigured(
+        "Enable SPICEDB_GRPC_TLS outside development, or acknowledge a "
+        "private-network deployment with SPICEDB_GRPC_ALLOW_INSECURE=true."
+    )
 SPICEDB_REQUEST_TIMEOUT_SECONDS = env.int("SPICEDB_REQUEST_TIMEOUT_SECONDS", default=10)
 SPICEDB_BATCH_SIZE = env.int("SPICEDB_BATCH_SIZE", default=500)
 if SPICEDB_REQUEST_TIMEOUT_SECONDS < 1:
