@@ -33,6 +33,13 @@ class PermissionTuple:
     subject_relation: str = ""
 
 
+# Every resource type whose tuples the reconciler owns. Must track
+# schema.zed exactly (minus the tuple-less kgm/user): a type missing here
+# is never read back, so its stale tuples could not be deleted and the
+# post-write verification would pass on a truncated view.
+MANAGED_RESOURCE_TYPES = ("kgm/group", "kgm/folder", "kgm/document")
+
+
 class SpiceDB(Protocol):
     def apply_schema(self, schema: str) -> str: ...
 
@@ -97,11 +104,14 @@ class AuthzedSpiceDB:
             else Consistency(fully_consistent=True)
         )
         tuples: set[PermissionTuple] = set()
-        for resource_type in ("kgm/group", "kgm/folder", "kgm/document"):
+        for resource_type in MANAGED_RESOURCE_TYPES:
             responses = self._client.ReadRelationships(
                 ReadRelationshipsRequest(
                     consistency=consistency,
-                    relationship_filter=RelationshipFilter(resource_type=resource_type),
+                    relationship_filter=RelationshipFilter(
+                        resource_type=resource_type,
+                        optional_resource_id_prefix=connection_prefix,
+                    ),
                 ),
                 timeout=self._timeout,
             )

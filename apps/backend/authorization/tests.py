@@ -96,6 +96,28 @@ class IdentifierTests(TestCase):
         self.assertNotIn("person", first)
 
 
+class ManagedTupleReadTests(TestCase):
+    def test_managed_resource_types_track_the_schema(self):
+        from authorization.client import MANAGED_RESOURCE_TYPES, canonical_schema, schema_text
+
+        definitions = {name for name, _ in canonical_schema(schema_text())}
+        self.assertEqual(set(MANAGED_RESOURCE_TYPES), definitions - {"kgm/user"})
+
+    def test_reads_are_scoped_to_the_connection_prefix_server_side(self):
+        from authorization.client import MANAGED_RESOURCE_TYPES, AuthzedSpiceDB
+
+        grpc_client = Mock()
+        grpc_client.ReadRelationships.return_value = []
+        AuthzedSpiceDB(client=grpc_client).read_managed_tuples("c1_")
+        requests = [call.args[0] for call in grpc_client.ReadRelationships.call_args_list]
+        self.assertEqual(
+            {request.relationship_filter.resource_type for request in requests},
+            set(MANAGED_RESOURCE_TYPES),
+        )
+        for request in requests:
+            self.assertEqual(request.relationship_filter.optional_resource_id_prefix, "c1_")
+
+
 class PermissionSyncTests(TestCase):
     def setUp(self):
         self.connection = DriveConnection.objects.create(
@@ -504,9 +526,7 @@ class PermissionTaskTests(TestCase):
         busy = DriveConnection.objects.create(
             workspace_domain="example.com", root_folder_id="busy-root"
         )
-        PermissionSyncRun.objects.create(
-            connection=busy, status=PermissionSyncRun.Status.RUNNING
-        )
+        PermissionSyncRun.objects.create(connection=busy, status=PermissionSyncRun.Status.RUNNING)
         with patch("integrations.tasks.run_permission_sync.delay") as delay:
             result = schedule_permission_syncs.run()
         self.assertEqual(result, {"scheduled": 1})
