@@ -2,19 +2,70 @@ import datetime
 
 from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import F
 from django.utils import timezone
 
+from authorization.client import SPICEDB_TRANSIENT_ERRORS
+from authorization.sync import synchronize_permissions
 from graph.pipeline import extract_document_to_graph, get_retryable_extraction_exceptions
 from integrations.drive.export import export_file_content
 from integrations.drive.google_client import (
+    DRIVE_API_ERRORS,
     GoogleDriveMetadataClient,
     build_drive_service,
 )
 from integrations.drive.sync import sync_drive_metadata
-from integrations.models import DriveSyncRun, SourceDocument, SourceDocumentContent
+from integrations.models import (
+    DriveSyncRun,
+    PermissionSyncRun,
+    SourceDocument,
+    SourceDocumentContent,
+)
 
 _UNSET = object()
+
+
+@shared_task(
+    bind=True,
+    name="integrations.run_permission_sync",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=3,
+)
+def run_permission_sync(self, run_id: int) -> dict[str, int | str]:
+    """Reconcile one permission run using only its durable primary key."""
+    run = PermissionSyncRun.objects.select_related("connection").get(pk=run_id)
+    if run.status not in {PermissionSyncRun.Status.QUEUED, PermissionSyncRun.Status.RUNNING}:
+        return {"run_id": run.pk, "status": run.status}
+    lock_key = f"permission-sync:connection:{run.connection_id}"
+    lock_token = f"run:{run.pk}"
+    if not cache.add(lock_key, lock_token, timeout=900):
+        raise self.retry(countdown=min(2 ** (self.request.retries + 1), 60))
+    try:
+        claimed = PermissionSyncRun.objects.filter(
+            pk=run_id, status=PermissionSyncRun.Status.QUEUED
+        ).update(status=PermissionSyncRun.Status.RUNNING, started_at=timezone.now())
+        run.refresh_from_db()
+        if not claimed and run.status != PermissionSyncRun.Status.RUNNING:
+            return {"run_id": run.pk, "status": run.status}
+        try:
+            run = synchronize_permissions(run, drive_client=GoogleDriveMetadataClient())
+        except (*DRIVE_API_ERRORS, *SPICEDB_TRANSIENT_ERRORS) as exc:
+            if self.request.retries < self.max_retries:
+                PermissionSyncRun.objects.filter(pk=run.pk).update(
+                    status=PermissionSyncRun.Status.QUEUED,
+                    error_code="",
+                    finished_at=None,
+                )
+                raise self.retry(
+                    exc=exc, countdown=min(2 ** (self.request.retries + 1), 60)
+                ) from exc
+            raise
+        return {"run_id": run.pk, "status": run.status}
+    finally:
+        if cache.get(lock_key) == lock_token:
+            cache.delete(lock_key)
 
 
 def _set_graph_extraction_state(
