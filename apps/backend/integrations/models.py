@@ -42,6 +42,22 @@ class DriveConnection(models.Model):
         return self.root_folder_id
 
 
+class SourceDocumentQuerySet(models.QuerySet):
+    def permission_verified(self):
+        """The one definition of 'retrieval eligibility is backed by SpiceDB'.
+
+        Retrieval filtering (lookup), the drive-sync preserve gate, and any
+        future consumer must share this conjunction; see also
+        SourceDocument.is_permission_verified for the instance twin.
+        """
+        return self.filter(
+            active_in_scope=True,
+            retrieval_eligible=True,
+            spicedb_verified_at__isnull=False,
+            spicedb_permissions_version=models.F("source_permissions_version"),
+        )
+
+
 class SourceDocument(models.Model):
     class GraphExtractionStatus(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -125,6 +141,8 @@ class SourceDocument(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SourceDocumentQuerySet.as_manager()
+
     class Meta:
         ordering = ["title", "drive_file_id"]
         constraints = [
@@ -142,6 +160,20 @@ class SourceDocument(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
+    def is_permission_verified(self, version: str) -> bool:
+        """Instance twin of SourceDocumentQuerySet.permission_verified.
+
+        `version` pins both sides of the CAS: the row's ACL version and its
+        verified SpiceDB version must equal the version just scanned.
+        """
+        return bool(
+            self.active_in_scope
+            and self.retrieval_eligible
+            and self.spicedb_verified_at
+            and self.source_permissions_version == version
+            and self.spicedb_permissions_version == version
+        )
 
 
 class DrivePermissionSnapshot(models.Model):

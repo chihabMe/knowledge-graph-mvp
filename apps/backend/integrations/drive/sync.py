@@ -95,11 +95,7 @@ def sync_drive_metadata(
                 preserve_permission_verification = bool(
                     existing_document
                     and not exclusion_reason
-                    and existing_document.active_in_scope
-                    and existing_document.retrieval_eligible
-                    and existing_document.source_permissions_version == permissions_version
-                    and existing_document.spicedb_permissions_version == permissions_version
-                    and existing_document.spicedb_verified_at
+                    and existing_document.is_permission_verified(permissions_version)
                 )
 
                 document, _created = SourceDocument.objects.update_or_create(

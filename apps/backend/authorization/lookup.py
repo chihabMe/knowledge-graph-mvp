@@ -1,5 +1,3 @@
-from django.db.models import F
-
 from authorization.client import AuthzedSpiceDB, SpiceDB
 from authorization.identifiers import document_object_id, user_object_id
 from integrations.models import DriveConnection, SourceDocument
@@ -21,13 +19,11 @@ def allowed_source_document_ids(
             )
             if not resources:
                 continue
-            candidates = SourceDocument.objects.filter(
-                connection=connection,
-                active_in_scope=True,
-                retrieval_eligible=True,
-                spicedb_verified_at__isnull=False,
-                spicedb_permissions_version=F("source_permissions_version"),
-            ).values_list("pk", flat=True)
+            candidates = (
+                SourceDocument.objects.filter(connection=connection)
+                .permission_verified()
+                .values_list("pk", flat=True)
+            )
             allowed.extend(
                 document_id
                 for document_id in candidates

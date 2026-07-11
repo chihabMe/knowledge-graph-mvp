@@ -96,6 +96,32 @@ class IdentifierTests(TestCase):
         self.assertNotIn("person", first)
 
 
+class VerifiedPredicateTests(TestCase):
+    def test_queryset_and_instance_predicates_agree(self):
+        connection = DriveConnection.objects.create(
+            workspace_domain="example.com", root_folder_id="root"
+        )
+        document = SourceDocument.objects.create(
+            connection=connection,
+            drive_file_id="doc-1",
+            title="Doc",
+            mime_type="text/plain",
+            active_in_scope=True,
+            retrieval_eligible=True,
+            source_permissions_version="v1",
+            spicedb_permissions_version="v1",
+            spicedb_verified_at=timezone.now(),
+        )
+        verified_pks = SourceDocument.objects.permission_verified().values_list("pk", flat=True)
+        self.assertIn(document.pk, verified_pks)
+        self.assertTrue(document.is_permission_verified("v1"))
+        SourceDocument.objects.filter(pk=document.pk).update(spicedb_permissions_version="stale")
+        document.refresh_from_db()
+        verified_pks = SourceDocument.objects.permission_verified().values_list("pk", flat=True)
+        self.assertNotIn(document.pk, verified_pks)
+        self.assertFalse(document.is_permission_verified("v1"))
+
+
 class ManagedTupleReadTests(TestCase):
     def test_managed_resource_types_track_the_schema(self):
         from authorization.client import MANAGED_RESOURCE_TYPES, canonical_schema, schema_text
