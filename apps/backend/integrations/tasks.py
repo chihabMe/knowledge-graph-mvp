@@ -46,7 +46,11 @@ def run_permission_sync(self, run_id: int) -> dict[str, int | str]:
         return {"run_id": run.pk, "status": run.status}
     lock_key = f"permission-sync:connection:{run.connection_id}"
     lock_token = f"run:{run.pk}"
-    if not cache.add(lock_key, lock_token, timeout=900):
+    # The lock must outlive any legitimate run, so it shares the stale-run
+    # timeout: a scan longer than a fixed 900s TTL would lose the lock
+    # mid-flight and collide with the next beat-scheduled run.
+    lock_ttl_seconds = settings.PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES * 60
+    if not cache.add(lock_key, lock_token, timeout=lock_ttl_seconds):
         raise self.retry(countdown=_retry_countdown(self.request.retries))
     try:
         claimed = PermissionSyncRun.objects.filter(
