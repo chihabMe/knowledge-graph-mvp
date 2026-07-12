@@ -1,6 +1,10 @@
+import logging
+
 from authorization.client import AuthzedSpiceDB, SpiceDB
 from authorization.identifiers import document_object_id, user_object_id
 from integrations.models import DriveConnection, SourceDocument
+
+logger = logging.getLogger(__name__)
 
 
 def allowed_source_document_ids(
@@ -29,6 +33,14 @@ def allowed_source_document_ids(
                 for document_id in candidates
                 if document_object_id(connection.pk, document_id) in resources
             )
-    except Exception:
+    except Exception as exc:
+        # Fail closed, but leave evidence: without this line a SpiceDB outage
+        # is indistinguishable from "user has access to nothing". Class name
+        # only — never principals, emails, or payloads.
+        logger.warning(
+            "allowed_source_document_ids failed closed: %s.%s",
+            type(exc).__module__,
+            type(exc).__name__,
+        )
         return ()
     return tuple(sorted(set(allowed)))

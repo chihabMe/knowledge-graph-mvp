@@ -434,6 +434,16 @@ class AllowedDocumentLookupTests(TestCase):
         spicedb.fail_lookup = True
         self.assertEqual(allowed_source_document_ids("reader@example.com", spicedb=spicedb), ())
 
+    def test_outage_logs_the_failure_class_without_payloads(self):
+        spicedb = FakeSpiceDB()
+        spicedb.fail_lookup = True
+        with self.assertLogs("authorization.lookup", level="WARNING") as captured:
+            allowed_source_document_ids("reader@example.com", spicedb=spicedb)
+        joined = "\n".join(captured.output)
+        self.assertIn("TimeoutError", joined)
+        self.assertIn("failed closed", joined)
+        self.assertNotIn("reader@example.com", joined)
+
 
 class NormalDriveSyncPermissionTests(TestCase):
     def test_unchanged_acl_preserves_verification_and_changed_acl_invalidates_without_export(self):
