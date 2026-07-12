@@ -1,0 +1,29 @@
+definition kgm/user {}
+
+definition kgm/group {
+    relation member: kgm/user | kgm/group#member
+}
+
+definition kgm/folder {
+    relation parent: kgm/folder
+    relation reader: kgm/user | kgm/group#member
+    relation commenter: kgm/user | kgm/group#member
+    relation writer: kgm/user | kgm/group#member
+    relation file_organizer: kgm/user | kgm/group#member
+    relation organizer: kgm/user | kgm/group#member
+    relation owner: kgm/user | kgm/group#member
+
+    permission view = reader + commenter + writer + file_organizer + organizer + owner + parent->view
+}
+
+definition kgm/document {
+    relation parent: kgm/folder
+    relation reader: kgm/user | kgm/group#member
+    relation commenter: kgm/user | kgm/group#member
+    relation writer: kgm/user | kgm/group#member
+    relation file_organizer: kgm/user | kgm/group#member
+    relation organizer: kgm/user | kgm/group#member
+    relation owner: kgm/user | kgm/group#member
+
+    permission view = reader + commenter + writer + file_organizer + organizer + owner + parent->view
+}

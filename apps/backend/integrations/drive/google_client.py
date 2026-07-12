@@ -7,16 +7,18 @@ information only — content export lives in integrations.drive.export.
 The Drive service object is injectable so tests never touch the network.
 """
 
-import os
 from datetime import datetime
 from typing import Any
-
-from django.conf import settings
 
 from integrations.drive.client import (
     DriveFileMetadata,
     DrivePermissionAccessReport,
+    DrivePermissionResource,
     DriveRootCandidate,
+)
+from integrations.drive.credentials import (
+    ServiceAccountKeyError,
+    load_service_account_credentials,
 )
 from integrations.models import DriveConnection
 
@@ -32,7 +34,8 @@ ROOT_FOLDER_LIST_FIELDS = "nextPageToken, files(id, name, webViewLink, driveId)"
 SHARED_DRIVE_LIST_FIELDS = "nextPageToken, drives(id, name)"
 PERMISSION_FIELDS = (
     "nextPageToken, permissions(id, type, role, emailAddress, domain, "
-    "allowFileDiscovery, deleted, pendingOwner)"
+    "allowFileDiscovery, deleted, pendingOwner, "
+    "permissionDetails(inherited,inheritedFrom,permissionType,role))"
 )
 ROOT_FOLDER_QUERY = (
     "sharedWithMe and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
@@ -74,40 +77,25 @@ class GoogleDriveApiError(RuntimeError):
     """Controlled API-boundary error for Drive request failures."""
 
 
+_KEY_ERROR_MESSAGES = {
+    "unreadable_path": (
+        "GOOGLE_SERVICE_ACCOUNT_FILE could not be inspected. Check the "
+        "mounted service-account key path and file permissions."
+    ),
+    "missing_or_empty": (
+        "GOOGLE_SERVICE_ACCOUNT_FILE is not configured or points at an "
+        "empty file (the /dev/null bootstrap mount). Set the host path "
+        "in .env and restart the stack."
+    ),
+    "invalid_key": (
+        "GOOGLE_SERVICE_ACCOUNT_FILE could not be read as a service-account "
+        "key. Check that the mounted file contains valid key JSON."
+    ),
+}
+
+
 def build_drive_service(connection: DriveConnection):
     """Build an authenticated Drive v3 service for a connection."""
-    key_path = settings.GOOGLE_SERVICE_ACCOUNT_FILE
-    try:
-        missing_or_empty_key = (
-            not key_path or not os.path.exists(key_path) or os.path.getsize(key_path) == 0
-        )
-    except OSError as exc:
-        raise MissingServiceAccountKeyError(
-            "GOOGLE_SERVICE_ACCOUNT_FILE could not be inspected. Check the "
-            "mounted service-account key path and file permissions."
-        ) from exc
-    if missing_or_empty_key:
-        raise MissingServiceAccountKeyError(
-            "GOOGLE_SERVICE_ACCOUNT_FILE is not configured or points at an "
-            "empty file (the /dev/null bootstrap mount). Set the host path "
-            "in .env and restart the stack."
-        )
-
-    # Imported lazily so tests that inject a fake service never need
-    # Google credentials or the discovery cache.
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-
-    try:
-        credentials = service_account.Credentials.from_service_account_file(
-            key_path,
-            scopes=[DRIVE_READONLY_SCOPE],
-        )
-    except (OSError, ValueError) as exc:
-        raise MissingServiceAccountKeyError(
-            "GOOGLE_SERVICE_ACCOUNT_FILE could not be read as a service-account "
-            "key. Check that the mounted file contains valid key JSON."
-        ) from exc
     # The connection's field is authoritative: a bootstrap connection is
     # already seeded from settings.GOOGLE_DRIVE_DELEGATED_SUBJECT at creation
     # time, so falling back to the env var here would make clearing the subject
@@ -115,9 +103,18 @@ def build_drive_service(connection: DriveConnection):
     # report "" and invalidate documents while the built service still delegated
     # to the env subject. Read only the connection field so the effective auth
     # identity always matches what the endpoint reports.
+    try:
+        credentials = load_service_account_credentials([DRIVE_READONLY_SCOPE])
+    except ServiceAccountKeyError as exc:
+        raise MissingServiceAccountKeyError(_KEY_ERROR_MESSAGES[exc.reason]) from exc
     subject = connection.delegated_subject_email
     if subject:
         credentials = credentials.with_subject(subject)
+
+    # Imported lazily so tests that inject a fake service never need
+    # Google credentials or the discovery cache.
+    from googleapiclient.discovery import build
+
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
@@ -181,6 +178,44 @@ class GoogleDriveMetadataClient:
             ),
         )
 
+    def list_permission_resources(
+        self, connection: DriveConnection
+    ) -> list[DrivePermissionResource]:
+        """Scan metadata and ACLs only; never export or queue document content."""
+        service = self._service or build_drive_service(connection)
+        root_id = self._root_id(connection)
+        # Only the root needs a lookup; every other entry (folders included)
+        # arrives with id/mimeType/parents from the shared walk's listings.
+        root_entry = (
+            service.files()
+            .get(fileId=root_id, fields="id, mimeType, parents", supportsAllDrives=True)
+            .execute()
+        )
+        resources = [self._permission_resource(service, root_entry, "folder")]
+        # No on_listing_error: a folder-listing failure propagates so the
+        # permission run fails closed instead of revoking from a partial scan.
+        for entry, _folder_path in self._walk_files(
+            service, connection, root_id, "", include_folders=True
+        ):
+            resource_type = "folder" if entry.get("mimeType") == FOLDER_MIME_TYPE else "document"
+            resources.append(self._permission_resource(service, entry, resource_type))
+        return resources
+
+    def _permission_resource(self, service, entry, resource_type):
+        try:
+            permissions = self._list_permissions(service, entry["id"])
+            failed = False
+        except DRIVE_API_ERRORS:
+            permissions = []
+            failed = True
+        return DrivePermissionResource(
+            resource_type=resource_type,
+            drive_id=entry["id"],
+            parent_folder_ids=entry.get("parents") or [],
+            permissions=permissions,
+            permissions_fetch_failed=failed,
+        )
+
     def check_permission_access(
         self,
         connection: DriveConnection,
@@ -198,9 +233,7 @@ class GoogleDriveMetadataClient:
             ) from exc
 
     def _root_id(self, connection: DriveConnection) -> str:
-        if connection.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
-            return connection.shared_drive_id
-        return connection.root_folder_id
+        return connection.effective_root_id
 
     def _folder_name(self, service, folder_id: str, connection: DriveConnection) -> str:
         if connection.scope_type == DriveConnection.ScopeType.SHARED_DRIVE:
@@ -315,6 +348,7 @@ class GoogleDriveMetadataClient:
         root_path: str,
         *,
         on_listing_error=None,
+        include_folders=False,
     ):
         """Breadth-first walk of the scoped tree, yielding (file_entry, folder_path).
 
@@ -328,6 +362,9 @@ class GoogleDriveMetadataClient:
         the callback is invoked per failed folder and the walk continues — the
         diagnostic caller counts those failures instead of aborting. Callers
         that cap the walk simply stop iterating (e.g. `break`).
+
+        With `include_folders` each discovered folder entry (not the root) is
+        also yielded once, before its own children.
         """
         pending_folders: list[tuple[str, str]] = [(root_id, root_path)]
         seen_folders = {root_id}
@@ -355,6 +392,8 @@ class GoogleDriveMetadataClient:
                         pending_folders.append(
                             (entry["id"], f"{folder_path}/{entry.get('name', '')}")
                         )
+                        if include_folders:
+                            yield entry, folder_path
                     continue
                 if entry["id"] in seen_files:
                     continue

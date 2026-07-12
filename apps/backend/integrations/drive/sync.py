@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -57,6 +59,7 @@ def sync_drive_metadata(
         run.save(update_fields=["status", "started_at"])
 
     extraction_candidates: list[tuple[int, str]] = []
+    sync_marker = str(uuid4())
 
     try:
         files = client.list_files(connection)
@@ -82,13 +85,17 @@ def sync_drive_metadata(
                 else:
                     stored_files += 1
 
+                existing_document = SourceDocument.objects.filter(
+                    connection=connection,
+                    drive_file_id=file_metadata.drive_file_id,
+                ).first()
                 previous_modified_time = (
-                    SourceDocument.objects.filter(
-                        connection=connection,
-                        drive_file_id=file_metadata.drive_file_id,
-                    )
-                    .values_list("modified_time", flat=True)
-                    .first()
+                    existing_document.modified_time if existing_document else None
+                )
+                preserve_permission_verification = bool(
+                    existing_document
+                    and not exclusion_reason
+                    and existing_document.is_permission_verified(permissions_version)
                 )
 
                 document, _created = SourceDocument.objects.update_or_create(
@@ -113,15 +120,30 @@ def sync_drive_metadata(
                         "creator_email": file_metadata.creator_email,
                         "source_permissions_version": permissions_version,
                         "last_permission_sync_time": timezone.now(),
-                        "retrieval_eligible": False,
+                        "active_in_scope": True,
+                        "last_seen_sync_marker": sync_marker,
+                        "retrieval_eligible": preserve_permission_verification,
+                        "spicedb_permissions_version": (
+                            permissions_version if preserve_permission_verification else ""
+                        ),
+                        "spicedb_revision": (
+                            existing_document.spicedb_revision
+                            if preserve_permission_verification
+                            else ""
+                        ),
+                        "spicedb_verified_at": (
+                            existing_document.spicedb_verified_at
+                            if preserve_permission_verification
+                            else None
+                        ),
                         "exclusion_reason": exclusion_reason,
                     },
                 )
                 DrivePermissionSnapshot.objects.update_or_create(
                     source_document=document,
                     defaults={
-                        "source_permissions_version": permissions_version,
                         "raw_permissions": permissions,
+                        "permissions_complete": not file_metadata.permissions_fetch_failed,
                         "has_public_link": public_link,
                         "has_domain_visibility": domain_visibility,
                         "captured_at": timezone.now(),
@@ -136,6 +158,18 @@ def sync_drive_metadata(
                         # A transient graph/LLM outage must not require a
                         # content change before this source can recover.
                         extraction_candidates.append((document.pk, document.content_hash))
+
+            SourceDocument.objects.filter(connection=connection, active_in_scope=True).exclude(
+                last_seen_sync_marker=sync_marker
+            ).update(
+                active_in_scope=False,
+                retrieval_eligible=False,
+                exclusion_reason=SourceDocument.ExclusionReason.INACTIVE_IN_SCOPE,
+                spicedb_permissions_version="",
+                spicedb_revision="",
+                spicedb_verified_at=None,
+                updated_at=timezone.now(),
+            )
 
         run.status = DriveSyncRun.Status.SUCCEEDED
         run.total_files = len(files)

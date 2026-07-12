@@ -2,19 +2,78 @@ import datetime
 
 from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import F
 from django.utils import timezone
 
+from authorization.client import SPICEDB_TRANSIENT_ERRORS
+from authorization.sync import synchronize_permissions
 from graph.pipeline import extract_document_to_graph, get_retryable_extraction_exceptions
 from integrations.drive.export import export_file_content
 from integrations.drive.google_client import (
+    DRIVE_API_ERRORS,
     GoogleDriveMetadataClient,
     build_drive_service,
 )
 from integrations.drive.sync import sync_drive_metadata
-from integrations.models import DriveSyncRun, SourceDocument, SourceDocumentContent
+from integrations.models import (
+    DriveConnection,
+    DriveSyncRun,
+    PermissionSyncRun,
+    SourceDocument,
+    SourceDocumentContent,
+)
 
 _UNSET = object()
+
+
+def _retry_countdown(retries: int) -> int:
+    """Exponential backoff shared by every retrying task, capped at 60s."""
+    return min(2 ** (retries + 1), 60)
+
+
+@shared_task(
+    bind=True,
+    name="integrations.run_permission_sync",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=3,
+)
+def run_permission_sync(self, run_id: int) -> dict[str, int | str]:
+    """Reconcile one permission run using only its durable primary key."""
+    run = PermissionSyncRun.objects.select_related("connection").get(pk=run_id)
+    if run.status not in {PermissionSyncRun.Status.QUEUED, PermissionSyncRun.Status.RUNNING}:
+        return {"run_id": run.pk, "status": run.status}
+    lock_key = f"permission-sync:connection:{run.connection_id}"
+    lock_token = f"run:{run.pk}"
+    # The lock must outlive any legitimate run, so it shares the stale-run
+    # timeout: a scan longer than a fixed 900s TTL would lose the lock
+    # mid-flight and collide with the next beat-scheduled run.
+    lock_ttl_seconds = settings.PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES * 60
+    if not cache.add(lock_key, lock_token, timeout=lock_ttl_seconds):
+        raise self.retry(countdown=_retry_countdown(self.request.retries))
+    try:
+        claimed = PermissionSyncRun.objects.filter(
+            pk=run_id, status=PermissionSyncRun.Status.QUEUED
+        ).update(status=PermissionSyncRun.Status.RUNNING, started_at=timezone.now())
+        run.refresh_from_db()
+        if not claimed and run.status != PermissionSyncRun.Status.RUNNING:
+            return {"run_id": run.pk, "status": run.status}
+        try:
+            run = synchronize_permissions(run, drive_client=GoogleDriveMetadataClient())
+        except (*DRIVE_API_ERRORS, *SPICEDB_TRANSIENT_ERRORS) as exc:
+            if self.request.retries < self.max_retries:
+                PermissionSyncRun.objects.filter(pk=run.pk).update(
+                    status=PermissionSyncRun.Status.QUEUED,
+                    error_code="",
+                    finished_at=None,
+                )
+                raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries)) from exc
+            raise
+        return {"run_id": run.pk, "status": run.status}
+    finally:
+        if cache.get(lock_key) == lock_token:
+            cache.delete(lock_key)
 
 
 def _set_graph_extraction_state(
@@ -108,6 +167,52 @@ def run_drive_sync(run_id: int) -> dict[str, int | str]:
     return {"run_id": run.pk, "status": run.status}
 
 
+@shared_task(name="integrations.schedule_permission_syncs")
+def schedule_permission_syncs() -> dict[str, int]:
+    """Enqueue a periodic permission run per configured connection.
+
+    Group membership changes never alter a document's own ACL hash, so the
+    drive-sync preserve gate cannot see them; only a periodic reconciliation
+    deletes stale SpiceDB member tuples. This beat task bounds revocation
+    staleness to its schedule interval.
+    """
+    scheduled = 0
+    for connection in DriveConnection.objects.filter(enabled=True).order_by("pk"):
+        if not connection.effective_root_id:
+            continue
+        if PermissionSyncRun.objects.filter(
+            connection=connection,
+            status__in=[PermissionSyncRun.Status.QUEUED, PermissionSyncRun.Status.RUNNING],
+        ).exists():
+            continue
+        run = PermissionSyncRun.create_for_connection(connection)
+        run_permission_sync.delay(run.pk)
+        scheduled += 1
+    return {"scheduled": scheduled}
+
+
+@shared_task(name="integrations.sweep_stale_permission_sync_runs")
+def sweep_stale_permission_sync_runs() -> dict[str, int]:
+    """Fail closed on permission runs a crashed worker left stuck in RUNNING.
+
+    acks_late redelivery only covers a lost worker while the broker still
+    holds the task message; once it is gone the run would stay RUNNING
+    forever, blocking rerun visibility while no reconciliation happens.
+    """
+    cutoff = timezone.now() - datetime.timedelta(
+        minutes=settings.PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES
+    )
+    swept = PermissionSyncRun.objects.filter(
+        status=PermissionSyncRun.Status.RUNNING,
+        started_at__lt=cutoff,
+    ).update(
+        status=PermissionSyncRun.Status.FAILED,
+        error_code="stale_run_timeout",
+        finished_at=timezone.now(),
+    )
+    return {"swept": swept}
+
+
 @shared_task(name="integrations.sweep_stale_drive_sync_runs")
 def sweep_stale_drive_sync_runs() -> dict[str, int]:
     """Fail closed on runs a crashed worker left stuck in RUNNING.
@@ -199,7 +304,7 @@ def queue_document_extraction(
                 # recovery job.
                 raise self.retry(
                     exc=exc,
-                    countdown=min(2 ** (self.request.retries + 1), 60),
+                    countdown=_retry_countdown(self.request.retries),
                 ) from exc
         if not _set_graph_extraction_state(
             source_document_id,

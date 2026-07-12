@@ -88,6 +88,7 @@ INSTALLED_APPS = [
     "health",
     "integrations",
     "graph",
+    "authorization",
 ]
 
 MIDDLEWARE = [
@@ -179,6 +180,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "drive-roots": env("DRIVE_ROOTS_THROTTLE_RATE", default="30/hour"),
         "drive-sync": env("DRIVE_SYNC_THROTTLE_RATE", default="10/hour"),
+        "permission-sync": env("PERMISSION_SYNC_THROTTLE_RATE", default="10/hour"),
     },
 }
 
@@ -202,9 +204,23 @@ CELERY_TIMEZONE = TIME_ZONE
 # A worker crash mid-task leaves the DriveSyncRun row stuck in RUNNING
 # forever with no other signal that it died. The sweep is the recovery path.
 DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int("DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120)
+PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int(
+    "PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120
+)
+# Group revocations are invisible to per-document ACL hashes, so this
+# interval bounds how long a revoked group member can retain access.
+PERMISSION_SYNC_INTERVAL_SECONDS = env.int("PERMISSION_SYNC_INTERVAL_SECONDS", default=900)
 CELERY_BEAT_SCHEDULE = {
+    "schedule-permission-syncs": {
+        "task": "integrations.schedule_permission_syncs",
+        "schedule": float(PERMISSION_SYNC_INTERVAL_SECONDS),
+    },
     "sweep-stale-drive-sync-runs": {
         "task": "integrations.sweep_stale_drive_sync_runs",
+        "schedule": 900.0,
+    },
+    "sweep-stale-permission-sync-runs": {
+        "task": "integrations.sweep_stale_permission_sync_runs",
         "schedule": 900.0,
     },
     "sweep-stale-graph-extractions": {
@@ -212,6 +228,29 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 900.0,
     },
 }
+
+SPICEDB_GRPC_URL = env("SPICEDB_GRPC_URL", default="spicedb:50051")
+SPICEDB_GRPC_PRESHARED_KEY = env("SPICEDB_GRPC_PRESHARED_KEY", default="change-this-spicedb-key")
+_development_context = DEBUG or bool(management_commands.intersection({"test", "pytest"}))
+if not _development_context and SPICEDB_GRPC_PRESHARED_KEY == "change-this-spicedb-key":
+    raise ImproperlyConfigured(
+        "SPICEDB_GRPC_PRESHARED_KEY must not use the development default outside development."
+    )
+# Plaintext gRPC sends the preshared key and every permission tuple in the
+# clear; outside development that requires an explicit private-network waiver.
+SPICEDB_GRPC_TLS = env.bool("SPICEDB_GRPC_TLS", default=False)
+SPICEDB_GRPC_ALLOW_INSECURE = env.bool("SPICEDB_GRPC_ALLOW_INSECURE", default=False)
+if not _development_context and not SPICEDB_GRPC_TLS and not SPICEDB_GRPC_ALLOW_INSECURE:
+    raise ImproperlyConfigured(
+        "Enable SPICEDB_GRPC_TLS outside development, or acknowledge a "
+        "private-network deployment with SPICEDB_GRPC_ALLOW_INSECURE=true."
+    )
+SPICEDB_REQUEST_TIMEOUT_SECONDS = env.int("SPICEDB_REQUEST_TIMEOUT_SECONDS", default=10)
+SPICEDB_BATCH_SIZE = env.int("SPICEDB_BATCH_SIZE", default=500)
+if SPICEDB_REQUEST_TIMEOUT_SECONDS < 1:
+    raise ImproperlyConfigured("SPICEDB_REQUEST_TIMEOUT_SECONDS must be positive.")
+if not 1 <= SPICEDB_BATCH_SIZE <= 1000:
+    raise ImproperlyConfigured("SPICEDB_BATCH_SIZE must be between 1 and 1000.")
 
 NEO4J_URI = env("NEO4J_URI", default="bolt://neo4j:7687")
 NEO4J_USER = env("NEO4J_USER", default="neo4j")

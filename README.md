@@ -130,12 +130,14 @@ Internal services bind to localhost-only alternate ports by default:
 Phases 1 and 2 are code complete (Phase 2's live content-export validation
 waits on domain-wide delegation — see ADR-009). Phase 3, Neo4j graph and
 provenance, is code complete and merged into `main`; its guard-wiring seam
-moved to the Phase 5 tracker. Next: Phase 4 SpiceDB permission sync, then
-Phase 5 permission-safe retrieval.
+moved to the Phase 5 tracker. Phase 4 SpiceDB permission sync is code complete
+with live delegated Workspace validation pending. Next: Phase 5
+permission-safe retrieval.
 
 Read:
 
 - `ai-context/phases/phase-3-neo4j-graph-and-provenance.md`
+- `ai-context/phases/phase-4-spicedb-permissions.md`
 - `ai-context/phases/phase-2-google-drive-ingestion.md`
 - `docs/google-drive-next.md`
 - `ai-context/07-ai-coding-security-rules.md`

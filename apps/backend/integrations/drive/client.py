@@ -44,6 +44,15 @@ class DrivePermissionAccessReport:
     folder_listing_errors: int = 0
 
 
+@dataclass(frozen=True)
+class DrivePermissionResource:
+    resource_type: str
+    drive_id: str
+    parent_folder_ids: list[str] = field(default_factory=list)
+    permissions: list[dict] = field(default_factory=list)
+    permissions_fetch_failed: bool = False
+
+
 class DriveMetadataClient(Protocol):
     def list_files(self, connection: DriveConnection) -> list[DriveFileMetadata]:
         """Return Drive file metadata for a configured connection."""
@@ -58,3 +67,8 @@ class DriveMetadataClient(Protocol):
         max_files: int = 10,
     ) -> DrivePermissionAccessReport:
         """Sample selected-root files and report whether ACL metadata is readable."""
+
+    def list_permission_resources(
+        self, connection: DriveConnection
+    ) -> list[DrivePermissionResource]:
+        """Return a complete permission-only folder/document scope snapshot."""

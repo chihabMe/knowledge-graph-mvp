@@ -12,15 +12,14 @@ STABLE_PERMISSION_FIELDS = (
     "deleted",
     "pendingOwner",
     "inherited",
+    "inheritedFrom",
+    "permissionDetails",
 )
 
 
 def source_permissions_version(permissions: list[dict[str, Any]] | None) -> str:
     permissions = permissions or []
-    canonical_permissions = [
-        {field: permission.get(field) for field in STABLE_PERMISSION_FIELDS if field in permission}
-        for permission in permissions
-    ]
+    canonical_permissions = [_canonical_permission(permission) for permission in permissions]
     canonical_permissions.sort(
         key=lambda permission: (
             str(permission.get("id", "")),
@@ -32,6 +31,29 @@ def source_permissions_version(permissions: list[dict[str, Any]] | None) -> str:
     )
     payload = json.dumps(canonical_permissions, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _canonical_permission(permission: dict[str, Any]) -> dict[str, Any]:
+    canonical = {
+        field: permission.get(field)
+        for field in STABLE_PERMISSION_FIELDS
+        if field in permission and field != "permissionDetails"
+    }
+    details = permission.get("permissionDetails")
+    if isinstance(details, list):
+        canonical["permissionDetails"] = sorted(
+            (
+                {
+                    key: detail.get(key)
+                    for key in ("inherited", "inheritedFrom", "permissionType", "role")
+                    if key in detail
+                }
+                for detail in details
+                if isinstance(detail, dict)
+            ),
+            key=lambda detail: json.dumps(detail, sort_keys=True, separators=(",", ":")),
+        )
+    return canonical
 
 
 def has_public_link(permissions: list[dict[str, Any]] | None) -> bool:

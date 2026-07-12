@@ -41,3 +41,44 @@ class HealthEndpointTests(SimpleTestCase):
         self.assertEqual(response.json()["status"], "degraded")
         self.assertEqual(response.json()["services"]["postgres"], "error")
         self.assertNotIn("connection failed", response.content.decode())
+
+    @patch(
+        "health.checks.SERVICE_CHECKS",
+        {
+            "django": lambda: None,
+            "postgres": lambda: None,
+            "redis": lambda: None,
+            "neo4j": lambda: None,
+            "spicedb": lambda: None,
+        },
+    )
+    def test_spicedb_health_success_is_reported(self):
+        response = self.client.get(reverse("health"))
+        self.assertEqual(response.json()["services"]["spicedb"], "ok")
+
+    @patch(
+        "health.checks.SERVICE_CHECKS",
+        {
+            "django": lambda: None,
+            "postgres": lambda: None,
+            "redis": lambda: None,
+            "neo4j": lambda: None,
+            "spicedb": lambda: (_ for _ in ()).throw(RuntimeError("dns.internal:50051 secret-key")),
+        },
+    )
+    def test_spicedb_health_failure_does_not_leak_details(self):
+        response = self.client.get(reverse("health"))
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["services"]["spicedb"], "error")
+        self.assertNotIn("dns.internal", response.content.decode())
+        self.assertNotIn("secret-key", response.content.decode())
+
+    def test_spicedb_probe_is_bounded_and_reuses_one_client(self):
+        import health.checks as checks
+
+        with patch.object(checks, "_spicedb_probe", None):
+            with patch("health.checks.AuthzedSpiceDB") as client_class:
+                checks.check_spicedb()
+                checks.check_spicedb()
+            client_class.assert_called_once_with(timeout=1)
+            self.assertEqual(client_class.return_value.check.call_count, 2)

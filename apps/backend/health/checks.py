@@ -5,6 +5,8 @@ from django.db import connections
 from neo4j import GraphDatabase
 from redis import Redis
 
+from authorization.client import AuthzedSpiceDB
+
 ServiceCheck = Callable[[], None]
 
 
@@ -39,11 +41,25 @@ def check_neo4j() -> None:
         driver.close()
 
 
+# One shared channel for probes: liveness checks fire continuously, and a
+# fresh gRPC channel per hit would churn connections. The 1s deadline keeps
+# a SpiceDB outage from stalling /api/health/ past the other ~1s probes.
+_spicedb_probe: AuthzedSpiceDB | None = None
+
+
+def check_spicedb() -> None:
+    global _spicedb_probe
+    if _spicedb_probe is None:
+        _spicedb_probe = AuthzedSpiceDB(timeout=1)
+    _spicedb_probe.check()
+
+
 SERVICE_CHECKS: dict[str, ServiceCheck] = {
     "django": check_django,
     "postgres": check_postgres,
     "redis": check_redis,
     "neo4j": check_neo4j,
+    "spicedb": check_spicedb,
 }
 
 
