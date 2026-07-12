@@ -135,17 +135,16 @@ class ClientTransportTests(TestCase):
         bearer.assert_called_once()
 
     def test_default_stays_on_the_insecure_channel(self):
+        from django.conf import settings
+
         from authorization import client as client_module
 
         with override_settings(SPICEDB_GRPC_TLS=False, SPICEDB_GRPC_URL="spicedb:50051"):
-            with (
-                patch.object(client_module.grpc, "insecure_channel") as insecure_channel,
-                patch.object(client_module.grpc, "intercept_channel") as intercept_channel,
-            ):
-                intercept_channel.return_value = Mock()
+            with patch.object(client_module, "InsecureClient") as insecure_client:
                 client_module.AuthzedSpiceDB()
-        insecure_channel.assert_called_once_with("spicedb:50051")
-        intercept_channel.assert_called_once()
+        insecure_client.assert_called_once_with(
+            "spicedb:50051", settings.SPICEDB_GRPC_PRESHARED_KEY
+        )
 
     def test_insecure_channel_is_not_restricted_to_loopback(self):
         # Regression test: grpcutil.insecure_bearer_token_credentials() composes
@@ -606,10 +605,35 @@ class PermissionTaskTests(TestCase):
         PermissionSyncRun.objects.create(connection=busy, status=PermissionSyncRun.Status.RUNNING)
         with patch("integrations.tasks.run_permission_sync.delay") as delay:
             result = schedule_permission_syncs.run()
-        self.assertEqual(result, {"scheduled": 1})
+        self.assertEqual(result, {"scheduled": 1, "redispatched": 0})
         run = PermissionSyncRun.objects.get(connection=self.connection)
         delay.assert_called_once_with(run.pk)
         self.assertEqual(run.status, PermissionSyncRun.Status.QUEUED)
+
+    def test_scheduler_redispatches_orphaned_queued_run(self):
+        # Regression test: a QUEUED run whose task message died (its
+        # lock-contention retries exhausted against a scan longer than the
+        # beat interval) used to block the connection's scheduled syncs
+        # forever -- the scheduler skipped any connection with a QUEUED run
+        # and the sweeper only fails RUNNING ones, leaving revocation
+        # staleness unbounded.
+        orphan = PermissionSyncRun.objects.create(connection=self.connection)
+        with patch("integrations.tasks.run_permission_sync.delay") as delay:
+            result = schedule_permission_syncs.run()
+        self.assertEqual(result, {"scheduled": 0, "redispatched": 1})
+        delay.assert_called_once_with(orphan.pk)
+        self.assertEqual(PermissionSyncRun.objects.count(), 1)
+
+    def test_scheduler_leaves_running_connection_alone(self):
+        PermissionSyncRun.objects.create(
+            connection=self.connection, status=PermissionSyncRun.Status.RUNNING
+        )
+        PermissionSyncRun.objects.create(connection=self.connection)
+        with patch("integrations.tasks.run_permission_sync.delay") as delay:
+            result = schedule_permission_syncs.run()
+        self.assertEqual(result, {"scheduled": 0, "redispatched": 0})
+        delay.assert_not_called()
+        self.assertEqual(PermissionSyncRun.objects.count(), 2)
 
     def test_stale_running_run_is_swept_failed(self):
         stale = PermissionSyncRun.objects.create(
