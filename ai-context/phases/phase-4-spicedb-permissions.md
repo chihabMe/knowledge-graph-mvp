@@ -65,6 +65,20 @@ Model and enforce Google Drive visibility using SpiceDB before any retrieval occ
 
 ## Completion Status
 
-Code complete with live delegated Google Workspace ACL and Directory group
-validation pending. Local SpiceDB validation passed for direct, nested-group,
-multi-level folder, deny, and consistent-read revocation behavior.
+Code complete and merged into `main`. Live-stack validation passed: full
+scheduler-profile stack (`spicedb-schema`, celery-beat, the scheduled
+permission sync, and the stale-run sweeper), the `/api/health/` degraded path
+(503 within ~2s, no leaked detail), the fail-closed retrieval allowlist log,
+and the production TLS-guard boot check. Local SpiceDB validation passed for
+direct, nested-group, multi-level folder, deny, and consistent-read
+revocation behavior. Live delegated Google Workspace ACL and Directory group
+validation is still pending client credentials — the scheduled sync reaches
+`partial` against the current service account for that reason, which is
+expected.
+
+Live validation also found and fixed a real defect: the non-TLS SpiceDB gRPC
+path (`grpcutil.insecure_bearer_token_credentials`) was hardcoded to
+loopback-only credentials and could never succeed container-to-container on
+the compose network, making `SPICEDB_GRPC_ALLOW_INSECURE=true` a no-op for
+this deployment topology. Replaced with a plain `grpc.insecure_channel` plus
+a bearer-token metadata interceptor.
