@@ -40,17 +40,22 @@ Users must not receive facts derived from Google Drive files they cannot access.
 
 ## Common Commands
 
-Copy environment defaults first:
+Validate all Compose layers. In a fresh clone, this command uses
+`.env.example` for interpolation and service `env_file` validation only; it
+does not start containers:
+
+```bash
+make config
+```
+
+Before starting any service, copy and replace the environment defaults:
 
 ```bash
 cp .env.example .env
 ```
 
-Validate Compose files:
-
-```bash
-make config
-```
+Runtime commands intentionally require the real `.env` and never use
+`.env.example` as deployment configuration.
 
 Start the core development services:
 
@@ -75,7 +80,13 @@ Run tests and linting:
 ```bash
 make test
 make lint
+make migration-check
 ```
+
+GitHub CI runs Compose validation, full-history secret scanning, locked
+dependency installation, lint/format checks, migration-drift detection, Django
+checks, and the backend test suite. The required branch-protection check is
+named `Backend validation`.
 
 Check service health:
 
