@@ -7,17 +7,18 @@ information only — content export lives in integrations.drive.export.
 The Drive service object is injectable so tests never touch the network.
 """
 
-import os
 from datetime import datetime
 from typing import Any
-
-from django.conf import settings
 
 from integrations.drive.client import (
     DriveFileMetadata,
     DrivePermissionAccessReport,
     DrivePermissionResource,
     DriveRootCandidate,
+)
+from integrations.drive.credentials import (
+    ServiceAccountKeyError,
+    load_service_account_credentials,
 )
 from integrations.models import DriveConnection
 
@@ -76,40 +77,25 @@ class GoogleDriveApiError(RuntimeError):
     """Controlled API-boundary error for Drive request failures."""
 
 
+_KEY_ERROR_MESSAGES = {
+    "unreadable_path": (
+        "GOOGLE_SERVICE_ACCOUNT_FILE could not be inspected. Check the "
+        "mounted service-account key path and file permissions."
+    ),
+    "missing_or_empty": (
+        "GOOGLE_SERVICE_ACCOUNT_FILE is not configured or points at an "
+        "empty file (the /dev/null bootstrap mount). Set the host path "
+        "in .env and restart the stack."
+    ),
+    "invalid_key": (
+        "GOOGLE_SERVICE_ACCOUNT_FILE could not be read as a service-account "
+        "key. Check that the mounted file contains valid key JSON."
+    ),
+}
+
+
 def build_drive_service(connection: DriveConnection):
     """Build an authenticated Drive v3 service for a connection."""
-    key_path = settings.GOOGLE_SERVICE_ACCOUNT_FILE
-    try:
-        missing_or_empty_key = (
-            not key_path or not os.path.exists(key_path) or os.path.getsize(key_path) == 0
-        )
-    except OSError as exc:
-        raise MissingServiceAccountKeyError(
-            "GOOGLE_SERVICE_ACCOUNT_FILE could not be inspected. Check the "
-            "mounted service-account key path and file permissions."
-        ) from exc
-    if missing_or_empty_key:
-        raise MissingServiceAccountKeyError(
-            "GOOGLE_SERVICE_ACCOUNT_FILE is not configured or points at an "
-            "empty file (the /dev/null bootstrap mount). Set the host path "
-            "in .env and restart the stack."
-        )
-
-    # Imported lazily so tests that inject a fake service never need
-    # Google credentials or the discovery cache.
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-
-    try:
-        credentials = service_account.Credentials.from_service_account_file(
-            key_path,
-            scopes=[DRIVE_READONLY_SCOPE],
-        )
-    except (OSError, ValueError) as exc:
-        raise MissingServiceAccountKeyError(
-            "GOOGLE_SERVICE_ACCOUNT_FILE could not be read as a service-account "
-            "key. Check that the mounted file contains valid key JSON."
-        ) from exc
     # The connection's field is authoritative: a bootstrap connection is
     # already seeded from settings.GOOGLE_DRIVE_DELEGATED_SUBJECT at creation
     # time, so falling back to the env var here would make clearing the subject
@@ -117,9 +103,18 @@ def build_drive_service(connection: DriveConnection):
     # report "" and invalidate documents while the built service still delegated
     # to the env subject. Read only the connection field so the effective auth
     # identity always matches what the endpoint reports.
+    try:
+        credentials = load_service_account_credentials([DRIVE_READONLY_SCOPE])
+    except ServiceAccountKeyError as exc:
+        raise MissingServiceAccountKeyError(_KEY_ERROR_MESSAGES[exc.reason]) from exc
     subject = connection.delegated_subject_email
     if subject:
         credentials = credentials.with_subject(subject)
+
+    # Imported lazily so tests that inject a fake service never need
+    # Google credentials or the discovery cache.
+    from googleapiclient.discovery import build
+
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 

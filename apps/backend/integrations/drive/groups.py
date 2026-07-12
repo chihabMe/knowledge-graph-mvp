@@ -1,8 +1,9 @@
-import os
 from dataclasses import dataclass
 
-from django.conf import settings
-
+from integrations.drive.credentials import (
+    ServiceAccountKeyError,
+    load_service_account_credentials,
+)
 from integrations.models import DriveConnection
 
 DIRECTORY_GROUP_MEMBER_SCOPE = (
@@ -23,20 +24,18 @@ class GroupMembership:
 def build_directory_service(connection: DriveConnection):
     if not connection.delegated_subject_email:
         raise GroupResolutionError("Delegated subject required for Directory API access.")
-    key_path = settings.GOOGLE_SERVICE_ACCOUNT_FILE
     try:
-        if not key_path or not os.path.exists(key_path) or os.path.getsize(key_path) == 0:
-            raise GroupResolutionError("Directory credentials unavailable.")
-    except OSError as exc:
+        credentials = load_service_account_credentials(
+            [DIRECTORY_GROUP_MEMBER_SCOPE], subject=connection.delegated_subject_email
+        )
+    except ServiceAccountKeyError as exc:
+        # One controlled message on purpose: group resolution feeds run
+        # error codes, so key-path detail must not leak through this path.
         raise GroupResolutionError("Directory credentials unavailable.") from exc
 
-    from google.oauth2 import service_account
     from googleapiclient.discovery import build
 
     try:
-        credentials = service_account.Credentials.from_service_account_file(
-            key_path, scopes=[DIRECTORY_GROUP_MEMBER_SCOPE]
-        ).with_subject(connection.delegated_subject_email)
         return build("admin", "directory_v1", credentials=credentials, cache_discovery=False)
     except (OSError, ValueError) as exc:
         raise GroupResolutionError("Directory credentials unavailable.") from exc
