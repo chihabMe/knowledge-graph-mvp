@@ -473,7 +473,9 @@ def _commit_verified_documents(connection, result: SyncResult, revision: str) ->
                 retrieval_eligible=True,
                 exclusion_reason="",
                 spicedb_permissions_version=version,
-                spicedb_revision=revision or "fully_consistent",
+                # Empty means "no explicit revision"; an eligible document
+                # always has grant tuples, so a real token exists here.
+                spicedb_revision=revision,
                 spicedb_verified_at=now,
                 updated_at=now,
             )
