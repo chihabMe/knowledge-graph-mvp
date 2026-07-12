@@ -27,6 +27,11 @@ from integrations.models import (
 _UNSET = object()
 
 
+def _retry_countdown(retries: int) -> int:
+    """Exponential backoff shared by every retrying task, capped at 60s."""
+    return min(2 ** (retries + 1), 60)
+
+
 @shared_task(
     bind=True,
     name="integrations.run_permission_sync",
@@ -42,7 +47,7 @@ def run_permission_sync(self, run_id: int) -> dict[str, int | str]:
     lock_key = f"permission-sync:connection:{run.connection_id}"
     lock_token = f"run:{run.pk}"
     if not cache.add(lock_key, lock_token, timeout=900):
-        raise self.retry(countdown=min(2 ** (self.request.retries + 1), 60))
+        raise self.retry(countdown=_retry_countdown(self.request.retries))
     try:
         claimed = PermissionSyncRun.objects.filter(
             pk=run_id, status=PermissionSyncRun.Status.QUEUED
@@ -59,9 +64,7 @@ def run_permission_sync(self, run_id: int) -> dict[str, int | str]:
                     error_code="",
                     finished_at=None,
                 )
-                raise self.retry(
-                    exc=exc, countdown=min(2 ** (self.request.retries + 1), 60)
-                ) from exc
+                raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries)) from exc
             raise
         return {"run_id": run.pk, "status": run.status}
     finally:
@@ -297,7 +300,7 @@ def queue_document_extraction(
                 # recovery job.
                 raise self.retry(
                     exc=exc,
-                    countdown=min(2 ** (self.request.retries + 1), 60),
+                    countdown=_retry_countdown(self.request.retries),
                 ) from exc
         if not _set_graph_extraction_state(
             source_document_id,
