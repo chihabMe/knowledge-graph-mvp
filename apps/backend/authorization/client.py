@@ -76,16 +76,64 @@ def _zed_token(response) -> str:
     return getattr(token, "token", "")
 
 
+class _BearerTokenInterceptor(
+    grpc.UnaryUnaryClientInterceptor,
+    grpc.UnaryStreamClientInterceptor,
+    grpc.StreamUnaryClientInterceptor,
+    grpc.StreamStreamClientInterceptor,
+):
+    """Attach a bearer-token Authorization header to every call on a plain channel.
+
+    grpcutil.insecure_bearer_token_credentials() composes the token with
+    grpc.local_channel_credentials(LocalConnectionType.LOCAL_TCP), which gRPC
+    enforces at the transport layer against loopback addresses only -- it can
+    never reach SpiceDB running in a separate docker-compose container. This
+    interceptor puts the same header on a plain grpc.insecure_channel instead,
+    so SPICEDB_GRPC_ALLOW_INSECURE can acknowledge a private, non-loopback
+    network the way .env.example documents.
+    """
+
+    def __init__(self, token: str):
+        self._header = ("authorization", f"Bearer {token}")
+
+    def _add_header(self, client_call_details):
+        metadata = list(client_call_details.metadata or [])
+        metadata.append(self._header)
+        return client_call_details._replace(metadata=metadata)
+
+    def intercept_unary_unary(self, continuation, client_call_details, request):
+        return continuation(self._add_header(client_call_details), request)
+
+    def intercept_unary_stream(self, continuation, client_call_details, request):
+        return continuation(self._add_header(client_call_details), request)
+
+    def intercept_stream_unary(self, continuation, client_call_details, request_iterator):
+        return continuation(self._add_header(client_call_details), request_iterator)
+
+    def intercept_stream_stream(self, continuation, client_call_details, request_iterator):
+        return continuation(self._add_header(client_call_details), request_iterator)
+
+
+def _insecure_network_client(target: str, token: str) -> Client:
+    channel = grpc.intercept_channel(grpc.insecure_channel(target), _BearerTokenInterceptor(token))
+    client = Client.__new__(Client)
+    client.init_stubs(channel)
+    return client
+
+
 class AuthzedSpiceDB:
     """Small synchronous adapter around the official Authzed v1 client."""
 
     def __init__(self, client=None, *, timeout=None):
-        credentials = (
-            grpcutil.bearer_token_credentials(settings.SPICEDB_GRPC_PRESHARED_KEY)
-            if settings.SPICEDB_GRPC_TLS
-            else grpcutil.insecure_bearer_token_credentials(settings.SPICEDB_GRPC_PRESHARED_KEY)
-        )
-        self._client = client or Client(settings.SPICEDB_GRPC_URL, credentials)
+        if client is None:
+            if settings.SPICEDB_GRPC_TLS:
+                credentials = grpcutil.bearer_token_credentials(settings.SPICEDB_GRPC_PRESHARED_KEY)
+                client = Client(settings.SPICEDB_GRPC_URL, credentials)
+            else:
+                client = _insecure_network_client(
+                    settings.SPICEDB_GRPC_URL, settings.SPICEDB_GRPC_PRESHARED_KEY
+                )
+        self._client = client
         self._timeout = timeout if timeout is not None else settings.SPICEDB_REQUEST_TIMEOUT_SECONDS
 
     def apply_schema(self, schema: str) -> str:

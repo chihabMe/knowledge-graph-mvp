@@ -137,15 +137,30 @@ class ClientTransportTests(TestCase):
     def test_default_stays_on_the_insecure_channel(self):
         from authorization import client as client_module
 
-        with override_settings(SPICEDB_GRPC_TLS=False):
+        with override_settings(SPICEDB_GRPC_TLS=False, SPICEDB_GRPC_URL="spicedb:50051"):
             with (
-                patch.object(client_module, "Client"),
-                patch.object(
-                    client_module.grpcutil, "insecure_bearer_token_credentials"
-                ) as insecure,
+                patch.object(client_module.grpc, "insecure_channel") as insecure_channel,
+                patch.object(client_module.grpc, "intercept_channel") as intercept_channel,
             ):
+                intercept_channel.return_value = Mock()
                 client_module.AuthzedSpiceDB()
-        insecure.assert_called_once()
+        insecure_channel.assert_called_once_with("spicedb:50051")
+        intercept_channel.assert_called_once()
+
+    def test_insecure_channel_is_not_restricted_to_loopback(self):
+        # Regression test: grpcutil.insecure_bearer_token_credentials() composes
+        # grpc.local_channel_credentials(LocalConnectionType.LOCAL_TCP), which
+        # gRPC's transport layer refuses for any non-loopback address -- exactly
+        # the address a docker-compose "spicedb" service resolves to. The
+        # replacement must not go through that credential type at all.
+        from authorization import client as client_module
+
+        with override_settings(SPICEDB_GRPC_TLS=False):
+            with patch.object(
+                client_module.grpcutil, "insecure_bearer_token_credentials"
+            ) as insecure:
+                client_module.AuthzedSpiceDB()
+        insecure.assert_not_called()
 
 
 class ManagedTupleReadTests(TestCase):
