@@ -347,6 +347,27 @@ class PermissionSyncTests(TestCase):
         self.assertTrue(self.document.retrieval_eligible)
         self.assertTrue(other.retrieval_eligible)
 
+    def test_document_returning_to_scope_regains_eligibility(self):
+        # A document swept to INACTIVE_IN_SCOPE and later moved back under
+        # the synced root must become eligible again: the scan that just
+        # re-activated it is newer evidence than the sticky reason, and no
+        # beat-scheduled job clears the reason otherwise.
+        SourceDocument.objects.filter(pk=self.document.pk).update(
+            active_in_scope=False,
+            retrieval_eligible=False,
+            exclusion_reason=SourceDocument.ExclusionReason.INACTIVE_IN_SCOPE,
+        )
+        run = self.run_sync(
+            [
+                DrivePermissionResource("folder", "root", permissions=[]),
+                DrivePermissionResource("document", "doc-1", ["root"], [user_permission()]),
+            ]
+        )
+        self.document.refresh_from_db()
+        self.assertEqual(run.status, PermissionSyncRun.Status.SUCCEEDED)
+        self.assertTrue(self.document.retrieval_eligible)
+        self.assertEqual(self.document.exclusion_reason, "")
+
     def test_document_without_any_grant_path_is_not_eligible(self):
         run = self.run_sync(
             [

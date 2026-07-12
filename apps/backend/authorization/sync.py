@@ -367,10 +367,12 @@ def _resource_acl_reason(snapshot, unresolved_groups: set[str]) -> str:
 
 
 def _document_reason(document, snapshot, unresolved_groups, invalid_folders) -> str:
-    if document.exclusion_reason in {
-        SourceDocument.ExclusionReason.UNSUPPORTED_MIME_TYPE,
-        SourceDocument.ExclusionReason.INACTIVE_IN_SCOPE,
-    }:
+    # Only the mime exclusion is sticky: the permission scan cannot judge
+    # content type, so that stays the content sync's call. INACTIVE_IN_SCOPE
+    # must not be — every document here was just re-activated by this very
+    # scan, so a leftover reason is stale evidence that would otherwise
+    # exclude a returned document until a manual content sync clears it.
+    if document.exclusion_reason == SourceDocument.ExclusionReason.UNSUPPORTED_MIME_TYPE:
         return document.exclusion_reason
     if any(parent in invalid_folders for parent in document.parent_folder_ids):
         return SourceDocument.ExclusionReason.PERMISSION_METADATA_INCOMPLETE
