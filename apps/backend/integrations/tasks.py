@@ -177,18 +177,32 @@ def schedule_permission_syncs() -> dict[str, int]:
     staleness to its schedule interval.
     """
     scheduled = 0
+    redispatched = 0
     for connection in DriveConnection.objects.filter(enabled=True).order_by("pk"):
         if not connection.effective_root_id:
             continue
-        if PermissionSyncRun.objects.filter(
+        active = PermissionSyncRun.objects.filter(
             connection=connection,
             status__in=[PermissionSyncRun.Status.QUEUED, PermissionSyncRun.Status.RUNNING],
-        ).exists():
+        )
+        if active.filter(status=PermissionSyncRun.Status.RUNNING).exists():
+            continue
+        queued = list(active.order_by("pk"))
+        if queued:
+            # A QUEUED run whose task message is gone (lock-contention
+            # retries exhausted against a long scan, broker loss) would
+            # otherwise block this connection's scheduled syncs forever:
+            # nothing re-dispatches it and the sweeper only covers RUNNING.
+            # Re-sending is idempotent -- the task re-claims through the
+            # status CAS and the per-connection lock.
+            for run in queued:
+                run_permission_sync.delay(run.pk)
+                redispatched += 1
             continue
         run = PermissionSyncRun.create_for_connection(connection)
         run_permission_sync.delay(run.pk)
         scheduled += 1
-    return {"scheduled": scheduled}
+    return {"scheduled": scheduled, "redispatched": redispatched}
 
 
 @shared_task(name="integrations.sweep_stale_permission_sync_runs")
