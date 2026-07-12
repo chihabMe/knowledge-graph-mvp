@@ -411,7 +411,7 @@ The evaluation runner should report:
 
 These are the target public interfaces:
 
-### `GET /health`
+### `GET /api/health/`
 
 Reports health for:
 

@@ -55,7 +55,7 @@
 
 ### Operations Tests
 
-- `GET /health` checks all core services.
+- `GET /api/health/` checks the currently integrated core services.
 - Celery worker is running.
 - Celery Beat is running.
 - Redis is reachable.
