@@ -295,6 +295,58 @@ class PermissionSyncTests(TestCase):
                 self.assertFalse(self.document.retrieval_eligible)
                 self.assertEqual(self.document.exclusion_reason, reason)
 
+    def test_deleted_group_principal_does_not_poison_group_resolution(self):
+        # Drive keeps a deleted Workspace group in the ACL with deleted=true
+        # and the Directory API 404s on it, which the real resolver reports as
+        # GroupResolutionError. That entry must never reach the resolver:
+        # otherwise one dead group in one file's ACL marks every group on the
+        # connection unresolved and excludes every group-granted document.
+        class RecordingResolver:
+            def __init__(self):
+                self.requested = set()
+
+            def resolve(self, connection, group_emails):
+                self.requested = set(group_emails)
+                if "dead@example.com" in group_emails:
+                    raise GroupResolutionError("Group membership lookup failed.")
+                return {
+                    email: GroupMembership(frozenset({"member@example.com"}), frozenset())
+                    for email in group_emails
+                }
+
+        deleted_group = {
+            "id": "g-dead",
+            "type": "group",
+            "role": "reader",
+            "emailAddress": "dead@example.com",
+            "deleted": True,
+        }
+        other = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="doc-2",
+            title="Other",
+            mime_type="text/plain",
+        )
+        resolver = RecordingResolver()
+        run = self.run_sync(
+            [
+                DrivePermissionResource("folder", "root", permissions=[]),
+                DrivePermissionResource(
+                    "document", "doc-1", ["root"], [user_permission(), deleted_group]
+                ),
+                DrivePermissionResource(
+                    "document", "doc-2", ["root"], [group_permission("live@example.com")]
+                ),
+            ],
+            groups=resolver,
+        )
+        self.document.refresh_from_db()
+        other.refresh_from_db()
+        self.assertNotIn("dead@example.com", resolver.requested)
+        self.assertEqual(run.status, PermissionSyncRun.Status.SUCCEEDED)
+        self.assertTrue(self.document.retrieval_eligible)
+        self.assertTrue(other.retrieval_eligible)
+
     def test_document_without_any_grant_path_is_not_eligible(self):
         run = self.run_sync(
             [

@@ -333,6 +333,11 @@ def _referenced_groups(folders, documents) -> set[str]:
         if not snapshot:
             continue
         for permission in snapshot.raw_permissions:
+            # Deleted principals are skipped everywhere ACLs are read; a
+            # deleted group would 404 in the Directory API and mark every
+            # group on the connection unresolved.
+            if permission.get("deleted"):
+                continue
             if permission.get("type") == "group" and _principal_email(permission):
                 result.add(_principal_email(permission))
     return result
