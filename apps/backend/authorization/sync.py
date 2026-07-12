@@ -430,19 +430,26 @@ def _validate_acyclic(folders, folder_by_drive_id) -> None:
     visiting: set[str] = set()
     visited: set[str] = set()
 
-    def visit(node: str) -> None:
-        if node in visiting:
-            raise PermissionSyncError("folder_hierarchy_cycle")
-        if node in visited:
-            return
-        visiting.add(node)
-        for parent in edges[node]:
-            visit(parent)
-        visiting.remove(node)
-        visited.add(node)
-
-    for node in edges:
-        visit(node)
+    # Explicit stack instead of recursion: hierarchy depth is client data,
+    # and a deep-enough tree must not crash with RecursionError.
+    for start in edges:
+        if start in visited:
+            continue
+        visiting.add(start)
+        stack = [(start, iter(edges[start]))]
+        while stack:
+            node, parents = stack[-1]
+            for parent in parents:
+                if parent in visiting:
+                    raise PermissionSyncError("folder_hierarchy_cycle")
+                if parent not in visited:
+                    visiting.add(parent)
+                    stack.append((parent, iter(edges[parent])))
+                    break
+            else:
+                visiting.remove(node)
+                visited.add(node)
+                stack.pop()
 
 
 def _include_descendants(invalid: set[str], folders) -> set[str]:

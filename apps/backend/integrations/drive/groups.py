@@ -51,42 +51,57 @@ class GoogleGroupResolver:
         service = self._service or build_directory_service(connection)
         resolved: dict[str, GroupMembership] = {}
         visiting: set[str] = set()
+        # Explicit stack instead of recursion: nesting depth is client data,
+        # and a deep-enough chain must not crash with RecursionError.
+        stack: list[tuple[str, set[str], set[str], list[str]]] = []
 
-        def visit(group_email: str) -> None:
+        def push(group_email: str) -> None:
             group_email = group_email.strip().lower()
-            if group_email in resolved:
-                return
             if group_email in visiting:
                 raise GroupResolutionError("Nested group cycle detected.")
             visiting.add(group_email)
-            users: set[str] = set()
-            children: set[str] = set()
-            page_token = None
-            try:
-                while True:
-                    response = (
-                        service.members()
-                        .list(groupKey=group_email, pageToken=page_token, maxResults=200)
-                        .execute()
-                    )
-                    for member in response.get("members", []):
-                        email = str(member.get("email", "")).strip().lower()
-                        if not email or member.get("status", "ACTIVE") != "ACTIVE":
-                            continue
-                        if member.get("type") == "GROUP":
-                            children.add(email)
-                        elif member.get("type") == "USER":
-                            users.add(email)
-                    page_token = response.get("nextPageToken")
-                    if not page_token:
-                        break
-            except Exception as exc:
-                raise GroupResolutionError("Group membership lookup failed.") from exc
-            for child in sorted(children):
-                visit(child)
-            visiting.remove(group_email)
-            resolved[group_email] = GroupMembership(frozenset(users), frozenset(children))
+            users, children = _fetch_membership(service, group_email)
+            stack.append((group_email, users, children, sorted(children)))
 
         for email in sorted(group_emails):
-            visit(email)
+            if email.strip().lower() in resolved:
+                continue
+            push(email)
+            while stack:
+                group_email, users, children, pending = stack[-1]
+                while pending and pending[0] in resolved:
+                    pending.pop(0)
+                if pending:
+                    push(pending.pop(0))
+                    continue
+                visiting.remove(group_email)
+                resolved[group_email] = GroupMembership(frozenset(users), frozenset(children))
+                stack.pop()
         return resolved
+
+
+def _fetch_membership(service, group_email: str) -> tuple[set[str], set[str]]:
+    users: set[str] = set()
+    children: set[str] = set()
+    page_token = None
+    try:
+        while True:
+            response = (
+                service.members()
+                .list(groupKey=group_email, pageToken=page_token, maxResults=200)
+                .execute()
+            )
+            for member in response.get("members", []):
+                email = str(member.get("email", "")).strip().lower()
+                if not email or member.get("status", "ACTIVE") != "ACTIVE":
+                    continue
+                if member.get("type") == "GROUP":
+                    children.add(email)
+                elif member.get("type") == "USER":
+                    users.add(email)
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as exc:
+        raise GroupResolutionError("Group membership lookup failed.") from exc
+    return users, children

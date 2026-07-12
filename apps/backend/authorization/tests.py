@@ -637,6 +637,51 @@ class SchemaCommandTests(TestCase):
             call_command("spicedb_schema_check")
 
 
+class TraversalDepthTests(TestCase):
+    def test_deep_folder_chain_validates_without_recursion(self):
+        from types import SimpleNamespace
+
+        from authorization.sync import _validate_acyclic
+
+        depth = 1500  # comfortably past Python's default recursion limit
+        folders = [
+            SimpleNamespace(drive_folder_id=f"f{i}", parent_folder_ids=[f"f{i + 1}"])
+            for i in range(depth)
+        ]
+        folders.append(SimpleNamespace(drive_folder_id=f"f{depth}", parent_folder_ids=[]))
+        by_id = {folder.drive_folder_id: folder for folder in folders}
+        _validate_acyclic(folders, by_id)
+
+    def test_deep_group_chain_resolves_without_recursion(self):
+        depth = 1500
+
+        class FakeCall:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def execute(self):
+                return self._payload
+
+        class ChainDirectory:
+            def members(self):
+                return self
+
+            def list(self, *, groupKey, pageToken=None, maxResults=200):
+                index = int(groupKey.removeprefix("g").removesuffix("@example.com"))
+                if index < depth:
+                    member = {"email": f"g{index + 1}@example.com", "type": "GROUP"}
+                else:
+                    member = {"email": "leaf@example.com", "type": "USER"}
+                return FakeCall({"members": [member]})
+
+        connection = DriveConnection(workspace_domain="example.com")
+        resolved = GoogleGroupResolver(service=ChainDirectory()).resolve(
+            connection, {"g0@example.com"}
+        )
+        self.assertEqual(len(resolved), depth + 1)
+        self.assertIn("leaf@example.com", resolved[f"g{depth}@example.com"].users)
+
+
 class GroupResolverTests(TestCase):
     def test_cycle_is_rejected_without_logging_payloads(self):
         call = Mock()
