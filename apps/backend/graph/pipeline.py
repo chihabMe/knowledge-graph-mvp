@@ -17,7 +17,11 @@ from pypdf import PdfReader
 from pypdf.errors import DependencyError, PyPdfError
 
 from graph.db import write_transaction
-from graph.embeddings import EmbeddingAdapter, NoOpEmbeddingAdapter
+from graph.embeddings import (
+    RETRYABLE_EMBEDDING_EXCEPTIONS,
+    EmbeddingAdapter,
+    build_embedding_adapter,
+)
 from graph.extraction import ExtractionAdapter, ParagraphChunkExtractor, validate_extraction_result
 from graph.writer import replace_document_chunks, replace_document_entities, upsert_document
 from integrations.models import SourceDocument, SourceDocumentContent
@@ -37,7 +41,7 @@ def get_extraction_adapter() -> ExtractionAdapter:
 
 
 def get_embedding_adapter() -> EmbeddingAdapter:
-    return NoOpEmbeddingAdapter()
+    return build_embedding_adapter()
 
 
 def get_retryable_extraction_exceptions() -> tuple[type[BaseException], ...]:
@@ -52,7 +56,9 @@ def get_retryable_extraction_exceptions() -> tuple[type[BaseException], ...]:
     if settings.GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag":
         from graph.graphrag import RETRYABLE_LLM_EXCEPTIONS
 
-        return infrastructure + RETRYABLE_LLM_EXCEPTIONS
+        infrastructure += RETRYABLE_LLM_EXCEPTIONS
+    if settings.GRAPH_EMBEDDING_PROVIDER == "openrouter":
+        infrastructure += RETRYABLE_EMBEDDING_EXCEPTIONS
     return infrastructure
 
 
