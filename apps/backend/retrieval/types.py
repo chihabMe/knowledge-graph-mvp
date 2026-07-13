@@ -6,6 +6,8 @@ class RetrievedChunk:
     source_document_id: int
     chunk_id: str
     text: str
+    relevance: float = 0.0
+    retrieval_modes: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,8 @@ class RetrievedFact:
     relationship_type: str
     target_name: str
     text: str
+    relevance: float = 0.0
+    retrieval_modes: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

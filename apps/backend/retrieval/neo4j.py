@@ -7,8 +7,12 @@ they are never a substitute for the query constraints.
 
 import re
 from collections.abc import Mapping
+from dataclasses import replace
+
+from django.conf import settings
 
 from graph.db import session
+from graph.embeddings import EmbeddingAdapter, build_embedding_adapter
 from graph.guard import PROVENANCE_FIELDS, provenance_where, record_has_provenance
 from retrieval.types import RetrievalEvidence, RetrievedChunk, RetrievedFact
 
@@ -64,6 +68,40 @@ RETURN properties(source) AS source,
 ORDER BY relevance DESC, chunk.source_document_id, chunk.chunk_index
 LIMIT $limit
 """.strip()
+
+
+def vector_retrieval_cypher(similarity_function: str) -> str:
+    """Build a pre-filtered vector query for one validated similarity function.
+
+    Neo4j 5's vector-index procedure cannot pre-filter candidates by an
+    arbitrary document allowlist. This query deliberately matches permitted,
+    provenance-complete chunks first and only then computes vector similarity.
+    It trades index acceleration for the non-negotiable authorization order.
+    """
+    if similarity_function not in {"cosine", "euclidean"}:
+        raise ValueError(f"Unsupported vector similarity function: {similarity_function!r}.")
+    return f"""
+MATCH (chunk:Chunk)-[belongs:belongs_to]->(document:Document)
+WHERE {provenance_where("chunk")}
+  AND {provenance_where("belongs")}
+  AND {provenance_where("document")}
+  AND chunk.source_document_id = belongs.source_document_id
+  AND chunk.source_document_id = document.source_document_id
+  AND chunk.embedding IS NOT NULL
+  AND size(chunk.embedding) = $embedding_dimensions
+WITH chunk, belongs, document,
+     vector.similarity.{similarity_function}(chunk.embedding, $query_embedding) AS score
+WHERE score >= $minimum_vector_score
+RETURN properties(chunk) AS chunk,
+       properties(belongs) AS belongs,
+       properties(document) AS document,
+       score
+ORDER BY score DESC, chunk.source_document_id, chunk.chunk_index
+LIMIT $limit
+""".strip()
+
+
+VECTOR_RETRIEVAL_CYPHER = vector_retrieval_cypher("cosine")
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _QUERY_STOP_WORDS = frozenset(
@@ -142,20 +180,70 @@ def _has_consistent_allowed_provenance(
     return type(source_document_id) is int and source_document_id in allowed_source_document_ids
 
 
-class Neo4jPermissionSafeRetriever:
-    """Run bounded keyword/chunk and one-hop fact retrieval over allowed provenance."""
+def fuse_chunk_rankings(
+    rankings: tuple[tuple[str, tuple[RetrievedChunk, ...]], ...], *, limit: int
+) -> tuple[RetrievedChunk, ...]:
+    """Fuse bounded vector and keyword rankings without comparing raw scores."""
+    scores: dict[tuple[int, str], float] = {}
+    chunks: dict[tuple[int, str], RetrievedChunk] = {}
+    modes: dict[tuple[int, str], set[str]] = {}
+    for mode, ranking in rankings:
+        for rank, chunk in enumerate(ranking, start=1):
+            key = (chunk.source_document_id, chunk.chunk_id)
+            chunks.setdefault(key, chunk)
+            modes.setdefault(key, set()).add(mode)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (60 + rank)
 
-    def __init__(self, *, limit: int = 5):
+    ordered_keys = sorted(scores, key=lambda key: (-scores[key], key[0], key[1]))[:limit]
+    return tuple(
+        replace(
+            chunks[key],
+            relevance=scores[key],
+            retrieval_modes=tuple(sorted(modes[key])),
+        )
+        for key in ordered_keys
+    )
+
+
+class Neo4jPermissionSafeRetriever:
+    """Run bounded hybrid chunk and one-hop fact retrieval over allowed provenance."""
+
+    def __init__(
+        self,
+        *,
+        limit: int | None = None,
+        embedding_adapter: EmbeddingAdapter | None = None,
+        minimum_vector_score: float | None = None,
+        vector_similarity: str | None = None,
+    ):
+        limit = settings.QUERY_RETRIEVAL_LIMIT if limit is None else limit
         if not 1 <= limit <= 20:
             raise ValueError("Retrieval limit must be between 1 and 20.")
+        minimum_vector_score = (
+            settings.QUERY_VECTOR_MIN_SCORE
+            if minimum_vector_score is None
+            else minimum_vector_score
+        )
+        if not 0.0 <= minimum_vector_score <= 1.0:
+            raise ValueError("Minimum vector score must be between 0 and 1.")
         self._limit = limit
+        self._minimum_vector_score = minimum_vector_score
+        self._embedding_adapter = embedding_adapter or build_embedding_adapter()
+        self._vector_similarity = vector_similarity or settings.GRAPH_CHUNK_VECTOR_SIMILARITY
+        self._vector_cypher = vector_retrieval_cypher(self._vector_similarity)
 
     def retrieve(
         self, question: str, allowed_source_document_ids: tuple[int, ...]
     ) -> RetrievalEvidence:
         allowed = frozenset(value for value in allowed_source_document_ids if type(value) is int)
+        if not allowed:
+            return RetrievalEvidence()
+
         terms = question_terms(question)
-        if not allowed or not terms:
+        query_embedding = self._embedding_adapter.embed_query(question)
+        if query_embedding and len(query_embedding) != settings.GRAPH_CHUNK_EMBEDDING_DIMENSIONS:
+            raise ValueError("Query embedding dimensions do not match the Chunk vector shape.")
+        if not query_embedding and not terms:
             return RetrievalEvidence()
 
         parameters = {
@@ -167,17 +255,38 @@ class Neo4jPermissionSafeRetriever:
             "minimum_should_match": min(2, len(terms)),
             "limit": self._limit,
         }
+        vector_records = []
+        chunk_records = []
+        fact_records = []
         with session() as db_session:
-            chunk_records = list(db_session.run(CHUNK_RETRIEVAL_CYPHER, **parameters))
-            fact_records = list(db_session.run(FACT_RETRIEVAL_CYPHER, **parameters))
+            if query_embedding:
+                vector_records = list(
+                    db_session.run(
+                        self._vector_cypher,
+                        allowed_source_document_ids=sorted(allowed),
+                        query_embedding=list(query_embedding),
+                        embedding_dimensions=len(query_embedding),
+                        minimum_vector_score=self._minimum_vector_score,
+                        limit=self._limit,
+                    )
+                )
+            if terms:
+                chunk_records = list(db_session.run(CHUNK_RETRIEVAL_CYPHER, **parameters))
+                fact_records = list(db_session.run(FACT_RETRIEVAL_CYPHER, **parameters))
+
+        vector_chunks = self._chunks(vector_records, allowed, mode="vector")
+        keyword_chunks = self._chunks(chunk_records, allowed, mode="keyword")
 
         return RetrievalEvidence(
-            chunks=self._chunks(chunk_records, allowed),
+            chunks=fuse_chunk_rankings(
+                (("vector", vector_chunks), ("keyword", keyword_chunks)),
+                limit=self._limit,
+            ),
             facts=self._facts(fact_records, allowed),
         )
 
     @staticmethod
-    def _chunks(records, allowed: frozenset[int]) -> tuple[RetrievedChunk, ...]:
+    def _chunks(records, allowed: frozenset[int], *, mode: str) -> tuple[RetrievedChunk, ...]:
         chunks: list[RetrievedChunk] = []
         seen: set[tuple[int, str]] = set()
         for record in records:
@@ -189,6 +298,7 @@ class Neo4jPermissionSafeRetriever:
                 continue
             chunk_id = chunk.get("chunk_id")
             text = chunk.get("text")
+            raw_relevance = data.get("score", data.get("relevance", 0.0))
             source_document_id = chunk["source_document_id"]
             key = (source_document_id, chunk_id)
             if (
@@ -196,6 +306,8 @@ class Neo4jPermissionSafeRetriever:
                 or not chunk_id
                 or not isinstance(text, str)
                 or not text
+                or isinstance(raw_relevance, bool)
+                or not isinstance(raw_relevance, (int, float))
             ):
                 continue
             if key in seen:
@@ -206,6 +318,8 @@ class Neo4jPermissionSafeRetriever:
                     source_document_id=source_document_id,
                     chunk_id=chunk_id,
                     text=text,
+                    relevance=float(raw_relevance),
+                    retrieval_modes=(mode,),
                 )
             )
         return tuple(chunks)
@@ -255,6 +369,8 @@ class Neo4jPermissionSafeRetriever:
                     relationship_type=relationship_type,
                     target_name=target_name,
                     text=text,
+                    relevance=float(data.get("relevance", 0.0)),
+                    retrieval_modes=("graph",),
                 )
             )
         return tuple(facts)

@@ -12,8 +12,11 @@ from integrations.models import DriveConnection, SourceDocument
 from retrieval.neo4j import (
     CHUNK_RETRIEVAL_CYPHER,
     FACT_RETRIEVAL_CYPHER,
+    VECTOR_RETRIEVAL_CYPHER,
     Neo4jPermissionSafeRetriever,
+    fuse_chunk_rankings,
     question_terms,
+    vector_retrieval_cypher,
 )
 from retrieval.services import QueryResult, answer_query
 from retrieval.types import RetrievalEvidence, RetrievedChunk, RetrievedFact
@@ -65,6 +68,22 @@ def fact_record(source_document_id=1):
     }
 
 
+class StubEmbeddingAdapter:
+    def __init__(self, query_embedding=(), error=None):
+        self.query_embedding = query_embedding
+        self.error = error
+        self.questions = []
+
+    def embed_chunks(self, chunks):
+        raise AssertionError("Retrieval must not embed stored chunks.")
+
+    def embed_query(self, question):
+        self.questions.append(question)
+        if self.error:
+            raise self.error
+        return self.query_embedding
+
+
 class Neo4jRetrievalSecurityTests(SimpleTestCase):
     def test_every_cypher_path_guards_every_node_and_relationship_alias(self):
         aliases_by_query = {
@@ -77,14 +96,16 @@ class Neo4jRetrievalSecurityTests(SimpleTestCase):
                 "belongs",
                 "document",
             ),
+            VECTOR_RETRIEVAL_CYPHER: ("chunk", "belongs", "document"),
         }
 
         for query, aliases in aliases_by_query.items():
             with self.subTest(query=query[:20]):
-                self.assertIn(
-                    "size(matching_terms) >= $minimum_should_match",
-                    query,
-                )
+                if "matching_terms" in query:
+                    self.assertIn(
+                        "size(matching_terms) >= $minimum_should_match",
+                        query,
+                    )
                 for alias in aliases:
                     for field in PROVENANCE_FIELDS:
                         self.assertIn(f"{alias}.{field} IS NOT NULL", query)
@@ -92,6 +113,19 @@ class Neo4jRetrievalSecurityTests(SimpleTestCase):
                         f"{alias}.source_document_id IN ${ALLOWED_DOCUMENTS_PARAMETER}",
                         query,
                     )
+
+    def test_vector_similarity_is_computed_only_after_permission_and_provenance_where(self):
+        query = vector_retrieval_cypher("cosine")
+
+        self.assertLess(
+            query.index("chunk.source_document_id IN $allowed_source_document_ids"),
+            query.index("vector.similarity.cosine"),
+        )
+        self.assertNotIn("db.index.vector.queryNodes", query)
+
+    def test_vector_query_rejects_unconfigured_similarity_function(self):
+        with self.assertRaises(ValueError):
+            vector_retrieval_cypher("dot")
 
     def test_question_terms_are_bounded_normalized_and_deduplicated(self):
         question = "Sarah SARAH owns Atlas 2026 " + " ".join(f"term{n}" for n in range(20))
@@ -109,9 +143,14 @@ class Neo4jRetrievalSecurityTests(SimpleTestCase):
 
     @patch("retrieval.neo4j.session")
     def test_empty_allowlist_never_opens_a_neo4j_session(self, mock_session):
-        result = Neo4jPermissionSafeRetriever().retrieve("Who owns Atlas?", ())
+        embeddings = StubEmbeddingAdapter(query_embedding=(0.1, 0.2, 0.3))
+
+        result = Neo4jPermissionSafeRetriever(embedding_adapter=embeddings).retrieve(
+            "Who owns Atlas?", ()
+        )
 
         self.assertEqual(result, RetrievalEvidence())
+        self.assertEqual(embeddings.questions, [])
         mock_session.assert_not_called()
 
     @patch("retrieval.neo4j.session")
@@ -132,6 +171,98 @@ class Neo4jRetrievalSecurityTests(SimpleTestCase):
             self.assertEqual(call.kwargs["query_terms"], ["owns", "atlas"])
             self.assertEqual(call.kwargs["minimum_should_match"], 2)
             self.assertEqual(call.kwargs["limit"], 4)
+
+    @override_settings(GRAPH_CHUNK_EMBEDDING_DIMENSIONS=3)
+    @patch("retrieval.neo4j.session")
+    def test_vector_and_keyword_rankings_are_fused_with_filtered_parameters(self, mock_session):
+        vector = chunk_record()
+        vector["score"] = 0.91
+        keyword = chunk_record()
+        db_session = MagicMock()
+        db_session.run.side_effect = [[vector], [keyword], [fact_record()]]
+        mock_session.return_value.__enter__.return_value = db_session
+        embeddings = StubEmbeddingAdapter(query_embedding=(0.1, 0.2, 0.3))
+
+        result = Neo4jPermissionSafeRetriever(
+            limit=4,
+            embedding_adapter=embeddings,
+            minimum_vector_score=0.5,
+        ).retrieve("Who owns Atlas?", (1,))
+
+        self.assertEqual(len(result.chunks), 1)
+        self.assertEqual(result.chunks[0].retrieval_modes, ("keyword", "vector"))
+        self.assertEqual(result.facts[0].retrieval_modes, ("graph",))
+        self.assertEqual(embeddings.questions, ["Who owns Atlas?"])
+        vector_call = db_session.run.call_args_list[0]
+        self.assertIn("vector.similarity.cosine", vector_call.args[0])
+        self.assertEqual(vector_call.kwargs["allowed_source_document_ids"], [1])
+        self.assertEqual(vector_call.kwargs["query_embedding"], [0.1, 0.2, 0.3])
+        self.assertEqual(vector_call.kwargs["embedding_dimensions"], 3)
+        self.assertEqual(vector_call.kwargs["minimum_vector_score"], 0.5)
+
+    @override_settings(GRAPH_CHUNK_EMBEDDING_DIMENSIONS=3)
+    @patch("retrieval.neo4j.session")
+    def test_vector_only_question_can_return_guarded_context(self, mock_session):
+        vector = chunk_record()
+        vector["score"] = 0.8
+        db_session = MagicMock()
+        db_session.run.return_value = [vector]
+        mock_session.return_value.__enter__.return_value = db_session
+
+        result = Neo4jPermissionSafeRetriever(
+            embedding_adapter=StubEmbeddingAdapter(query_embedding=(0.1, 0.2, 0.3))
+        ).retrieve("Who is there?", (1,))
+
+        self.assertEqual(len(result.chunks), 1)
+        self.assertEqual(db_session.run.call_count, 1)
+
+    @override_settings(GRAPH_CHUNK_EMBEDDING_DIMENSIONS=3)
+    @patch("retrieval.neo4j.session")
+    def test_restricted_and_missing_provenance_vector_records_are_dropped(self, mock_session):
+        restricted = chunk_record(2)
+        restricted["score"] = 0.9
+        missing = chunk_record(1)
+        missing["score"] = 0.8
+        missing["belongs"].pop("drive_file_id")
+        db_session = MagicMock()
+        db_session.run.side_effect = [[restricted, missing], [], []]
+        mock_session.return_value.__enter__.return_value = db_session
+
+        result = Neo4jPermissionSafeRetriever(
+            embedding_adapter=StubEmbeddingAdapter(query_embedding=(0.1, 0.2, 0.3))
+        ).retrieve("Who owns Atlas?", (1,))
+
+        self.assertEqual(result, RetrievalEvidence())
+
+    @override_settings(GRAPH_CHUNK_EMBEDDING_DIMENSIONS=3)
+    @patch("retrieval.neo4j.session")
+    def test_embedding_failure_or_wrong_dimensions_never_opens_neo4j(self, mock_session):
+        for adapter in (
+            StubEmbeddingAdapter(error=TimeoutError()),
+            StubEmbeddingAdapter(query_embedding=(0.1, 0.2)),
+        ):
+            with self.subTest(adapter=adapter), self.assertRaises((TimeoutError, ValueError)):
+                Neo4jPermissionSafeRetriever(embedding_adapter=adapter).retrieve(
+                    "Who owns Atlas?", (1,)
+                )
+        mock_session.assert_not_called()
+
+    def test_rank_fusion_rewards_chunks_found_by_both_paths(self):
+        vector_only = RetrievedChunk(1, "1:0", "Vector only")
+        both_vector = RetrievedChunk(1, "1:1", "Both")
+        both_keyword = RetrievedChunk(1, "1:1", "Both")
+        keyword_only = RetrievedChunk(1, "1:2", "Keyword only")
+
+        result = fuse_chunk_rankings(
+            (
+                ("vector", (vector_only, both_vector)),
+                ("keyword", (both_keyword, keyword_only)),
+            ),
+            limit=3,
+        )
+
+        self.assertEqual([chunk.chunk_id for chunk in result], ["1:1", "1:0", "1:2"])
+        self.assertEqual(result[0].retrieval_modes, ("keyword", "vector"))
 
     @patch("retrieval.neo4j.session")
     def test_stopword_only_question_never_opens_a_neo4j_session(self, mock_session):
