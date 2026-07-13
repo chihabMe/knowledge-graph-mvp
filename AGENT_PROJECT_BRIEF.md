@@ -367,13 +367,23 @@ Answer behavior:
 
 Open WebUI is the intended front end.
 
-The backend may integrate through either:
+Phase 6 integrates Open WebUI through an OpenAI-compatible endpoint implemented
+in the existing Django backend. An Open WebUI Pipeline/Function is not part of
+the primary retrieval path. Django keeps `/api/query/` as its internal,
+directly testable contract and adds thin `GET /v1/models` and
+`POST /v1/chat/completions` adapters for Open WebUI.
 
-- An Open WebUI Pipeline/Function, or
-- An OpenAI-compatible API endpoint used by Open WebUI.
+Open WebUI authenticates users through Google OAuth/OIDC and forwards each
+signed-in identity in a short-lived signed user-info JWT. Django must verify the
+JWT signature, algorithm, issuer, issued/expiry times, and normalized email
+before calling the existing permission-safe query service. The OpenAI-compatible
+connection also uses a separate least-privilege service bearer key. Plain email
+headers and request-body identity remain untrusted. Direct browser-to-backend
+connections are not used.
 
-The prototype currently favors an OpenAI-compatible endpoint because it is easy
-to connect and test.
+OpenRouter remains behind the Django answer service. Open WebUI must not bypass
+the permission-safe backend and call OpenRouter directly for knowledge-graph
+questions.
 
 Important:
 
@@ -381,6 +391,8 @@ Important:
 - The logged-in identity must match the Google Drive identity used for
   permission checks.
 - Local password login should be disabled or hidden for production pilots.
+- Signed identity forwarding and the service bearer key use separate secrets;
+  neither may be committed, logged, or accepted from browser request data.
 
 ## 13. Change-Driven Re-Indexing
 
@@ -557,6 +569,25 @@ separate opt-in OpenRouter adapters. The model receives only JSONL context that
 survived SpiceDB, provenance, and fresh-evidence gates; it returns only answer
 text plus a support decision, while citation URLs remain server-owned.
 
+### `GET /v1/models` (Phase 6 target)
+
+Returns the single logical knowledge-graph model exposed to Open WebUI. The
+request must carry the configured Open WebUI-to-Django service bearer key. User
+identity is not required for connection discovery, and no graph, document, or
+permission data is returned.
+
+### `POST /v1/chat/completions` (Phase 6 target)
+
+Accepts an OpenAI-compatible chat request from the server-side Open WebUI
+connection. The endpoint must authenticate the service bearer key, verify the
+short-lived signed Open WebUI identity JWT, extract a bounded user question,
+and call the existing `answer_query()` service. Request-supplied identity and
+plain forwarded email headers are never authorization evidence.
+
+The first slice may be non-streaming. It must translate the existing answer,
+controlled refusal, and server-owned permitted citations without sending chat
+history or any unrestricted context directly to OpenRouter.
+
 ### `POST /eval/run`
 
 Runs the fixed pilot evaluation set and leak tests.
@@ -669,8 +700,16 @@ restricted context or citations.
 
 ### Phase 6: Open WebUI Integration
 
+Status: planning in progress; integration pattern accepted, implementation not
+started (2026-07-13).
+
 Purpose: expose the backend through Open WebUI and make sure the backend
 receives a trusted Google/OIDC user identity.
+
+Accepted pattern: a thin OpenAI-compatible adapter in Django, protected by a
+service bearer key and a short-lived signed Open WebUI identity JWT. The
+existing `/api/query/` and `answer_query()` permission boundary remain the
+single retrieval implementation.
 
 ### Phase 7: Change Feed And Evaluation
 

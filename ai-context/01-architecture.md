@@ -96,13 +96,20 @@ Responsibilities:
 
 - Chat interface.
 - User login through Google OAuth/OIDC.
-- Calls backend through an OpenAI-compatible endpoint or pipeline.
+- Calls Django through its server-side OpenAI-compatible connection.
+- Forwards the authenticated user in a short-lived signed identity JWT.
+
+The primary retrieval path does not use an Open WebUI Pipeline/Function. The
+connection uses a separate service bearer key, and direct browser-to-backend
+model connections are disabled.
 
 ## Query Flow
 
 ```text
 User asks question in Open WebUI
-  -> backend receives user identity + question
+  -> Open WebUI authenticates the user through Google OAuth/OIDC
+  -> Open WebUI sends service credentials + signed identity JWT + question
+  -> Django verifies both credentials
   -> backend asks SpiceDB which documents user can view
   -> backend queries Neo4j only across allowed source provenance
   -> backend assembles context + citations

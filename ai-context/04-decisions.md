@@ -344,6 +344,46 @@ Reason:
 Status: Accepted (2026-07-13). Live-validated on Neo4j 5.26 with the development
 OAuth Drive PDF and OpenRouter.
 
+## ADR-014: Django OpenAI-Compatible Adapter With Signed Open WebUI Identity
+
+Decision: Phase 6 will connect Open WebUI to thin OpenAI-compatible endpoints
+implemented in the existing Django backend. Django will expose one logical
+knowledge-graph model through `GET /v1/models` and adapt
+`POST /v1/chat/completions` to the existing `answer_query()` service. The
+internal `/api/query/` contract remains unchanged. An Open WebUI
+Pipeline/Function and a separate Pipelines service are not part of the primary
+retrieval path.
+
+Open WebUI will authenticate users through Google OAuth/OIDC. Its server-side
+OpenAI-compatible connection will use a least-privilege service bearer key and
+forward the current user in a short-lived HS256-signed identity JWT. Django
+must validate the service key plus the JWT signature, fixed algorithm, issuer,
+issued/expiry times, subject, and normalized email before any SpiceDB lookup.
+Plain identity headers, chat payload fields, and browser-provided email values
+are not trusted. Direct browser-to-backend model connections are disabled.
+
+Reason:
+
+- The permission-sensitive orchestration, refusal, and citations already live
+  in a tested Django service and should not be duplicated inside Open WebUI.
+- Open WebUI natively consumes the standard models/chat-completions protocol,
+  avoiding arbitrary in-process Function code or another Pipelines service.
+- Open WebUI 0.10.x supports signing forwarded user identity, giving Django a
+  verifiable server-to-server assertion instead of a spoofable email header.
+- A standard endpoint is easier to unit test, reuse, observe, and maintain than
+  an Open WebUI-version-coupled plugin.
+- Separate service and identity credentials distinguish the trusted calling
+  service from the individual authorization subject.
+- Keeping OpenRouter behind `answer_query()` prevents the UI from bypassing
+  SpiceDB, provenance, and fresh-evidence checks.
+
+Trade-off: Django must implement and test the small OpenAI-compatible envelope,
+including model discovery, message validation, response/citation mapping, and
+eventual streaming compatibility. This extra adapter work is accepted in
+exchange for the clearer security and maintenance boundary.
+
+Status: Accepted (2026-07-13).
+
 ## Open / Needs Explicit Confirmation
 
 Not yet decisions — flagged so they don't get silently locked in by omission:
