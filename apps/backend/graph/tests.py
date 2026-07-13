@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
 
 import graph.db as graph_db
@@ -128,6 +129,73 @@ class GraphSetupCommandTests(SimpleTestCase):
 
         actual_statements = [call.args[0] for call in mock_session.run.call_args_list]
         self.assertEqual(actual_statements, graph_setup_statements())
+
+
+class GraphEmbeddingReindexCommandTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="root",
+        )
+
+    def create_document(self, suffix: str, *, content_hash="hash", status="succeeded"):
+        document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id=f"file-{suffix}",
+            title=f"File {suffix}",
+            mime_type="text/plain",
+            content_hash=content_hash,
+            graph_extraction_status=status,
+        )
+        SourceDocumentContent.objects.create(
+            source_document=document,
+            content=b"stored text",
+            exported_mime_type="text/plain",
+            content_hash=content_hash,
+        )
+        return document
+
+    def test_requires_exactly_one_selection_mode(self):
+        for options in ({}, {"all": True, "source_document_ids": [1]}):
+            with self.subTest(options=options), self.assertRaises(CommandError):
+                call_command("graph_reindex_embeddings", **options)
+
+    @patch("graph.management.commands.graph_reindex_embeddings.queue_document_extraction.delay")
+    def test_specific_current_document_is_reset_and_queued_without_content(self, mock_delay):
+        document = self.create_document("one")
+
+        call_command("graph_reindex_embeddings", source_document_ids=[document.pk])
+
+        document.refresh_from_db()
+        self.assertEqual(
+            document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.PENDING,
+        )
+        self.assertIsNotNone(document.graph_extraction_queued_at)
+        mock_delay.assert_called_once_with(document.pk, "hash")
+        self.assertNotIn("stored text", repr(mock_delay.call_args))
+
+    @patch("graph.management.commands.graph_reindex_embeddings.queue_document_extraction.delay")
+    def test_all_skips_running_stale_and_missing_content_documents(self, mock_delay):
+        current = self.create_document("current")
+        self.create_document(
+            "running",
+            status=SourceDocument.GraphExtractionStatus.RUNNING,
+        )
+        stale = self.create_document("stale")
+        stale.content_hash = "newer-hash"
+        stale.save(update_fields=["content_hash"])
+        SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="file-missing",
+            title="Missing",
+            mime_type="text/plain",
+            content_hash="hash",
+        )
+
+        call_command("graph_reindex_embeddings", all=True)
+
+        mock_delay.assert_called_once_with(current.pk, "hash")
 
 
 class VectorIndexSchemaTests(SimpleTestCase):
