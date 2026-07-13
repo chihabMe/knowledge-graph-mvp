@@ -8,7 +8,7 @@ Expose the permission-safe backend through Open WebUI as the main user interface
 
 - Open WebUI configuration.
 - Google OAuth/OIDC configuration path.
-- Backend pipeline or OpenAI-compatible endpoint.
+- Django OpenAI-compatible endpoint.
 - User identity propagation.
 - OpenRouter model routing.
 
@@ -19,12 +19,18 @@ Expose the permission-safe backend through Open WebUI as the main user interface
 
 ## Tasks
 
-- [ ] Decide Open WebUI integration pattern. Effort: High.
+- [x] Decide Open WebUI integration pattern. Effort: High. (ADR-014 selects a
+  thin Django `GET /v1/models` + `POST /v1/chat/completions` adapter over the
+  existing `answer_query()` service. Open WebUI uses a separate service bearer
+  key and short-lived signed identity JWT. No Pipeline/Function or separate
+  Pipelines service is used for the primary retrieval path.)
 - [ ] Configure Open WebUI service settings. Effort: High.
 - [ ] Configure Google auth path. Effort: Extra High.
 - [ ] Pass authenticated user identity to backend. Effort: Extra High.
 - [ ] Route model calls through OpenRouter. Effort: High.
 - [ ] Test end-to-end chat flow. Effort: Extra High.
+
+Detailed execution plan: `docs/phase-6-implementation-plan.md`.
 
 ## Validation
 
@@ -36,5 +42,5 @@ Expose the permission-safe backend through Open WebUI as the main user interface
 
 ## Completion Status
 
-Not started.
-
+Planning in progress (2026-07-13). The integration pattern is accepted and
+documented; implementation and all live validation remain not started.

@@ -140,10 +140,15 @@ retrieval is code complete and live validated: the authenticated query
 contract, SpiceDB pre-filter, fresh evidence gate, guarded hybrid
 keyword/vector/one-hop graph retrieval, bounded context, server-owned
 citations, OpenRouter synthesis, and safe refusal are implemented. Phase 6
-Open WebUI and trusted Google/OIDC identity integration is next.
+planning selected a thin Django OpenAI-compatible adapter protected by a
+service key and signed Open WebUI identity JWT. Implementation and Google/OIDC
+live validation are next; see `docs/phase-6-implementation-plan.md`.
 
 Read:
 
+- `docs/phase-5-completion-report.md`
+- `docs/phase-6-implementation-plan.md`
+- `ai-context/phases/phase-6-open-webui-integration.md`
 - `ai-context/phases/phase-5-permission-safe-retrieval.md`
 - `ai-context/phases/phase-3-neo4j-graph-and-provenance.md`
 - `ai-context/phases/phase-4-spicedb-permissions.md`

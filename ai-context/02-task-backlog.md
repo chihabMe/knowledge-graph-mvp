@@ -78,8 +78,12 @@ This backlog is ordered by dependency and risk.
 
 - Configure Open WebUI service.
 - Configure Google OAuth/OIDC.
-- Connect Open WebUI to backend endpoint or pipeline.
-- Confirm user identity is available to backend.
+- Add the selected Django OpenAI-compatible model and chat endpoints over the
+  existing permission-safe query service.
+- Authenticate the Open WebUI service and verify its short-lived signed user
+  identity JWT in Django.
+- Confirm the verified Google identity is available to SpiceDB lookup.
+- Test allowed and restricted users through the real chat interface.
 
 ## Phase 7: Change Feed And Evaluation
 
