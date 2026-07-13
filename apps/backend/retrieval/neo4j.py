@@ -22,7 +22,7 @@ WHERE {provenance_where("chunk")}
 WITH chunk, belongs, document,
      [term IN $query_terms
       WHERE toLower(coalesce(chunk.text, '')) CONTAINS term] AS matching_terms
-WHERE size(matching_terms) > 0
+WHERE size(matching_terms) >= $minimum_should_match
 RETURN properties(chunk) AS chunk,
        properties(belongs) AS belongs,
        properties(document) AS document,
@@ -52,7 +52,7 @@ WITH source, fact, target, chunk, belongs, document,
       WHERE toLower(coalesce(source.name, '')) CONTAINS term
          OR toLower(coalesce(target.name, '')) CONTAINS term
          OR toLower(coalesce(chunk.text, '')) CONTAINS term] AS matching_terms
-WHERE size(matching_terms) > 0
+WHERE size(matching_terms) >= $minimum_should_match
 RETURN properties(source) AS source,
        properties(fact) AS fact,
        properties(target) AS target,
@@ -66,6 +66,40 @@ LIMIT $limit
 """.strip()
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_QUERY_STOP_WORDS = frozenset(
+    {
+        "are",
+        "can",
+        "could",
+        "did",
+        "does",
+        "for",
+        "from",
+        "has",
+        "have",
+        "how",
+        "into",
+        "the",
+        "their",
+        "there",
+        "these",
+        "this",
+        "those",
+        "was",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+    }
+)
 
 
 def question_terms(question: str, *, limit: int = 12) -> tuple[str, ...]:
@@ -74,7 +108,7 @@ def question_terms(question: str, *, limit: int = 12) -> tuple[str, ...]:
     seen: set[str] = set()
     for match in _TOKEN_RE.finditer(question.casefold()):
         term = match.group(0)
-        if not 3 <= len(term) <= 64 or term in seen:
+        if not 3 <= len(term) <= 64 or term in seen or term in _QUERY_STOP_WORDS:
             continue
         seen.add(term)
         terms.append(term)
@@ -127,6 +161,10 @@ class Neo4jPermissionSafeRetriever:
         parameters = {
             "allowed_source_document_ids": sorted(allowed),
             "query_terms": list(terms),
+            # The baseline keyword path is deliberately conservative: one
+            # generic overlap is not enough to expose a permitted document as
+            # relevant context for a different question.
+            "minimum_should_match": min(2, len(terms)),
             "limit": self._limit,
         }
         with session() as db_session:
