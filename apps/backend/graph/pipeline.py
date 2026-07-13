@@ -116,11 +116,7 @@ def extract_document_to_graph(
     # refresh then waits, resets the new version to PENDING, and queues its own
     # extraction after this older write releases the lock.
     with transaction.atomic():
-        current_document = (
-            SourceDocument.objects.select_for_update()
-            .select_related("content")
-            .get(pk=source_document_id)
-        )
+        current_document = SourceDocument.objects.select_for_update().get(pk=source_document_id)
         try:
             current_stored = current_document.content
         except SourceDocumentContent.DoesNotExist:
