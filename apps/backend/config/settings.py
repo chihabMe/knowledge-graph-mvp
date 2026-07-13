@@ -207,9 +207,20 @@ DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int("DRIVE_SYNC_STALE_RUN_TIMEOUT_MIN
 PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int(
     "PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120
 )
-# Group revocations are invisible to per-document ACL hashes, so this
-# interval bounds how long a revoked group member can retain access.
+# Group revocations are invisible to per-document ACL hashes, so this is the
+# healthy refresh cadence. Query-time evidence expiry below remains the hard
+# fail-closed bound if reconciliation repeatedly fails.
 PERMISSION_SYNC_INTERVAL_SECONDS = env.int("PERMISSION_SYNC_INTERVAL_SECONDS", default=900)
+PERMISSION_VERIFICATION_MAX_AGE_SECONDS = env.int(
+    "PERMISSION_VERIFICATION_MAX_AGE_SECONDS", default=1800
+)
+if PERMISSION_SYNC_INTERVAL_SECONDS < 1:
+    raise ImproperlyConfigured("PERMISSION_SYNC_INTERVAL_SECONDS must be positive.")
+if PERMISSION_VERIFICATION_MAX_AGE_SECONDS <= PERMISSION_SYNC_INTERVAL_SECONDS:
+    raise ImproperlyConfigured(
+        "PERMISSION_VERIFICATION_MAX_AGE_SECONDS must be greater than "
+        "PERMISSION_SYNC_INTERVAL_SECONDS."
+    )
 CELERY_BEAT_SCHEDULE = {
     "schedule-permission-syncs": {
         "task": "integrations.schedule_permission_syncs",

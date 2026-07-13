@@ -121,6 +121,28 @@ class VerifiedPredicateTests(TestCase):
         self.assertNotIn(document.pk, verified_pks)
         self.assertFalse(document.is_permission_verified("v1"))
 
+    @override_settings(PERMISSION_VERIFICATION_MAX_AGE_SECONDS=1800)
+    def test_queryset_and_instance_deny_expired_verification(self):
+        connection = DriveConnection.objects.create(
+            workspace_domain="example.com", root_folder_id="root"
+        )
+        document = SourceDocument.objects.create(
+            connection=connection,
+            drive_file_id="doc-expired",
+            title="Expired",
+            mime_type="text/plain",
+            active_in_scope=True,
+            retrieval_eligible=True,
+            source_permissions_version="v1",
+            spicedb_permissions_version="v1",
+            spicedb_verified_at=timezone.now() - datetime.timedelta(seconds=1801),
+        )
+
+        verified_pks = SourceDocument.objects.permission_verified().values_list("pk", flat=True)
+
+        self.assertNotIn(document.pk, verified_pks)
+        self.assertFalse(document.is_permission_verified("v1"))
+
 
 class ClientTransportTests(TestCase):
     def test_tls_setting_selects_bearer_credentials(self):
@@ -521,6 +543,19 @@ class AllowedDocumentLookupTests(TestCase):
         spicedb.fail_lookup = True
         self.assertEqual(allowed_source_document_ids("reader@example.com", spicedb=spicedb), ())
 
+    @override_settings(PERMISSION_VERIFICATION_MAX_AGE_SECONDS=1800)
+    def test_expired_verification_denies_stale_spicedb_grant(self):
+        SourceDocument.objects.filter(pk=self.document.pk).update(
+            spicedb_verified_at=timezone.now() - datetime.timedelta(seconds=1801)
+        )
+        spicedb = FakeSpiceDB()
+        spicedb.lookup_result = (document_object_id(self.connection.pk, self.document.pk),)
+
+        self.assertEqual(
+            allowed_source_document_ids("reader@example.com", spicedb=spicedb),
+            (),
+        )
+
     def test_outage_logs_the_failure_class_without_payloads(self):
         spicedb = FakeSpiceDB()
         spicedb.fail_lookup = True
@@ -669,6 +704,14 @@ class PermissionTaskTests(TestCase):
         tasks = {entry["task"] for entry in settings.CELERY_BEAT_SCHEDULE.values()}
         self.assertIn("integrations.schedule_permission_syncs", tasks)
         self.assertIn("integrations.sweep_stale_permission_sync_runs", tasks)
+
+    def test_verification_lifetime_exceeds_sync_cadence(self):
+        from django.conf import settings
+
+        self.assertGreater(
+            settings.PERMISSION_VERIFICATION_MAX_AGE_SECONDS,
+            settings.PERMISSION_SYNC_INTERVAL_SECONDS,
+        )
 
     def test_scheduler_enqueues_one_run_per_ready_connection(self):
         DriveConnection.objects.create(workspace_domain="example.com")  # no root

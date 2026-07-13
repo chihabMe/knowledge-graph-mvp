@@ -63,8 +63,8 @@ def synchronize_permissions(
 
     A failed run keeps the previous verified state rather than blanking the
     connection: eligibility flips only in _commit_verified_documents (CAS on
-    the ACL version) plus the marker sweep, and the live fully-consistent
-    SpiceDB lookup remains the query-time gate either way.
+    the ACL version) plus the marker sweep. The live fully-consistent SpiceDB
+    lookup and the verification-age gate remain authoritative at query time.
 
     External payloads never escape this service or enter task results/logs.
     """
