@@ -32,13 +32,16 @@ Model and enforce Google Drive visibility using SpiceDB before any retrieval occ
 - Public/anyone and domain principals remain excluded.
 - Permission runs are durable, admin-only, rate-limited, and server-scoped;
   Celery beat also schedules them periodically because group-membership
-  revocations never change a document's ACL hash, so the beat interval is the
-  revocation bound. A sweeper fails runs stuck in RUNNING.
+  revocations never change a document's ACL hash. The beat interval is the
+  healthy refresh cadence, a sweeper fails runs stuck in RUNNING, and
+  query-time verification expiry is the hard fail-closed revocation bound when
+  runs repeatedly fail.
 - Candidate documents become eligible only when the exact tuple set is
   verified at least as fresh as the final write token, the ACL version still
-  matches, and at least one grant path exists. A failed run keeps the previous
-  verified state instead of blanking the connection; the fully consistent
-  SpiceDB lookup stays the query-time gate.
+  matches, the evidence age is within the configured maximum, and at least one
+  grant path exists. A failed run keeps the previous verified state instead of
+  blanking the connection only until that evidence expires; the fully
+  consistent SpiceDB lookup stays the query-time gate.
 - Stale revocation occurs only after a complete scan; all incomplete external
   state fails closed.
 - Phase 5 obtains its allowlist only through fully consistent SpiceDB
@@ -62,6 +65,7 @@ Model and enforce Google Drive visibility using SpiceDB before any retrieval occ
 - [x] Group access works.
 - [x] Permission-only changes do not require re-embedding.
 - [x] No restricted document existence is leaked through API responses.
+- [x] Expired verification evidence denies stale SpiceDB grants.
 
 ## Completion Status
 
@@ -71,10 +75,11 @@ permission sync, and the stale-run sweeper), the `/api/health/` degraded path
 (503 within ~2s, no leaked detail), the fail-closed retrieval allowlist log,
 and the production TLS-guard boot check. Local SpiceDB validation passed for
 direct, nested-group, multi-level folder, deny, and consistent-read
-revocation behavior. Live delegated Google Workspace ACL and Directory group
-validation is still pending client credentials — the scheduled sync reaches
-`partial` against the current service account for that reason, which is
-expected.
+revocation behavior. Query-time permission evidence expiry also bounds access
+when scheduled reconciliation repeatedly fails. Live delegated Google
+Workspace ACL and Directory group validation is still pending client
+credentials — the scheduled sync reaches `partial` against the current service
+account for that reason, which is expected.
 
 Live validation also found and fixed a real defect: the non-TLS SpiceDB gRPC
 path (`grpcutil.insecure_bearer_token_credentials`) was hardcoded to

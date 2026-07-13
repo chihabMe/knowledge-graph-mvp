@@ -287,7 +287,10 @@ ineligible before relationship changes and become eligible only after the
 complete desired tuple set is verified at least as fresh as the final write.
 Stale resources are revoked only following a complete scan. Authorization
 lookups use fully consistent SpiceDB `LookupResources`; PostgreSQL can reject
-stale/unverified results but can never grant access by itself.
+version-mismatched, unverified, or expired results but can never grant access
+by itself. A successful full verification refreshes the evidence timestamp;
+query-time filtering denies evidence older than the configured maximum age, so
+failed reconciliation cannot preserve an old grant indefinitely.
 
 Reason:
 
@@ -296,8 +299,9 @@ Reason:
 - Explicit parents and recursive subject sets match Drive inheritance and
   nested Workspace groups without application-side allow decisions.
 - Omitting wildcard/domain subjects prevents accidental public visibility.
-- The pre-invalidation, verification, version-CAS, and fully consistent read
-  rules make incomplete Google or SpiceDB state fail closed.
+- The pre-invalidation, verification, version-CAS, maximum evidence age, and
+  fully consistent read rules make incomplete or stale Google/SpiceDB state
+  fail closed.
 
 Status: Accepted (2026-07-11).
 
