@@ -41,8 +41,11 @@ PERMISSION_FIELDS = (
     "allowFileDiscovery, deleted, pendingOwner, "
     "permissionDetails(inherited,inheritedFrom,permissionType,role))"
 )
-ROOT_FOLDER_QUERY = (
+SHARED_FOLDER_QUERY = (
     "sharedWithMe and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+)
+OAUTH_OWNED_FOLDER_QUERY = (
+    "'me' in owners and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
 )
 
 try:
@@ -166,10 +169,10 @@ class GoogleDriveMetadataClient:
     def list_root_candidates(self, connection: DriveConnection) -> list[DriveRootCandidate]:
         try:
             service = self._service or build_drive_service(connection)
-            candidates = [
-                *self._list_shared_folders(service),
-                *self._list_shared_drives(service),
-            ]
+            candidates = list(self._list_folders(service, query=SHARED_FOLDER_QUERY))
+            if settings.GOOGLE_DRIVE_AUTH_MODE == "oauth_dev":
+                candidates.extend(self._list_folders(service, query=OAUTH_OWNED_FOLDER_QUERY))
+            candidates.extend(self._list_shared_drives(service))
         except MissingServiceAccountKeyError:
             # Key-file problems keep their own error (409 at the API boundary);
             # only Drive/auth request failures collapse into the 502 below.
@@ -277,13 +280,13 @@ class GoogleDriveMetadataClient:
             if not page_token:
                 return
 
-    def _list_shared_folders(self, service):
+    def _list_folders(self, service, *, query: str):
         page_token = None
         while True:
             response = (
                 service.files()
                 .list(
-                    q=ROOT_FOLDER_QUERY,
+                    q=query,
                     fields=ROOT_FOLDER_LIST_FIELDS,
                     pageSize=PAGE_SIZE,
                     pageToken=page_token,

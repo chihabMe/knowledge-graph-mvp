@@ -298,6 +298,8 @@ class FakeFilesResource:
     def list(self, *, q, pageToken=None, **_kwargs):
         if "sharedWithMe" in q:
             pages = self._service.shared_folder_pages
+        elif "'me' in owners" in q:
+            pages = self._service.owned_folder_pages
         else:
             folder_id = q.split("'")[1]
             if folder_id in self._service.children_errors:
@@ -369,6 +371,7 @@ class FakeGoogleDriveService:
         permission_errors=None,
         drive_names=None,
         shared_folder_pages=None,
+        owned_folder_pages=None,
         shared_drive_pages=None,
         export_data=None,
         media_data=None,
@@ -380,6 +383,7 @@ class FakeGoogleDriveService:
         self.permission_errors = permission_errors or {}
         self.drive_names = drive_names or {}
         self.shared_folder_pages = shared_folder_pages or [[]]
+        self.owned_folder_pages = owned_folder_pages or [[]]
         self.shared_drive_pages = shared_drive_pages or [[]]
         self.export_data = export_data or {}
         self.media_data = media_data or {}
@@ -741,6 +745,60 @@ class GoogleDriveMetadataClientTests(TestCase):
         )
         self.assertEqual(candidates[0].drive_url, "https://drive.google.com/folders/folder-a")
         self.assertEqual(candidates[0].shared_drive_id, "drive-1")
+
+    @override_settings(GOOGLE_DRIVE_AUTH_MODE="oauth_dev")
+    def test_oauth_dev_lists_owned_and_shared_folders(self):
+        service = FakeGoogleDriveService(
+            shared_folder_pages=[
+                [
+                    {
+                        "id": "folder-shared",
+                        "name": "Shared Pilot",
+                        "webViewLink": "https://drive.google.com/folders/folder-shared",
+                    }
+                ]
+            ],
+            owned_folder_pages=[
+                [
+                    {
+                        "id": "folder-owned",
+                        "name": "Owned Pilot",
+                        "webViewLink": "https://drive.google.com/folders/folder-owned",
+                    }
+                ]
+            ],
+        )
+
+        candidates = GoogleDriveMetadataClient(service=service).list_root_candidates(
+            self._folder_connection()
+        )
+
+        self.assertEqual(
+            [(candidate.root_id, candidate.name) for candidate in candidates],
+            [
+                ("folder-owned", "Owned Pilot"),
+                ("folder-shared", "Shared Pilot"),
+            ],
+        )
+
+    @override_settings(GOOGLE_DRIVE_AUTH_MODE="service_account")
+    def test_service_account_does_not_list_owned_folders(self):
+        service = FakeGoogleDriveService(
+            owned_folder_pages=[
+                [
+                    {
+                        "id": "folder-owned",
+                        "name": "Owned Pilot",
+                    }
+                ]
+            ]
+        )
+
+        candidates = GoogleDriveMetadataClient(service=service).list_root_candidates(
+            self._folder_connection()
+        )
+
+        self.assertEqual(candidates, [])
 
     def test_root_candidates_are_deduplicated_by_scope_and_id(self):
         service = FakeGoogleDriveService(
