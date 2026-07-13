@@ -335,6 +335,57 @@ if GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS < 1:
     raise ImproperlyConfigured("GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS must be positive.")
 OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", default="")
 OPENROUTER_BASE_URL = env("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
+OPENROUTER_SITE_URL = env("OPENROUTER_SITE_URL", default="")
+OPENROUTER_APP_NAME = env("OPENROUTER_APP_NAME", default="Client Knowledge Graph MVP")
+OPENROUTER_REQUEST_TIMEOUT_SECONDS = env.float("OPENROUTER_REQUEST_TIMEOUT_SECONDS", default=60.0)
+if OPENROUTER_REQUEST_TIMEOUT_SECONDS <= 0:
+    raise ImproperlyConfigured("OPENROUTER_REQUEST_TIMEOUT_SECONDS must be positive.")
+
+# Embeddings are opt-in so deployments can keep the deterministic Phase 3
+# baseline while credentials are being provisioned. The production Phase 5
+# path uses OpenRouter for both stored chunk and query embeddings.
+GRAPH_EMBEDDING_PROVIDER = env("GRAPH_EMBEDDING_PROVIDER", default="none")
+if GRAPH_EMBEDDING_PROVIDER not in {"none", "openrouter"}:
+    raise ImproperlyConfigured(
+        "GRAPH_EMBEDDING_PROVIDER must be 'none' or 'openrouter', "
+        f"got {GRAPH_EMBEDDING_PROVIDER!r}."
+    )
+OPENROUTER_EMBEDDING_MODEL = env("OPENROUTER_EMBEDDING_MODEL", default="")
+GRAPH_EMBEDDING_BATCH_SIZE = env.int("GRAPH_EMBEDDING_BATCH_SIZE", default=64)
+if not 1 <= GRAPH_EMBEDDING_BATCH_SIZE <= 256:
+    raise ImproperlyConfigured("GRAPH_EMBEDDING_BATCH_SIZE must be between 1 and 256.")
+if GRAPH_EMBEDDING_PROVIDER == "openrouter" and not (
+    OPENROUTER_API_KEY and OPENROUTER_EMBEDDING_MODEL
+):
+    raise ImproperlyConfigured(
+        "GRAPH_EMBEDDING_PROVIDER='openrouter' requires OPENROUTER_API_KEY "
+        "and OPENROUTER_EMBEDDING_MODEL to be set."
+    )
+
+# Answer synthesis is independently selectable so enabling graph extraction
+# or embeddings cannot silently start sending retrieval context to an LLM.
+QUERY_ANSWER_PROVIDER = env("QUERY_ANSWER_PROVIDER", default="extractive")
+if QUERY_ANSWER_PROVIDER not in {"extractive", "openrouter"}:
+    raise ImproperlyConfigured(
+        "QUERY_ANSWER_PROVIDER must be 'extractive' or 'openrouter', "
+        f"got {QUERY_ANSWER_PROVIDER!r}."
+    )
+OPENROUTER_MODEL = env("OPENROUTER_MODEL", default="")
+QUERY_CONTEXT_MAX_CHARS = env.int("QUERY_CONTEXT_MAX_CHARS", default=12_000)
+QUERY_RETRIEVAL_LIMIT = env.int("QUERY_RETRIEVAL_LIMIT", default=5)
+QUERY_VECTOR_MIN_SCORE = env.float("QUERY_VECTOR_MIN_SCORE", default=0.45)
+if QUERY_CONTEXT_MAX_CHARS < 1:
+    raise ImproperlyConfigured("QUERY_CONTEXT_MAX_CHARS must be positive.")
+if not 1 <= QUERY_RETRIEVAL_LIMIT <= 20:
+    raise ImproperlyConfigured("QUERY_RETRIEVAL_LIMIT must be between 1 and 20.")
+if not 0.0 <= QUERY_VECTOR_MIN_SCORE <= 1.0:
+    raise ImproperlyConfigured("QUERY_VECTOR_MIN_SCORE must be between 0 and 1.")
+if QUERY_ANSWER_PROVIDER == "openrouter" and not (OPENROUTER_API_KEY and OPENROUTER_MODEL):
+    raise ImproperlyConfigured(
+        "QUERY_ANSWER_PROVIDER='openrouter' requires OPENROUTER_API_KEY "
+        "and OPENROUTER_MODEL to be set."
+    )
+
 GRAPH_EXTRACTION_MODEL = env("GRAPH_EXTRACTION_MODEL", default="")
 if GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag" and not (
     OPENROUTER_API_KEY and GRAPH_EXTRACTION_MODEL
