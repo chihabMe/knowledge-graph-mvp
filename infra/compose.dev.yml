@@ -12,6 +12,7 @@ x-dev-source: &dev-source
   - ../apps/backend/graph:/app/graph
   - ../apps/backend/health:/app/health
   - ../apps/backend/integrations:/app/integrations
+  - ../apps/backend/retrieval:/app/retrieval
   - ../apps/backend/manage.py:/app/manage.py
 
 services:
