@@ -13,7 +13,8 @@ repository, for example:
 ```dotenv
 GOOGLE_DRIVE_AUTH_MODE=oauth_dev
 GOOGLE_OAUTH_CLIENT_SECRET_FILE=/home/user/secrets/google-oauth-client.json
-GOOGLE_OAUTH_TOKEN_FILE=/home/user/secrets/google-oauth-token.json
+GOOGLE_OAUTH_TOKEN_DIR=/home/user/secrets/google-oauth-token-store
+GOOGLE_OAUTH_TOKEN_FILE=/home/user/secrets/google-oauth-token-store/google-oauth-token.json
 ```
 
 The OAuth consent screen should use the `drive.readonly` scope and list the
@@ -23,11 +24,15 @@ Root discovery includes folders shared with the authorized account and folders
 owned by that account. Production service-account mode continues to expose
 only explicitly shared folders and shared drives.
 
-Create the token file before mounting it into Docker:
+Create a dedicated owner-only directory containing only the refreshable token.
+Compose mounts this directory read/write so refresh can atomically replace the
+token without granting write access to the client secret or service-account
+key:
 
 ```bash
-touch /home/user/secrets/google-oauth-token.json
-chmod 600 /home/user/secrets/google-oauth-token.json
+install -d -m 700 /home/user/secrets/google-oauth-token-store
+touch /home/user/secrets/google-oauth-token-store/google-oauth-token.json
+chmod 600 /home/user/secrets/google-oauth-token-store/google-oauth-token.json
 ```
 
 ## Interactive authorization
@@ -50,9 +55,10 @@ is then mounted read/write for the Django and Celery containers; it is never
 logged or passed through a Celery task payload.
 
 The development Compose overlay runs those two processes with the host uid/gid
-(default `1000:1000`) so the mode-`0600` token remains readable and refreshable
-without weakening its filesystem permissions. Override `LOCAL_UID` and
-`LOCAL_GID` in `.env` when the host account uses different numeric IDs.
+(default `1000:1000`) so the mode-`0700` directory and mode-`0600` token remain
+readable and refreshable without weakening their filesystem permissions.
+Override `LOCAL_UID` and `LOCAL_GID` in `.env` when the host account uses
+different numeric IDs.
 
 ## Scope and limitations
 
