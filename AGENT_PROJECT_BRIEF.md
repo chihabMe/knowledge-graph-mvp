@@ -70,9 +70,14 @@ hardening are implemented and covered by tests. Phase 4 SpiceDB permission
 sync is code complete with live delegated Workspace validation pending: the
 schema lifecycle, Drive/folder ACL scan, nested group resolution, exact tuple
 reconciliation, verification gate, admin audit API, and fully consistent
-allowed-document lookup are implemented. The next product-risk dependency is
-Phase 5 retrieval, which must compose that allowlist with Neo4j provenance
-filtering before any LLM call.
+allowed-document lookup are implemented. Verified permission evidence also
+expires at retrieval time after a configured maximum age, so repeated sync
+failures cannot preserve an old grant indefinitely. The next product-risk
+dependency, Phase 5 retrieval, is now in progress: the authenticated
+`/api/query/` contract, SpiceDB pre-filter, fresh PostgreSQL evidence gate,
+provenance-constrained Neo4j chunk/one-hop fact retrieval, extractive response,
+citations, and safe refusal path are implemented. Production embeddings,
+permission-filtered vector retrieval, and OpenRouter answer synthesis remain.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -304,6 +309,11 @@ The sync process should:
   absence from partial or failed scans is never evidence for revocation.
 - Mark candidate documents ineligible before tuple mutation and only restore
   eligibility after exact tuple verification using the final SpiceDB ZedToken.
+- Refresh each eligible document's verification timestamp only after a complete
+  successful verification, and deny it at query time once that evidence is
+  older than `PERMISSION_VERIFICATION_MAX_AGE_SECONDS` (default 1800). The
+  maximum age must remain longer than the permission-sync cadence; a failed run
+  may preserve the last known safe state only until this hard lifetime expires.
 - Treat missing ACLs, unsupported roles/types, unresolved groups, hierarchy
   cycles, SpiceDB failures, and verification mismatches as deny conditions.
 
@@ -313,8 +323,9 @@ The query process should:
 - Restrict retrieval to Neo4j graph elements whose provenance is allowed.
 - Use fully consistent `LookupResources` calls and then gate returned opaque
   resources against active PostgreSQL rows whose verified permission version
-  still matches. PostgreSQL stores synchronization evidence only and never
-  answers the authorization question.
+  still matches and whose verification timestamp has not expired. PostgreSQL
+  stores synchronization evidence only and never answers the authorization
+  question.
 
 ## 11. Retrieval Requirements
 
@@ -486,16 +497,20 @@ Expected behavior:
 - Pull Drive ACL/folder metadata and referenced group membership, update and
   verify SpiceDB relationships, and keep unverified documents ineligible.
 
-### `POST /query`
+### `POST /api/query/`
 
 Receives:
 
 ```json
 {
-  "user_email": "employee@example.com",
   "question": "What projects is Sarah responsible for?"
 }
 ```
+
+The user identity comes only from the authenticated Django session. Request
+payload identity fields such as `user_email` are outside the contract and are
+rejected. The server-side user email is normalized and passed to the SpiceDB
+allowed-document lookup before Neo4j is queried.
 
 Returns:
 
@@ -507,7 +522,7 @@ Returns:
       "title": "Project Plan",
       "drive_file_id": "abc123",
       "drive_url": "https://drive.google.com/...",
-      "chunk_id": "abc123:4"
+      "chunk_id": "42:4"
     }
   ],
   "refused": false,
@@ -525,6 +540,10 @@ If the answer is restricted or unavailable:
   "reason": "insufficient_accessible_context"
 }
 ```
+
+The current Phase 5 slice returns a bounded extractive answer from accessible
+chunk or one-hop graph-fact evidence. It does not call OpenRouter and does not
+claim vector or hybrid retrieval while the embedding adapter is a no-op.
 
 ### `POST /eval/run`
 
@@ -604,13 +623,30 @@ snapshots, read-only nested group resolution, exact TOUCH/DELETE reconciliation,
 at-least-as-fresh verification and ACL-version CAS, durable admin sync runs,
 SpiceDB health, and the internal fully consistent
 `allowed_source_document_ids()` Phase 5 handoff. Public/domain visibility and
-incomplete permissions remain excluded.
+incomplete permissions remain excluded. Query-time evidence expiry provides a
+hard fail-closed bound when scheduled permission synchronization repeatedly
+fails; successful syncs refresh that evidence.
 
 ### Phase 5: Permission-Safe Retrieval
+
+Status: in progress (2026-07-13).
 
 Purpose: answer questions using only Neo4j graph/vector context derived from
 documents the user may see. Restricted facts must not leak through graph paths,
 embeddings, citations, or prompt context.
+
+Current foundation: `/api/query/` accepts only a question and derives identity
+from the authenticated Django session; `allowed_source_document_ids()` runs
+before Neo4j; fresh permission evidence is rechecked before response assembly;
+chunk and bounded one-hop entity-fact queries compose the allowed-document
+filter and provenance guard on every returned node and relationship; citations
+come only from the intersected PostgreSQL source-document rows; empty or failed
+authorization/retrieval paths share one controlled refusal. OpenRouter is not
+called. Production embeddings and guarded vector retrieval are next.
+The first slice has also been exercised live against the development OAuth
+Drive PDF: permission evidence refreshed successfully, unrelated permitted
+content was refused, and a relevant query returned citations only to the
+SpiceDB-allowed document.
 
 ### Phase 6: Open WebUI Integration
 
