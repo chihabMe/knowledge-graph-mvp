@@ -9,6 +9,8 @@ from rest_framework.test import APIClient
 
 from graph.guard import ALLOWED_DOCUMENTS_PARAMETER, PROVENANCE_FIELDS
 from integrations.models import DriveConnection, SourceDocument
+from retrieval.answers import GeneratedAnswer
+from retrieval.context import AssembledContext
 from retrieval.neo4j import (
     CHUNK_RETRIEVAL_CYPHER,
     FACT_RETRIEVAL_CYPHER,
@@ -321,6 +323,20 @@ class StubRetriever:
         return self.evidence
 
 
+class StubAnswerGenerator:
+    def __init__(self, answer="Generated answer.", supported=True, error=None):
+        self.answer = answer
+        self.supported = supported
+        self.error = error
+        self.calls: list[tuple[str, AssembledContext]] = []
+
+    def generate(self, question, context):
+        self.calls.append((question, context))
+        if self.error:
+            raise self.error
+        return GeneratedAnswer(answer=self.answer, supported=self.supported)
+
+
 @override_settings(PERMISSION_VERIFICATION_MAX_AGE_SECONDS=1800)
 class QueryServiceSecurityTests(TestCase):
     def setUp(self):
@@ -391,6 +407,17 @@ class QueryServiceSecurityTests(TestCase):
         self.assertTrue(result.refused)
         self.assertEqual(result.citations, ())
         self.assertEqual(retriever.calls, [])
+
+    @patch("retrieval.services.Neo4jPermissionSafeRetriever")
+    def test_empty_allowlist_does_not_build_embedding_or_retrieval_clients(self, retriever_class):
+        result = answer_query(
+            "Who owns Atlas?",
+            "restricted@example.com",
+            allowed_lookup=lambda _email: (),
+        )
+
+        self.assertTrue(result.refused)
+        retriever_class.assert_not_called()
 
     def test_permission_lookup_happens_before_neo4j_retrieval(self):
         document = self.create_document("allowed")
@@ -477,16 +504,24 @@ class QueryServiceSecurityTests(TestCase):
             )
         )
 
+        generator = StubAnswerGenerator(answer="Allowed generated answer.")
         result = answer_query(
             "text",
             "reader@example.com",
             allowed_lookup=lambda _email: (allowed.pk,),
             retriever=StubRetriever(evidence),
+            answer_generator=generator,
         )
 
         self.assertFalse(result.refused)
         self.assertEqual([citation["drive_file_id"] for citation in result.citations], ["allowed"])
         self.assertNotIn("Restricted", result.answer)
+        prompt_context = generator.calls[0][1]
+        self.assertEqual(
+            [chunk.source_document_id for chunk in prompt_context.chunks],
+            [allowed.pk],
+        )
+        self.assertNotIn("Restricted text", prompt_context.text)
 
     def test_inactive_ineligible_unverified_and_expired_documents_contribute_nothing(self):
         inactive = self.create_document("inactive", active_in_scope=False)
@@ -539,6 +574,86 @@ class QueryServiceSecurityTests(TestCase):
         self.assertEqual(result.answer, "Sarah responsible for Atlas.")
         self.assertFalse(result.refused)
         self.assertEqual(result.citations[0]["drive_file_id"], "allowed")
+
+    def test_answer_provider_is_not_called_before_permission_and_context_gates(self):
+        document = self.create_document("allowed")
+        generator = StubAnswerGenerator()
+
+        for allowed_lookup, retriever in (
+            (lambda _email: (), StubRetriever()),
+            (lambda _email: (document.pk,), StubRetriever()),
+        ):
+            with self.subTest(allowed_lookup=allowed_lookup):
+                result = answer_query(
+                    "question",
+                    "reader@example.com",
+                    allowed_lookup=allowed_lookup,
+                    retriever=retriever,
+                    answer_generator=generator,
+                )
+                self.assertTrue(result.refused)
+
+        self.assertEqual(generator.calls, [])
+
+    def test_answer_provider_failure_discards_context_and_logs_no_payload(self):
+        document = self.create_document("allowed")
+        evidence = RetrievalEvidence(
+            chunks=(RetrievedChunk(document.pk, f"{document.pk}:0", "Secret allowed text."),)
+        )
+        generator = StubAnswerGenerator(error=OSError("provider response body"))
+
+        with self.assertLogs("retrieval.services", level="WARNING") as captured:
+            result = answer_query(
+                "sensitive question",
+                "reader@example.com",
+                allowed_lookup=lambda _email: (document.pk,),
+                retriever=StubRetriever(evidence),
+                answer_generator=generator,
+            )
+
+        log_output = "\n".join(captured.output)
+        self.assertTrue(result.refused)
+        self.assertEqual(result.citations, ())
+        self.assertNotIn("Secret allowed text", log_output)
+        self.assertNotIn("sensitive question", log_output)
+        self.assertNotIn("provider response body", log_output)
+
+    def test_unsupported_model_answer_returns_the_shared_refusal_without_citations(self):
+        document = self.create_document("allowed")
+        evidence = RetrievalEvidence(
+            chunks=(RetrievedChunk(document.pk, f"{document.pk}:0", "Accessible text."),)
+        )
+
+        result = answer_query(
+            "question",
+            "reader@example.com",
+            allowed_lookup=lambda _email: (document.pk,),
+            retriever=StubRetriever(evidence),
+            answer_generator=StubAnswerGenerator(answer="No answer", supported=False),
+        )
+
+        self.assertTrue(result.refused)
+        self.assertEqual(result.answer, "I do not have enough accessible context to answer that.")
+        self.assertEqual(result.citations, ())
+
+    @override_settings(QUERY_CONTEXT_MAX_CHARS=100)
+    def test_citations_cover_only_evidence_that_fit_the_prompt_context(self):
+        document = self.create_document("allowed")
+        first = RetrievedChunk(document.pk, f"{document.pk}:0", "First accessible source.")
+        second = RetrievedChunk(document.pk, f"{document.pk}:1", "Second accessible source.")
+        generator = StubAnswerGenerator()
+
+        result = answer_query(
+            "question",
+            "reader@example.com",
+            allowed_lookup=lambda _email: (document.pk,),
+            retriever=StubRetriever(RetrievalEvidence(chunks=(first, second))),
+            answer_generator=generator,
+        )
+
+        self.assertFalse(result.refused)
+        self.assertEqual([citation["chunk_id"] for citation in result.citations], [first.chunk_id])
+        self.assertEqual(generator.calls[0][1].chunks, (first,))
 
 
 class QueryApiSecurityTests(TestCase):

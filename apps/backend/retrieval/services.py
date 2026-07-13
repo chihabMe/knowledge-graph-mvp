@@ -3,8 +3,12 @@
 import logging
 from dataclasses import dataclass
 
+from django.conf import settings
+
 from authorization.lookup import allowed_source_document_ids
 from integrations.models import SourceDocument
+from retrieval.answers import AnswerGenerator, build_answer_generator
+from retrieval.context import assemble_context
 from retrieval.neo4j import Neo4jPermissionSafeRetriever
 from retrieval.types import RetrievalEvidence
 
@@ -39,40 +43,22 @@ def _refusal() -> QueryResult:
     )
 
 
-def _excerpt(text: str, *, max_chars: int = 800) -> str:
-    compact = " ".join(text.split())
-    if len(compact) <= max_chars:
-        return compact
-    return f"{compact[: max_chars - 1].rstrip()}…"
-
-
-def _answer(evidence: RetrievalEvidence) -> str:
-    if evidence.chunks:
-        return _excerpt(evidence.chunks[0].text)
-    fact = evidence.facts[0]
-    relationship = fact.relationship_type.replace("_", " ")
-    return f"{fact.source_name} {relationship} {fact.target_name}."
-
-
 def answer_query(
     question: str,
     user_email: str,
     *,
     allowed_lookup=None,
     retriever: Neo4jPermissionSafeRetriever | None = None,
+    answer_generator: AnswerGenerator | None = None,
 ) -> QueryResult:
-    """Return extractive evidence only after SpiceDB and provenance filtering.
-
-    This slice intentionally has no LLM call. All failures and all empty states
-    use the same refusal so restricted-document existence cannot be inferred.
-    """
+    """Return an answer only after authorization, retrieval, and evidence gates."""
     lookup = allowed_lookup or allowed_source_document_ids
-    retriever = retriever or Neo4jPermissionSafeRetriever()
     try:
         allowed_ids = tuple(lookup(user_email))
         if not allowed_ids:
             return _refusal()
 
+        retriever = retriever or Neo4jPermissionSafeRetriever()
         evidence = retriever.retrieve(question, allowed_ids)
         evidence_ids = {item.source_document_id for item in (*evidence.chunks, *evidence.facts)}
         allowed_set = {value for value in allowed_ids if type(value) is int}
@@ -95,9 +81,21 @@ def answer_query(
         if not safe_evidence.chunks and not safe_evidence.facts:
             return _refusal()
 
+        context = assemble_context(
+            safe_evidence,
+            max_chars=settings.QUERY_CONTEXT_MAX_CHARS,
+        )
+        if not context.text:
+            return _refusal()
+
+        generator = answer_generator or build_answer_generator()
+        generated = generator.generate(question, context)
+        if not generated.supported:
+            return _refusal()
+
         citations: list[dict[str, str]] = []
         seen_citations: set[tuple[int, str]] = set()
-        for item in (*safe_evidence.chunks, *safe_evidence.facts):
+        for item in (*context.chunks, *context.facts):
             key = (item.source_document_id, item.chunk_id)
             if key in seen_citations:
                 continue
@@ -113,7 +111,7 @@ def answer_query(
             )
 
         return QueryResult(
-            answer=_answer(safe_evidence),
+            answer=generated.answer,
             citations=tuple(citations),
             refused=False,
             reason=None,
