@@ -372,10 +372,13 @@ if QUERY_ANSWER_PROVIDER not in {"extractive", "openrouter"}:
     )
 OPENROUTER_MODEL = env("OPENROUTER_MODEL", default="")
 QUERY_CONTEXT_MAX_CHARS = env.int("QUERY_CONTEXT_MAX_CHARS", default=12_000)
+QUERY_ANSWER_MAX_TOKENS = env.int("QUERY_ANSWER_MAX_TOKENS", default=800)
 QUERY_RETRIEVAL_LIMIT = env.int("QUERY_RETRIEVAL_LIMIT", default=5)
 QUERY_VECTOR_MIN_SCORE = env.float("QUERY_VECTOR_MIN_SCORE", default=0.45)
 if QUERY_CONTEXT_MAX_CHARS < 1:
     raise ImproperlyConfigured("QUERY_CONTEXT_MAX_CHARS must be positive.")
+if not 1 <= QUERY_ANSWER_MAX_TOKENS <= 4_000:
+    raise ImproperlyConfigured("QUERY_ANSWER_MAX_TOKENS must be between 1 and 4000.")
 if not 1 <= QUERY_RETRIEVAL_LIMIT <= 20:
     raise ImproperlyConfigured("QUERY_RETRIEVAL_LIMIT must be between 1 and 20.")
 if not 0.0 <= QUERY_VECTOR_MIN_SCORE <= 1.0:
