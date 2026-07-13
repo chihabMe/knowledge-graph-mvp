@@ -34,12 +34,18 @@ Answer user questions using only graph/vector context derived from documents the
   Cypher fragment + `record_has_provenance` post-query check. The baseline
   chunk and bounded one-hop fact paths guard every node and relationship;
   the future vector path is separately tracked below and must do the same.)
-- [ ] Filter Neo4j vector search by allowed provenance. Effort: Extra High.
+- [x] Filter Neo4j vector search by allowed provenance. Effort: Extra High.
+  (The OpenRouter adapter embeds both chunks and questions. Neo4j first
+  `MATCH`es allowed, provenance-complete chunks, then computes vector
+  similarity inside that set; global vector-index candidates are never
+  retrieved and filtered afterward.)
 - [x] Filter graph traversal by allowed provenance. Effort: Extra High.
   (Bounded one-hop entity facts only; unrestricted traversal is not present.)
 - [x] Assemble cited context. Effort: Extra High. (Citations are sourced only
   from the fresh PostgreSQL intersection of retrieved and SpiceDB-allowed IDs.)
-- [ ] Call OpenRouter safely. Effort: High.
+- [x] Call OpenRouter safely. Effort: High. (The answer service receives only
+  bounded JSONL context that survived every authorization/evidence gate;
+  structured model output cannot supply citation URLs.)
 - [x] Add refusal behavior. Effort: Extra High. (Authorization, evidence,
   relevance, and retrieval failures share one non-revealing response.)
 - [x] Add graph-path leak tests. Effort: Extra High.
@@ -62,11 +68,18 @@ Answer user questions using only graph/vector context derived from documents the
 - [x] Live development acceptance refreshes permission evidence, refuses an
   unrelated question despite an allowed document, and returns citations only
   to the SpiceDB-allowed Drive PDF for a relevant question.
+- [x] Vector and prompt leak tests prove restricted/missing-provenance evidence,
+  empty allowlists, expired evidence, and provider failures contribute no
+  context or citations and cannot trigger downstream model calls.
+- [x] Live hybrid acceptance stores 1,536-dimension vectors on both PDF chunks,
+  preserves zero missing provenance, uses keyword + vector evidence for a
+  relevant query, and returns an OpenRouter answer with permitted citations.
 
 ## Completion Status
 
-In progress. The first permission-safe vertical slice is complete and live
-validated with the development Drive PDF. The exact next task is to implement
-the production embedding adapter and then add a permission/provenance-filtered
-Neo4j vector retrieval path. OpenRouter answer synthesis remains blocked on
-proving that vector boundary safe.
+Complete for backend development acceptance (2026-07-13). The authenticated
+query contract, SpiceDB-first authorization, fresh evidence gate, guarded
+keyword/vector/graph retrieval, bounded context, server-owned citations,
+OpenRouter synthesis, controlled refusal, leak tests, and live Drive-PDF
+validation are implemented. Phase 6 is next: connect Open WebUI and replace the
+development Django-session provisioning path with trusted Google/OIDC identity.

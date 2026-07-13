@@ -80,13 +80,12 @@ Build a graph representation of documents, chunks, entities, and relationships w
 
 ## Completion Status
 
-Code complete (2026-07-09) and merged into `main` on 2026-07-11.
-Two caveats: LLM extraction and the vector index are built and
-smoke-validated but not yet operational in a production configuration (no
-production OpenRouter model configured; the default embedding adapter is
-no-op, so no real embeddings exist yet), and the provenance guard becomes
-enforceable only when Phase 5 composes it into real retrieval queries —
-that wiring task, with its leak tests, now lives in the Phase 5 tracker.
+Code complete (2026-07-09) and merged into `main` on 2026-07-11. Its two
+handoffs are now closed by Phase 5: a production OpenRouter adapter writes real
+Chunk embeddings, and every implemented retrieval query composes the
+SpiceDB-derived allowlist with the provenance guard. The guarded vector path
+computes similarity only after its permission/provenance match rather than
+using globally selected vector-index candidates.
 
 The provenance-contract question raised in review (the graph stores a
 narrower shape than the brief's original section 7) is resolved: ADR-011
