@@ -89,6 +89,7 @@ INSTALLED_APPS = [
     "integrations",
     "graph",
     "authorization",
+    "retrieval",
 ]
 
 MIDDLEWARE = [
@@ -181,6 +182,7 @@ REST_FRAMEWORK = {
         "drive-roots": env("DRIVE_ROOTS_THROTTLE_RATE", default="30/hour"),
         "drive-sync": env("DRIVE_SYNC_THROTTLE_RATE", default="10/hour"),
         "permission-sync": env("PERMISSION_SYNC_THROTTLE_RATE", default="10/hour"),
+        "query": env("QUERY_THROTTLE_RATE", default="60/hour"),
     },
 }
 
