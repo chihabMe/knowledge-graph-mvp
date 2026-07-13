@@ -23,8 +23,13 @@ services:
     # from .env. /dev/null keeps the stack bootable before the key exists.
     volumes:
       - ${GOOGLE_SERVICE_ACCOUNT_FILE:-/dev/null}:/run/secrets/google-service-account.json:ro
+      - ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-oauth-client.json:ro
+      - ${GOOGLE_OAUTH_TOKEN_FILE:-/dev/null}:/run/secrets/google-oauth-token.json:rw
     environment:
+      GOOGLE_DRIVE_AUTH_MODE: ${GOOGLE_DRIVE_AUTH_MODE:-service_account}
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-oauth-client.json
+      GOOGLE_OAUTH_TOKEN_FILE: /run/secrets/google-oauth-token.json
     command:
       - gunicorn
       - config.wsgi:application
@@ -90,8 +95,13 @@ services:
     # key mount as the web container.
     volumes:
       - ${GOOGLE_SERVICE_ACCOUNT_FILE:-/dev/null}:/run/secrets/google-service-account.json:ro
+      - ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-oauth-client.json:ro
+      - ${GOOGLE_OAUTH_TOKEN_FILE:-/dev/null}:/run/secrets/google-oauth-token.json:rw
     environment:
+      GOOGLE_DRIVE_AUTH_MODE: ${GOOGLE_DRIVE_AUTH_MODE:-service_account}
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-oauth-client.json
+      GOOGLE_OAUTH_TOKEN_FILE: /run/secrets/google-oauth-token.json
     command:
       - celery
       - -A

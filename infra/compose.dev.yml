@@ -19,6 +19,10 @@ services:
     build:
       context: ../apps/backend
       target: dev
+    # Development OAuth tokens stay mode 0600 on the host. Running with the
+    # host uid/gid lets Django refresh that bind-mounted token without making
+    # it group- or world-readable. Production keeps the image's django user.
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       # The dev overlay is the one explicit place allowed to relax production
       # startup checks (weak local secret, HTTPS redirect, secure cookies).
@@ -33,6 +37,7 @@ services:
     build:
       context: ../apps/backend
       target: dev
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       DJANGO_DEBUG: "true"
     # Celery has no autoreload: after changing task code, restart the worker
@@ -46,3 +51,9 @@ services:
     environment:
       DJANGO_DEBUG: "true"
     volumes: *dev-source
+
+  spicedb-schema:
+    environment:
+      # This one-off Django command loads the same settings as the app. It must
+      # be recognized as development when the local OAuth workaround is active.
+      DJANGO_DEBUG: "true"
