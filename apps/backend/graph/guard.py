@@ -9,7 +9,12 @@ post-query defense for anything that slips through a hand-written query.
 
 import re
 
-PROVENANCE_FIELDS = ("source_document_id", "connection_id", "drive_file_id")
+PROVENANCE_FIELDS = (
+    "source_document_id",
+    "connection_id",
+    "drive_file_id",
+    "source_permissions_version",
+)
 
 ALLOWED_DOCUMENTS_PARAMETER = "allowed_source_document_ids"
 
