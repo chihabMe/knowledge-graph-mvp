@@ -111,11 +111,15 @@ app, ontology, Neo4j setup, extraction adapter, document, chunk, entity, and
 relationship writers, provenance guard, vector-index setup, and extraction
 recovery hardening are in place.
 
+Phase 5 is in progress. The first safe query slice composes the provenance
+guard and SpiceDB allowed-source-document list for bounded chunk and one-hop
+fact retrieval, with authenticated identity, citations, refusal behavior, and
+leak tests.
+
 The next implementation steps are:
 
-1. Start Phase 5: real retrieval queries must compose the provenance guard
-   and the SpiceDB allowed-source-document list (task moved from Phase 3
-   into the Phase 5 tracker, with leak tests).
+1. Implement the production embedding adapter, then add permission-filtered
+   vector retrieval using the same allowlist and provenance guard.
 2. Keep `.env.example` and tracked docs OpenRouter-shaped.
 3. Preserve provenance on every graph write and keep retrieval fail-closed.
 4. Complete live delegated Workspace ACL and nested-group validation when

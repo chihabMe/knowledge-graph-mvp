@@ -131,11 +131,16 @@ Phases 1 and 2 are code complete (Phase 2's live content-export validation
 waits on domain-wide delegation — see ADR-009). Phase 3, Neo4j graph and
 provenance, is code complete and merged into `main`; its guard-wiring seam
 moved to the Phase 5 tracker. Phase 4 SpiceDB permission sync is code complete
-with live delegated Workspace validation pending. Next: Phase 5
-permission-safe retrieval.
+with live delegated Workspace validation pending. Phase 5 permission-safe
+retrieval is in progress: the authenticated query contract, SpiceDB pre-filter,
+fresh evidence gate, guarded chunk/one-hop fact retrieval, citations, and safe
+refusal are implemented. Next: production embeddings and permission-filtered
+vector retrieval; OpenRouter remains outside the path until that boundary is
+proven.
 
 Read:
 
+- `ai-context/phases/phase-5-permission-safe-retrieval.md`
 - `ai-context/phases/phase-3-neo4j-graph-and-provenance.md`
 - `ai-context/phases/phase-4-spicedb-permissions.md`
 - `ai-context/phases/phase-2-google-drive-ingestion.md`
