@@ -8,9 +8,13 @@ after their permissions later become readable. Nothing in this module is a
 retrieval path; no content leaves the graph store.
 """
 
+from io import BytesIO
+
 from django.conf import settings
 from django.db import transaction
 from neo4j.exceptions import ServiceUnavailable, SessionExpired, TransientError
+from pypdf import PdfReader
+from pypdf.errors import DependencyError, PyPdfError
 
 from graph.db import write_transaction
 from graph.embeddings import EmbeddingAdapter, NoOpEmbeddingAdapter
@@ -52,6 +56,29 @@ def get_retryable_extraction_exceptions() -> tuple[type[BaseException], ...]:
     return infrastructure
 
 
+def _stored_content_text(stored: SourceDocumentContent) -> tuple[str | None, str | None]:
+    """Return extracted text or a controlled, content-free skip status."""
+    content = bytes(stored.content)
+    if stored.exported_mime_type.startswith("text/"):
+        try:
+            return content.decode("utf-8"), None
+        except UnicodeDecodeError:
+            return None, "skipped_decode_error"
+
+    if stored.exported_mime_type == "application/pdf":
+        try:
+            reader = PdfReader(BytesIO(content), strict=False)
+            pages = [page.extract_text() or "" for page in reader.pages]
+        except (DependencyError, OSError, PyPdfError, TypeError, ValueError):
+            return None, "skipped_pdf_decode_error"
+        text = "\n\n".join(page.strip() for page in pages if page.strip())
+        if not text:
+            return None, "skipped_pdf_no_extractable_text"
+        return text, None
+
+    return None, "skipped_unsupported_mime_type"
+
+
 def extract_document_to_graph(
     source_document_id: int, expected_content_hash: str | None = None
 ) -> dict[str, int | str]:
@@ -66,17 +93,12 @@ def extract_document_to_graph(
         stored = document.content
     except SourceDocumentContent.DoesNotExist:
         return {"source_document_id": source_document_id, "status": "skipped_no_content"}
-    if not stored.exported_mime_type.startswith("text/"):
-        return {
-            "source_document_id": source_document_id,
-            "status": "skipped_unsupported_mime_type",
-        }
-    try:
-        text = bytes(stored.content).decode("utf-8")
-    except UnicodeDecodeError:
-        # Fail closed without letting byte values from client content reach
-        # logs or the result backend via the exception message.
-        return {"source_document_id": source_document_id, "status": "skipped_decode_error"}
+    text, skip_status = _stored_content_text(stored)
+    if skip_status:
+        # Fail closed without letting byte values or parser errors from client
+        # content reach logs or the Celery result backend.
+        return {"source_document_id": source_document_id, "status": skip_status}
+    assert text is not None
 
     expected_content_hash = expected_content_hash or stored.content_hash
     if (

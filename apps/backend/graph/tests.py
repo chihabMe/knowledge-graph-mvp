@@ -725,11 +725,42 @@ class ExtractionPipelineTests(TestCase):
         )
 
     def test_non_text_content_is_skipped(self):
-        self._store_content(b"%PDF-1.7 ...", exported_mime_type="application/pdf")
+        self._store_content(b"image bytes", exported_mime_type="image/png")
 
         result = extract_document_to_graph(self.document.pk)
 
         self.assertEqual(result["status"], "skipped_unsupported_mime_type")
+
+    @override_settings(GRAPH_EXTRACTION_ENGINE="paragraph")
+    @patch("graph.pipeline.write_transaction")
+    @patch("graph.pipeline.PdfReader")
+    def test_pdf_text_is_extracted_and_written(self, mock_reader, mock_transaction_ctx):
+        first_page = MagicMock()
+        first_page.extract_text.return_value = "First PDF paragraph."
+        second_page = MagicMock()
+        second_page.extract_text.return_value = "Second PDF paragraph."
+        mock_reader.return_value.pages = [first_page, second_page]
+        db_transaction = MagicMock()
+        mock_transaction_ctx.return_value.__enter__.return_value = db_transaction
+        self._store_content(b"%PDF-1.7 test", exported_mime_type="application/pdf")
+
+        result = extract_document_to_graph(self.document.pk)
+
+        self.assertEqual(result["status"], "extracted")
+        self.assertEqual(result["chunks"], 2)
+        mock_reader.assert_called_once()
+        self.assertFalse(mock_reader.call_args.kwargs["strict"])
+
+    @patch("graph.pipeline.PdfReader")
+    def test_pdf_without_extractable_text_is_skipped(self, mock_reader):
+        page = MagicMock()
+        page.extract_text.return_value = "  "
+        mock_reader.return_value.pages = [page]
+        self._store_content(b"%PDF-1.7 scan", exported_mime_type="application/pdf")
+
+        result = extract_document_to_graph(self.document.pk)
+
+        self.assertEqual(result["status"], "skipped_pdf_no_extractable_text")
 
     def test_undecodable_content_is_skipped_without_leaking_bytes(self):
         self._store_content(b"\xff\xfe\xfa broken")
