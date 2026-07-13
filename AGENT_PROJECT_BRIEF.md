@@ -73,11 +73,13 @@ reconciliation, verification gate, admin audit API, and fully consistent
 allowed-document lookup are implemented. Verified permission evidence also
 expires at retrieval time after a configured maximum age, so repeated sync
 failures cannot preserve an old grant indefinitely. The next product-risk
-dependency, Phase 5 retrieval, is now in progress: the authenticated
+dependency, Phase 5 retrieval, is code complete: the authenticated
 `/api/query/` contract, SpiceDB pre-filter, fresh PostgreSQL evidence gate,
-provenance-constrained Neo4j chunk/one-hop fact retrieval, extractive response,
-citations, and safe refusal path are implemented. Production embeddings,
-permission-filtered vector retrieval, and OpenRouter answer synthesis remain.
+provenance-constrained Neo4j keyword/vector/one-hop fact retrieval, bounded
+context, server-owned citations, OpenRouter answer synthesis, and safe refusal
+path are implemented. The next phase is Open WebUI/OIDC integration; live
+delegated Workspace ACL and nested-group validation remains the Phase 4
+external gate.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -346,6 +348,14 @@ For each question:
 8. Call OpenRouter.
 9. Return answer, source citations, and refusal when needed.
 
+Neo4j 5's vector-index query procedure does not accept the per-request Drive
+document allowlist before candidate selection. The permission-safe path must
+therefore `MATCH` allowed, provenance-complete chunks first and then compute
+`vector.similarity.*` inside that bounded set. Calling the global vector index
+and filtering its candidates afterward is forbidden. The provisioned Chunk
+vector index remains available for a future pre-filter-capable strategy but is
+not an authorization boundary.
+
 Answer behavior:
 
 - If context is insufficient, say what is missing.
@@ -541,9 +551,11 @@ If the answer is restricted or unavailable:
 }
 ```
 
-The current Phase 5 slice returns a bounded extractive answer from accessible
-chunk or one-hop graph-fact evidence. It does not call OpenRouter and does not
-claim vector or hybrid retrieval while the embedding adapter is a no-op.
+The Phase 5 backend returns a bounded answer from permission-filtered hybrid
+keyword/vector/one-hop graph evidence. Embeddings and answer synthesis use
+separate opt-in OpenRouter adapters. The model receives only JSONL context that
+survived SpiceDB, provenance, and fresh-evidence gates; it returns only answer
+text plus a support decision, while citation URLs remain server-owned.
 
 ### `POST /eval/run`
 
@@ -629,7 +641,7 @@ fails; successful syncs refresh that evidence.
 
 ### Phase 5: Permission-Safe Retrieval
 
-Status: in progress (2026-07-13).
+Status: code complete and live validated (2026-07-13).
 
 Purpose: answer questions using only Neo4j graph/vector context derived from
 documents the user may see. Restricted facts must not leak through graph paths,
@@ -637,16 +649,23 @@ embeddings, citations, or prompt context.
 
 Current foundation: `/api/query/` accepts only a question and derives identity
 from the authenticated Django session; `allowed_source_document_ids()` runs
-before Neo4j; fresh permission evidence is rechecked before response assembly;
-chunk and bounded one-hop entity-fact queries compose the allowed-document
-filter and provenance guard on every returned node and relationship; citations
-come only from the intersected PostgreSQL source-document rows; empty or failed
-authorization/retrieval paths share one controlled refusal. OpenRouter is not
-called. Production embeddings and guarded vector retrieval are next.
-The first slice has also been exercised live against the development OAuth
-Drive PDF: permission evidence refreshed successfully, unrelated permitted
-content was refused, and a relevant query returned citations only to the
-SpiceDB-allowed document.
+before any embedding, Neo4j, or answer-provider call; fresh permission evidence
+is rechecked before response assembly. Keyword chunks, vector-similar chunks,
+and bounded one-hop entity facts compose the allowed-document filter and
+provenance guard on every returned node and relationship. Neo4j vector
+similarity is computed only after the permission/provenance `MATCH`, never by
+globally retrieving vector-index candidates and filtering afterward. Bounded
+JSONL context retains the exact evidence eligible for server-owned Drive
+citations. OpenRouter receives only that context and must return structured
+answer/support fields; every empty or failed authorization, embedding,
+retrieval, context, or model path shares one controlled refusal.
+
+Live development acceptance re-embedded both chunks of the OAuth Drive PDF at
+1,536 dimensions with zero missing provenance. An allowed relevant query used
+both keyword and vector evidence and returned an OpenRouter answer with only
+the permitted PDF citations. Unrelated, restricted-user, expired-evidence,
+unauthenticated, and spoofed-identity requests were refused or rejected without
+restricted context or citations.
 
 ### Phase 6: Open WebUI Integration
 
