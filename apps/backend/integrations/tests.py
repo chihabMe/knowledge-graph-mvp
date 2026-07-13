@@ -807,6 +807,7 @@ class GoogleDriveMetadataClientTests(TestCase):
             )
 
 
+@override_settings(GOOGLE_DRIVE_AUTH_MODE="service_account")
 class BuildDriveServiceTests(SimpleTestCase):
     # connection=None works only because the key check runs before anything
     # touches the connection — these tests deliberately pin that ordering.
@@ -869,6 +870,26 @@ class BuildDriveServiceTests(SimpleTestCase):
         credentials.with_subject.assert_called_once_with("delegated@example.com")
         _, build_kwargs = mock_build.call_args
         self.assertIs(build_kwargs["credentials"], credentials.with_subject.return_value)
+
+    @patch("googleapiclient.discovery.build")
+    @patch("integrations.drive.google_client.load_oauth_credentials")
+    def test_oauth_dev_mode_uses_authorized_user_credentials(self, mock_load, mock_build):
+        credentials = mock_load.return_value
+        connection = DriveConnection(delegated_subject_email="")
+        with override_settings(GOOGLE_DRIVE_AUTH_MODE="oauth_dev"):
+            build_drive_service(connection)
+
+        mock_load.assert_called_once_with(["https://www.googleapis.com/auth/drive.readonly"])
+        _, build_kwargs = mock_build.call_args
+        self.assertIs(build_kwargs["credentials"], credentials)
+
+    @patch("integrations.drive.google_client.load_oauth_credentials")
+    def test_oauth_dev_mode_rejects_delegated_subject(self, mock_load):
+        connection = DriveConnection(delegated_subject_email="admin@example.com")
+        with override_settings(GOOGLE_DRIVE_AUTH_MODE="oauth_dev"):
+            with self.assertRaises(GoogleDriveApiError):
+                build_drive_service(connection)
+        mock_load.assert_not_called()
 
 
 class ExportFileContentTests(SimpleTestCase):

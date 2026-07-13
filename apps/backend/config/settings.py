@@ -343,6 +343,15 @@ if GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag" and not (
     )
 
 GOOGLE_WORKSPACE_DOMAIN = env("GOOGLE_WORKSPACE_DOMAIN", default="")
+GOOGLE_DRIVE_AUTH_MODE = env("GOOGLE_DRIVE_AUTH_MODE", default="service_account")
+if GOOGLE_DRIVE_AUTH_MODE not in {"service_account", "oauth_dev"}:
+    raise ImproperlyConfigured("GOOGLE_DRIVE_AUTH_MODE must be 'service_account' or 'oauth_dev'.")
+if GOOGLE_DRIVE_AUTH_MODE == "oauth_dev" and not _development_context:
+    raise ImproperlyConfigured(
+        "GOOGLE_DRIVE_AUTH_MODE='oauth_dev' is permitted only in development/test context."
+    )
+GOOGLE_OAUTH_CLIENT_SECRET_FILE = env("GOOGLE_OAUTH_CLIENT_SECRET_FILE", default="")
+GOOGLE_OAUTH_TOKEN_FILE = env("GOOGLE_OAUTH_TOKEN_FILE", default="")
 GOOGLE_SERVICE_ACCOUNT_FILE = env("GOOGLE_SERVICE_ACCOUNT_FILE", default="")
 GOOGLE_DRIVE_DELEGATED_SUBJECT = env("GOOGLE_DRIVE_DELEGATED_SUBJECT", default="")
 GOOGLE_DRIVE_SCOPE_TYPE = env("GOOGLE_DRIVE_SCOPE_TYPE", default="folder")

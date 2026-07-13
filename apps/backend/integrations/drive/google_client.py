@@ -10,6 +10,8 @@ The Drive service object is injectable so tests never touch the network.
 from datetime import datetime
 from typing import Any
 
+from django.conf import settings
+
 from integrations.drive.client import (
     DriveFileMetadata,
     DrivePermissionAccessReport,
@@ -17,7 +19,9 @@ from integrations.drive.client import (
     DriveRootCandidate,
 )
 from integrations.drive.credentials import (
+    OAuthCredentialError,
     ServiceAccountKeyError,
+    load_oauth_credentials,
     load_service_account_credentials,
 )
 from integrations.models import DriveConnection
@@ -103,13 +107,23 @@ def build_drive_service(connection: DriveConnection):
     # report "" and invalidate documents while the built service still delegated
     # to the env subject. Read only the connection field so the effective auth
     # identity always matches what the endpoint reports.
-    try:
-        credentials = load_service_account_credentials([DRIVE_READONLY_SCOPE])
-    except ServiceAccountKeyError as exc:
-        raise MissingServiceAccountKeyError(_KEY_ERROR_MESSAGES[exc.reason]) from exc
-    subject = connection.delegated_subject_email
-    if subject:
-        credentials = credentials.with_subject(subject)
+    if settings.GOOGLE_DRIVE_AUTH_MODE == "oauth_dev":
+        if connection is not None and connection.delegated_subject_email:
+            raise GoogleDriveApiError(
+                "Development OAuth mode cannot use a delegated Workspace subject."
+            )
+        try:
+            credentials = load_oauth_credentials([DRIVE_READONLY_SCOPE])
+        except OAuthCredentialError as exc:
+            raise GoogleDriveApiError(str(exc)) from exc
+    else:
+        try:
+            credentials = load_service_account_credentials([DRIVE_READONLY_SCOPE])
+        except ServiceAccountKeyError as exc:
+            raise MissingServiceAccountKeyError(_KEY_ERROR_MESSAGES[exc.reason]) from exc
+        subject = connection.delegated_subject_email
+        if subject:
+            credentials = credentials.with_subject(subject)
 
     # Imported lazily so tests that inject a fake service never need
     # Google credentials or the discovery cache.
