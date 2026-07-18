@@ -1037,6 +1037,7 @@ class RetrievalGuardTests(SimpleTestCase):
 
         for field in PROVENANCE_FIELDS:
             self.assertIn(f"c.{field} IS NOT NULL", fragment)
+            self.assertIn(f"c.{field} <> ''", fragment)
         self.assertIn(f"c.source_document_id IN ${ALLOWED_DOCUMENTS_PARAMETER}", fragment)
 
     def test_non_identifier_alias_is_rejected_at_the_interpolation_point(self):
@@ -1059,3 +1060,9 @@ class RetrievalGuardTests(SimpleTestCase):
         properties["drive_file_id"] = None
 
         self.assertFalse(record_has_provenance(properties))
+
+    def test_record_with_empty_string_provenance_field_fails(self):
+        for blanked in PROVENANCE_FIELDS:
+            properties = {field: "value" for field in PROVENANCE_FIELDS}
+            properties[blanked] = ""
+            self.assertFalse(record_has_provenance(properties))

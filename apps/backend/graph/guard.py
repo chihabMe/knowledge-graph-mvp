@@ -28,9 +28,14 @@ def provenance_where(alias: str) -> str:
     # so no caller can ever push non-identifier text into that Cypher.
     if not _SAFE_ALIAS.fullmatch(alias):
         raise ValueError(f"Unsafe Cypher alias for provenance filter: {alias!r}")
-    field_checks = " AND ".join(f"{alias}.{field} IS NOT NULL" for field in PROVENANCE_FIELDS)
+    # An empty string is missing provenance, not provenance. Cypher `<>` across
+    # types is true, so the check is a no-op for the integer id fields and
+    # rejects blanks on the string ones.
+    field_checks = " AND ".join(
+        f"{alias}.{field} IS NOT NULL AND {alias}.{field} <> ''" for field in PROVENANCE_FIELDS
+    )
     return f"({field_checks} AND {alias}.source_document_id IN ${ALLOWED_DOCUMENTS_PARAMETER})"
 
 
 def record_has_provenance(properties: dict) -> bool:
-    return all(properties.get(field) is not None for field in PROVENANCE_FIELDS)
+    return all(properties.get(field) not in (None, "") for field in PROVENANCE_FIELDS)
