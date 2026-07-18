@@ -69,6 +69,12 @@ def synchronize_permissions(
     External payloads never escape this service or enter task results/logs.
     """
     connection = run.connection
+    if connection.permission_authority != connection.PermissionAuthority.DELEGATED_ACL:
+        run.status = PermissionSyncRun.Status.FAILED
+        run.error_code = "permission_authority_mismatch"
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "error_code", "finished_at"])
+        raise PermissionSyncError("permission_authority_mismatch")
     spicedb = spicedb or AuthzedSpiceDB()
     group_resolver = group_resolver or GoogleGroupResolver()
     try:

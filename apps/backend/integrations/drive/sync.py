@@ -60,6 +60,10 @@ def sync_drive_metadata(
 
     extraction_candidates: list[tuple[int, str]] = []
     sync_marker = str(uuid4())
+    per_user_oauth_authority = bool(
+        settings.GOOGLE_PERMISSION_AUTHORITY == DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        and connection.permission_authority == DriveConnection.PermissionAuthority.PER_USER_OAUTH
+    )
 
     try:
         files = client.list_files(connection)
@@ -79,6 +83,7 @@ def sync_drive_metadata(
                     public_link=public_link,
                     domain_visibility=domain_visibility,
                     permissions_fetch_failed=file_metadata.permissions_fetch_failed,
+                    require_permission_metadata=not per_user_oauth_authority,
                 )
                 if exclusion_reason:
                     skipped_files += 1
@@ -94,6 +99,7 @@ def sync_drive_metadata(
                 )
                 preserve_permission_verification = bool(
                     existing_document
+                    and not per_user_oauth_authority
                     and not exclusion_reason
                     and existing_document.is_permission_verified(permissions_version)
                 )
@@ -285,11 +291,14 @@ def _exclusion_reason(
     public_link: bool,
     domain_visibility: bool,
     permissions_fetch_failed: bool,
+    require_permission_metadata: bool,
 ) -> str:
-    # Checked first: an empty permissions list from a failed fetch reads
-    # identically to "no special sharing" to the checks below. Fail closed
-    # instead of silently treating an unknown ACL as safe.
-    if permissions_fetch_failed:
+    # In delegated mode an empty list from a failed fetch is indistinguishable
+    # from a private ACL, so it must exclude the document. In per-user mode the
+    # service account is content-only: its ACL visibility is not authority and
+    # every retrieval grant still requires fresh user-scoped Google evidence,
+    # a verified direct SpiceDB tuple, and the matching generation.
+    if permissions_fetch_failed and require_permission_metadata:
         return SourceDocument.ExclusionReason.PERMISSION_METADATA_INCOMPLETE
     if public_link:
         return SourceDocument.ExclusionReason.PUBLIC_LINK_NOT_SUPPORTED

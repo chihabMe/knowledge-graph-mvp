@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Google sign-in</title>
+  </head>
+  <body>
+    <main>
+      {% if authenticated %}
+        <h1>Google sign-in completed</h1>
+      {% else %}
+        <h1>Google sign-in could not be completed</h1>
+        <p>Close this page and ask the pilot administrator to check the login configuration.</p>
+      {% endif %}
+    </main>
+  </body>
+</html>

@@ -36,6 +36,11 @@ class PermissionSyncView(APIView):
                 {"detail": "No enabled Drive connection is configured."},
                 status=status.HTTP_409_CONFLICT,
             )
+        if connection.permission_authority != DriveConnection.PermissionAuthority.DELEGATED_ACL:
+            return Response(
+                {"detail": "Delegated permission synchronization is not active."},
+                status=status.HTTP_409_CONFLICT,
+            )
         if not connection.effective_root_id:
             return Response(
                 {"detail": "No Drive root has been selected for this connection."},

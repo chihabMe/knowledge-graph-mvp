@@ -17,6 +17,7 @@ from authzed.api.v1 import (
     Relationship,
     RelationshipFilter,
     RelationshipUpdate,
+    SubjectFilter,
     SubjectReference,
     WriteRelationshipsRequest,
     WriteSchemaRequest,
@@ -48,6 +49,10 @@ class SpiceDB(Protocol):
 
     def read_managed_tuples(
         self, connection_prefix: str, *, revision: str = ""
+    ) -> set[PermissionTuple]: ...
+
+    def read_oauth_viewer_tuples(
+        self, connection_prefix: str, user_id: str, *, revision: str = ""
     ) -> set[PermissionTuple]: ...
 
     def write_updates(
@@ -131,6 +136,44 @@ class AuthzedSpiceDB:
                 item = _from_relationship(response.relationship)
                 if item.resource_id.startswith(connection_prefix):
                     tuples.add(item)
+        return tuples
+
+    def read_oauth_viewer_tuples(
+        self, connection_prefix: str, user_id: str, *, revision: str = ""
+    ) -> set[PermissionTuple]:
+        """Read only one user's direct document grants within one connection."""
+        consistency = (
+            Consistency(at_least_as_fresh={"token": revision})
+            if revision
+            else Consistency(fully_consistent=True)
+        )
+        responses = self._client.ReadRelationships(
+            ReadRelationshipsRequest(
+                consistency=consistency,
+                relationship_filter=RelationshipFilter(
+                    resource_type="kgm/document",
+                    optional_resource_id_prefix=connection_prefix,
+                    optional_relation="oauth_viewer",
+                    optional_subject_filter=SubjectFilter(
+                        subject_type="kgm/user",
+                        optional_subject_id=user_id,
+                    ),
+                ),
+            ),
+            timeout=self._timeout,
+        )
+        tuples: set[PermissionTuple] = set()
+        for response in responses:
+            item = _from_relationship(response.relationship)
+            if (
+                item.resource_type == "kgm/document"
+                and item.resource_id.startswith(connection_prefix)
+                and item.relation == "oauth_viewer"
+                and item.subject_type == "kgm/user"
+                and item.subject_id == user_id
+                and not item.subject_relation
+            ):
+                tuples.add(item)
         return tuples
 
     def write_updates(

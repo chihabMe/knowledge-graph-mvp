@@ -18,6 +18,7 @@ definition kgm/folder {
 
 definition kgm/document {
     relation parent: kgm/folder
+    relation oauth_viewer: kgm/user
     relation reader: kgm/user | kgm/group#member
     relation commenter: kgm/user | kgm/group#member
     relation writer: kgm/user | kgm/group#member
@@ -25,5 +26,5 @@ definition kgm/document {
     relation organizer: kgm/user | kgm/group#member
     relation owner: kgm/user | kgm/group#member
 
-    permission view = reader + commenter + writer + file_organizer + organizer + owner + parent->view
+    permission view = oauth_viewer + reader + commenter + writer + file_organizer + organizer + owner + parent->view
 }

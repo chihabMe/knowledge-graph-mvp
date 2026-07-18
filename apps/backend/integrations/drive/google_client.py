@@ -1,8 +1,9 @@
 """Google Drive metadata client backed by the real Drive v3 API.
 
-Read-only access via a service account (domain-wide delegation when a
-delegated subject is configured). This module fetches metadata and sharing
-information only — content export lives in integrations.drive.export.
+Read-only access via a service-account identity. Keyless Application Default
+Credentials are preferred; legacy JSON-key credentials may use domain-wide
+delegation when explicitly configured. This module fetches metadata and
+sharing information only — content export lives in integrations.drive.export.
 
 The Drive service object is injectable so tests never touch the network.
 """
@@ -19,8 +20,10 @@ from integrations.drive.client import (
     DriveRootCandidate,
 )
 from integrations.drive.credentials import (
+    ApplicationDefaultCredentialError,
     OAuthCredentialError,
     ServiceAccountKeyError,
+    load_application_default_credentials,
     load_oauth_credentials,
     load_service_account_credentials,
 )
@@ -66,7 +69,11 @@ if GoogleAuthError is not None:
 DRIVE_API_ERRORS = tuple(_DRIVE_API_ERROR_TYPES)
 
 
-class MissingServiceAccountKeyError(RuntimeError):
+class DriveCredentialUnavailableError(RuntimeError):
+    """No configured credential source could safely authenticate Drive."""
+
+
+class MissingServiceAccountKeyError(DriveCredentialUnavailableError):
     """The service-account key file is missing, empty, unreadable, or malformed.
 
     Raised whenever GOOGLE_SERVICE_ACCOUNT_FILE cannot yield credentials:
@@ -78,6 +85,10 @@ class MissingServiceAccountKeyError(RuntimeError):
     problem on its own — the alternative is an opaque credential parse error
     mid-sync.
     """
+
+
+class ApplicationDefaultUnavailableError(DriveCredentialUnavailableError):
+    """ADC discovery failed or was incompatible with the connection."""
 
 
 class GoogleDriveApiError(RuntimeError):
@@ -119,6 +130,19 @@ def build_drive_service(connection: DriveConnection):
             credentials = load_oauth_credentials([DRIVE_READONLY_SCOPE])
         except OAuthCredentialError as exc:
             raise GoogleDriveApiError(str(exc)) from exc
+    elif settings.GOOGLE_DRIVE_AUTH_MODE == "application_default":
+        if connection is not None and connection.delegated_subject_email:
+            raise GoogleDriveApiError(
+                "Application Default Credentials cannot use a delegated Workspace subject."
+            )
+        try:
+            credentials = load_application_default_credentials([DRIVE_READONLY_SCOPE])
+        except ApplicationDefaultCredentialError as exc:
+            raise ApplicationDefaultUnavailableError(
+                "Google Application Default Credentials are unavailable. "
+                "Authenticate locally with service-account impersonation or attach "
+                "the ingestion service account to the Google Cloud runtime."
+            ) from exc
     else:
         try:
             credentials = load_service_account_credentials([DRIVE_READONLY_SCOPE])
@@ -173,9 +197,9 @@ class GoogleDriveMetadataClient:
             if settings.GOOGLE_DRIVE_AUTH_MODE == "oauth_dev":
                 candidates.extend(self._list_folders(service, query=OAUTH_OWNED_FOLDER_QUERY))
             candidates.extend(self._list_shared_drives(service))
-        except MissingServiceAccountKeyError:
-            # Key-file problems keep their own error (409 at the API boundary);
-            # only Drive/auth request failures collapse into the 502 below.
+        except DriveCredentialUnavailableError:
+            # Credential discovery problems keep their own error (409 at the
+            # API boundary); only Drive/auth request failures collapse into 502.
             raise
         except DRIVE_API_ERRORS as exc:
             raise GoogleDriveApiError(
@@ -242,7 +266,7 @@ class GoogleDriveMetadataClient:
         try:
             service = self._service or build_drive_service(connection)
             return self._check_permission_access(service, connection, max_files=max_files)
-        except MissingServiceAccountKeyError:
+        except DriveCredentialUnavailableError:
             raise
         except DRIVE_API_ERRORS as exc:
             raise GoogleDriveApiError(

@@ -1,8 +1,9 @@
 """Shared Google credential loading for Drive API clients.
 
-Drive and Directory construct credentials from the same mounted key file;
-this module is the single place that validates credential paths and parses
-tokens, so a credential fix cannot land in one client and miss the other.
+Drive and Directory construct credentials through this shared boundary. It
+supports keyless Application Default Credentials, legacy mounted key files,
+and the development-only interactive OAuth token without exposing credential
+material to callers.
 """
 
 import json
@@ -27,6 +28,10 @@ class ServiceAccountKeyError(RuntimeError):
 
 class OAuthCredentialError(RuntimeError):
     """Controlled failure while loading development OAuth credentials."""
+
+
+class ApplicationDefaultCredentialError(RuntimeError):
+    """Controlled failure while discovering keyless Google credentials."""
 
 
 def _path_missing_or_empty(path: str) -> bool:
@@ -59,6 +64,24 @@ def load_service_account_credentials(scopes, *, subject=""):
         raise ServiceAccountKeyError("invalid_key") from exc
     if subject:
         credentials = credentials.with_subject(subject)
+    return credentials
+
+
+def load_application_default_credentials(scopes):
+    """Discover short-lived ADC credentials without a reusable private key."""
+    from google.auth import default
+    from google.auth.exceptions import DefaultCredentialsError
+
+    try:
+        credentials, _project_id = default(scopes=list(scopes))
+    except (DefaultCredentialsError, OSError, ValueError) as exc:
+        raise ApplicationDefaultCredentialError(
+            "Google Application Default Credentials are unavailable."
+        ) from exc
+    if credentials is None:
+        raise ApplicationDefaultCredentialError(
+            "Google Application Default Credentials are unavailable."
+        )
     return credentials
 
 

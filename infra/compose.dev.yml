@@ -7,6 +7,7 @@
 # mounted (not the whole backend directory) so the image's /app/.venv is
 # never shadowed by the host checkout.
 x-dev-source: &dev-source
+  - ../apps/backend/authorization:/app/authorization
   - ../apps/backend/config:/app/config
   - ../apps/backend/core:/app/core
   - ../apps/backend/graph:/app/graph
@@ -49,11 +50,16 @@ services:
     build:
       context: ../apps/backend
       target: dev
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       DJANGO_DEBUG: "true"
     volumes: *dev-source
 
   spicedb-schema:
+    # This command also validates per-user OAuth settings. Match the host user
+    # in development so mode-0600 bind-mounted secrets remain readable without
+    # weakening their permissions.
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       # This one-off Django command loads the same settings as the app. It must
       # be recognized as development when the local OAuth workaround is active.

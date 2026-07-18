@@ -25,6 +25,10 @@ CELERY_TASK_EAGER_PROPAGATES = True
 GRAPH_EMBEDDING_PROVIDER = "none"
 QUERY_ANSWER_PROVIDER = "extractive"
 
+# Test behavior must never drift with a developer's live cutover choice in
+# .env. Per-user authorization tests opt in explicitly with override_settings.
+GOOGLE_PERMISSION_AUTHORITY = "delegated_acl"
+
 # In-process cache so throttle tests never need a Redis instance.
 CACHES = {
     "default": {
