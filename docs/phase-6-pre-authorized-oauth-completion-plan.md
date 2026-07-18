@@ -1,7 +1,7 @@
 # Phase 6 Completion Plan: Admin-Approved Per-User Drive OAuth
 
 Prepared: 2026-07-14
-Status: Final live callback-refresh validation remains
+Status: Core live acceptance validated; formal closeout intentionally pending
 Canonical decision: ADR-015 in `ai-context/04-decisions.md`
 Replaces as POC default: domain-wide-delegated ACL and Directory group sync
 
@@ -611,8 +611,14 @@ explicitly denied the other private document. User 1 access removal and
 restoration, User 2 OAuth disconnect and reconnect, evidence expiry, the
 DeepSeek production-provider route, and SpiceDB-unavailable/recovery behavior
 all passed through Open WebUI without leaking hidden facts or citations. The
-remaining Phase 6 check is live confirmation that the newly added immediate
-post-consent refresh removes the previous periodic-scheduler onboarding wait.
+new immediate post-consent refresh was then validated with User 2: disconnect
+caused a safe refusal, reconnect queued a user-specific run, and the next
+successful answer returned only `PURPLE-7395`, `User 2 private document`, and
+`Visible to both users` without waiting for the periodic scheduler. A question
+about only the shared document returned the correct shared fact but also cited
+the other permitted User 2 source. This is citation over-inclusion, not an
+authorization leak. Formal Phase 6 closeout remains intentionally pending by
+operator decision.
 
 ### WP9 — Handoff and completion
 
@@ -623,6 +629,10 @@ post-consent refresh removes the previous periodic-scheduler onboarding wait.
 - Update canonical status and tracker only after live evidence passes.
 
 Exit: Phase 6 can be marked complete without a delegated Workspace credential.
+
+Status: Automated validation and the core live permission matrix have passed.
+The operator has explicitly deferred the completion marker until the updated
+report and acceptance record receive formal review.
 
 ## 15. Required Automated Tests
 
