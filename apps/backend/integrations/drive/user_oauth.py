@@ -467,11 +467,14 @@ def disconnect_authorization(*, user_email: str) -> None:
             connection=connection,
             user_email=normalized_email,
         )
-    except Exception:
+    except Exception as exc:
         # PostgreSQL denial is immediate and authoritative. A stale direct
         # tuple cannot grant without the now-deleted fresh evidence; the
         # authority cutover's connection-wide cleanup also removes leftovers.
-        pass
+        logger.warning(
+            "SpiceDB oauth_viewer cleanup failed during disconnect (%s).",
+            exc.__class__.__name__,
+        )
 
     for refresh_credential in refresh_credentials:
         try:

@@ -359,6 +359,29 @@ class UserDriveOAuthTests(TestCase):
         )
         revoke.assert_called_once_with("test-refresh-credential")
 
+    def test_disconnect_logs_warning_when_spicedb_cleanup_fails(self):
+        session, state, _ = self.begin()
+        authorization = self.complete(session=session, state=state)
+
+        with (
+            patch.object(user_oauth, "_revoke_refresh_credential"),
+            patch.object(
+                user_oauth,
+                "delete_oauth_viewer_relationships",
+                side_effect=RuntimeError("spicedb unavailable"),
+            ),
+            self.assertLogs("integrations.drive.user_oauth", level="WARNING") as logs,
+        ):
+            user_oauth.disconnect_authorization(user_email=self.user_email)
+
+        authorization.refresh_from_db()
+        self.assertEqual(authorization.status, GoogleDriveAuthorization.Status.DISCONNECTED)
+        self.assertEqual(bytes(authorization.encrypted_refresh_credential), b"")
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("RuntimeError", logs.output[0])
+        self.assertNotIn(self.user_email, logs.output[0])
+        self.assertNotIn("spicedb unavailable", logs.output[0])
+
     def test_status_contains_no_identity_scope_or_credential_material(self):
         session, state, _ = self.begin()
         self.complete(session=session, state=state)
