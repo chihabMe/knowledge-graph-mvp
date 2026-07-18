@@ -1,5 +1,11 @@
 # Google Drive Ingestion Plan
 
+> **Status update (2026-07-14):** The service-account selected-root content
+> path in this document remains current. ADR-015 supersedes its ACL/group
+> permission-authority sections: the POC will use admin-approved per-user Drive
+> OAuth and the active completion plan in
+> `docs/phase-6-pre-authorized-oauth-completion-plan.md`.
+
 Phase 2 starts the real client-data path. The goal is not answer generation yet.
 The goal is to safely ingest Google Drive file records, supported content, and
 permission-related metadata so later Neo4j and SpiceDB phases have reliable
@@ -7,21 +13,21 @@ source data.
 
 ## Default Access Model
 
-The first pilot should use a per-client Google service account and a
-share-to-connect setup flow: the client shares the intended folder or shared
-drive with the service account, then an admin chooses that root from the
-backend connection/settings flow.
-
-Domain-wide delegation remains a fallback when a customer's Workspace policy
-blocks external sharing or permission metadata is incomplete through simple
-folder sharing. Per-user OAuth is not the default for the first POC because it
-makes bulk ingestion, scheduled sync, and permission refresh harder.
+The first pilot uses a per-client Google service account and share-to-connect
+setup for content only: the client shares the intended folder or Shared Drive,
+then an admin selects that root. Each employee separately grants the approved
+Django Drive OAuth client metadata access so Google can verify that employee's
+visibility over the already-indexed IDs. Domain-wide delegation is optional,
+not the POC default or an automatic fallback.
 
 ## Phase 2 Flow
 
 1. Configure Google Cloud project and Drive API access.
 2. Create/provision the per-client service account.
-3. Store service-account configuration as backend secrets, never in source.
+3. Provide the content identity through keyless ADC: local development uses
+   short-lived service-account impersonation and Google Cloud deployment uses
+   an attached service account. Keep the legacy JSON-key path only for an
+   explicit deployment that cannot use ADC; never store credentials in source.
 4. Let the client share the intended folder/shared drive with the service
    account.
 5. In the backend admin connection flow, list eligible folders/shared drives.
@@ -29,7 +35,8 @@ makes bulk ingestion, scheduled sync, and permission refresh harder.
 7. Start a Drive sync run from the Django backend.
 8. Celery lists files in the selected scope.
 9. For each file, store metadata in PostgreSQL before content extraction.
-10. Capture permission-related metadata for later SpiceDB sync.
+10. Capture selected-root and provenance metadata; full ACL capture is required
+    only by the optional legacy delegated mode.
 11. Export or download supported content types.
 12. Compute a SHA-256 content hash and compare modified time/checksum.
 13. Queue extraction/indexing work only when content changed.
@@ -39,20 +46,22 @@ makes bulk ingestion, scheduled sync, and permission refresh harder.
 
 Drive ingestion does not make a document queryable by itself.
 
-A document must not be eligible for retrieval until:
+A document must not be eligible for retrieval for a user until:
 
 - Its source metadata has been stored.
 - Its source provenance can be attached to derived graph records.
-- Its Drive permission metadata has been synced.
-- The matching SpiceDB relationships have been written and verified.
+- Google has confirmed that user's access to the already-indexed file ID.
+- The direct user/document SpiceDB relationship has been written and verified.
+- Matching per-user visibility evidence remains fresh.
 
 If SpiceDB is unavailable, stale, or missing relationships for a document,
 retrieval must fail closed. The backend should return no context for that
 document rather than allowing unfiltered Neo4j retrieval.
 
 The source document record should default to `retrieval_eligible = false`.
-Phase 2 creates and preserves this field. Phase 4 is responsible for switching
-it to true only after SpiceDB relationships are written and verified.
+Phase 2 creates and preserves this coarse global deny field. In per-user mode,
+it never grants access; Phase 6 additionally requires the direct SpiceDB
+relationship and fresh per-user evidence.
 
 ## Metadata To Store
 
@@ -70,7 +79,7 @@ Required file metadata:
 - Parent folder IDs
 - Shared drive ID, if applicable
 
-Required permission-related metadata:
+Legacy delegated-mode permission metadata (not required by per-user mode):
 
 - Owner/creator identity where available
 - Direct users with access
@@ -105,7 +114,7 @@ retrieval until that model exists and is tested.
 Do not silently treat shared-link files as private, and do not silently expose
 them to every user.
 
-## Source Permissions Version
+## Source Permissions Version (legacy delegated interpretation)
 
 `source_permissions_version` is a SHA-256 hash of a canonical JSON payload built
 from the sorted Google Drive permissions response for the file.

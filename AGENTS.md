@@ -119,10 +119,14 @@ boundary, and keeps citations server-owned.
 
 The next implementation steps are:
 
-1. Start Phase 6 from `docs/phase-6-implementation-plan.md`: add the selected
-   thin Django OpenAI-compatible adapter, authenticate Open WebUI with a
-   service key, and verify its signed Google/OIDC user assertion.
+1. Finish Phase 6 from
+   `docs/phase-6-pre-authorized-oauth-completion-plan.md`: keep the service
+   account for content, add admin-approved per-user Drive OAuth with encrypted
+   credentials and fresh direct SpiceDB visibility, then prove allowed-versus-
+   restricted behavior through the actual Open WebUI route. The adapter, signed
+   identity boundary, buffered streaming, and Compose wiring are locally
+   complete.
 2. Keep `.env.example` and tracked docs OpenRouter-shaped.
 3. Preserve provenance on every graph write and keep retrieval fail-closed.
-4. Complete live delegated Workspace ACL and nested-group validation when
-   client credentials become available.
+4. Keep delegated ACL/group sync only as an explicit optional mode; never union
+   it with ADR-015 per-user relationships or fall back to it automatically.

@@ -1,9 +1,16 @@
 # Phase 6 Implementation Plan: Open WebUI Integration
 
 Prepared: 2026-07-13
-Implementation status: Not started
-Planning status: Integration pattern accepted
+Implementation status: Code complete; local Open WebUI acceptance passed
+Acceptance status: Two-user backend authorization passed; real Open WebUI Google chat pending
 Predecessor: Phase 5 complete for backend development acceptance
+
+> **Completion-plan update (2026-07-14):** ADR-015 selects admin-approved
+> per-user Drive OAuth as the POC permission authority. The active remaining
+> plan is `docs/phase-6-pre-authorized-oauth-completion-plan.md`. This document
+> remains the implementation record for the completed Open WebUI adapter and
+> signed-identity boundary; where permission-authority steps conflict, ADR-015
+> and the new completion plan win.
 
 ## Goal
 
@@ -15,6 +22,24 @@ Google Drive and SpiceDB.
 Phase 6 is complete only when an allowed and a restricted Google user can ask
 the same question through the real Open WebUI interface and the restricted user
 cannot receive restricted context, facts, or citations.
+
+## Progress Snapshot (2026-07-14)
+
+Work Packages 1-6 and the local portion of Work Package 8 are implemented. The
+pinned UI required two compatibility additions discovered through real local
+requests: a bounded ignored `tools` inventory and buffered `stream=true`
+Server-Sent Events. A local password-bootstrap user successfully queried
+synthetic Atlas data through Open WebUI and received the permitted citation.
+
+The completion gate is still open. The two OAuth clients, keyless content
+identity, selected Drive root, content ingestion, and identity-only Django
+session bootstrap are configured and live-validated. Both Workspace users also
+completed the separate Drive consent and passed the exact indexed-document
+allow/deny matrix at the final SpiceDB plus freshness boundary. Work Packages 7
+and 8 still need the real Open WebUI Google login/chat route, revocation,
+evidence-expiry, and restricted-citation checks. The local smoke configuration
+also deliberately disabled OpenRouter, so the production provider route must
+be repeated through the UI during live acceptance.
 
 ## Accepted Architecture
 
@@ -258,6 +283,9 @@ settings rather than a browser Direct Connection:
 - `OPENAI_API_BASE_URL=http://django:8000/v1`
 - `OPENAI_API_KEY=<Open WebUI-to-Django service key>`
 - `OPENAI_API_CONFIGS` restricted to `client-knowledge-graph`
+- `BYPASS_MODEL_ACCESS_CONTROL=true` only because the connection allowlists
+  that one Django-owned logical model; this lets new tenant users discover it
+  without per-user Open WebUI grants
 - keep `ENABLE_OPENAI_API_PASSTHROUGH=false`
 
 Verify how Open WebUI's persistent `ConfigVar` behavior interacts with the
@@ -283,6 +311,7 @@ Expected Open WebUI configuration includes:
 - `GOOGLE_CLIENT_SECRET`;
 - `OPENID_PROVIDER_URL=https://accounts.google.com/.well-known/openid-configuration`;
 - `ENABLE_OAUTH_SIGNUP=true`;
+- `OAUTH_ALLOWED_DOMAINS=<the same Workspace domain accepted by Django>`;
 - `ENABLE_SIGNUP=false` for local signup;
 - `OAUTH_MERGE_ACCOUNTS_BY_EMAIL=false`;
 - `ENABLE_OAUTH_ID_TOKEN_COOKIE=false` unless the pinned image proves it is
@@ -477,8 +506,8 @@ Exit condition: every Phase 6 validation item passes through the actual UI.
 - Update the canonical brief first for any changed fact.
 - Update ADRs, API/operations docs, Phase 6 tracker, README/AGENTS summaries,
   and the daily report only for work genuinely completed.
-- Do not claim the separate delegated Workspace ACL/nested-group gate is closed
-  without the required client credentials.
+- Do not execute or claim the ADR-015 per-user permission work from this
+  historical adapter plan; use the active completion plan and its evidence.
 - Do not push, create a pull request, merge, or switch to `main` without the
   user's explicit request.
 
@@ -547,37 +576,43 @@ Implementation and automated tests can begin without client credentials.
 
 Live completion requires:
 
-- a Google OAuth web client ID and secret for Open WebUI;
-- the exact public Open WebUI URL and registered callback URL;
+- separate Google OAuth web clients for Open WebUI identity and Django Drive
+  metadata authorization;
+- Workspace admin approval for the restricted Drive metadata scope and pilot
+  users/organizational unit;
+- the exact public Open WebUI and Django callback URLs;
 - at least two test Google identities with different Drive visibility;
-- fresh successful permission synchronization for the live documents;
+- fresh successful per-user visibility synchronization for the live documents;
 - OpenRouter configuration already proven in Phase 5.
 
-Separately, Phase 4 production acceptance still requires delegated Google
-Workspace ACL and nested-group validation. That external gate must remain
-visible but must not be conflated with the Phase 6 login integration.
+Domain-wide-delegated ACL and Directory group validation is no longer a POC
+completion dependency. It remains an optional legacy/future mode and must not
+be automatically combined with per-user relationships.
 
 ## Phase 6 Definition Of Done
 
 Implementation tasks:
 
 - [x] OpenAI-compatible endpoint selected as the integration pattern.
-- [ ] Open WebUI service settings configured and reproducible.
+- [x] Open WebUI service settings configured and reproducible.
 - [ ] Google OAuth/OIDC login configured.
 - [ ] Authenticated Google identity reaches Django as a verified signed JWT.
-- [ ] Knowledge-graph model requests route through the existing safe OpenRouter
+- [x] Knowledge-graph model requests route through the existing safe OpenRouter
   boundary.
-- [ ] End-to-end Open WebUI chat flow tested.
+- [x] End-to-end Open WebUI chat flow tested locally with synthetic data.
 
 Validation:
 
 - [ ] User can log in with Google.
-- [ ] Backend receives a cryptographically trusted user identity.
-- [ ] User can ask a question through Open WebUI.
-- [ ] Backend returns a permission-safe answer with permitted Drive citations.
+- [x] Backend receives a cryptographically trusted signed identity locally.
+- [x] User can ask a question through Open WebUI locally.
+- [x] Backend returns a permission-safe answer with permitted citations locally.
 - [ ] Restricted facts remain hidden through the actual UI route.
 
 ## Exact First Implementation Slice
+
+Historical status: complete. Do not restart this slice; continue with WP1 in
+`docs/phase-6-pre-authorized-oauth-completion-plan.md`.
 
 After creating the Phase 6 branch, implement the server-to-server trust and
 non-streaming compatibility boundary in this order:
@@ -596,6 +631,9 @@ This proves that Open WebUI cannot create a second, weaker retrieval path
 before live Google login or UI configuration begins.
 
 ## Compaction Handoff Prompt
+
+Historical status: superseded. Future work must use the ADR-015 completion plan
+rather than the prompt below.
 
 Use the following prompt after compacting the conversation:
 

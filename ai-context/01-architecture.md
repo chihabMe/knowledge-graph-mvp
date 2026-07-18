@@ -39,6 +39,7 @@ Responsibilities:
 Responsibilities:
 
 - Drive file sync.
+- Per-user Drive visibility sync.
 - Text extraction.
 - Entity/relationship extraction.
 - Neo4j writes.
@@ -110,7 +111,9 @@ User asks question in Open WebUI
   -> Open WebUI authenticates the user through Google OAuth/OIDC
   -> Open WebUI sends service credentials + signed identity JWT + question
   -> Django verifies both credentials
+  -> Django matches the signed email to an active per-user Drive authorization
   -> backend asks SpiceDB which documents user can view
+  -> backend intersects with fresh per-user visibility evidence
   -> backend queries Neo4j only across allowed source provenance
   -> backend assembles context + citations
   -> backend calls OpenRouter
@@ -121,13 +124,23 @@ User asks question in Open WebUI
 
 ```text
 Google Drive file/change detected
-  -> Celery task downloads/exports content
-  -> Drive metadata, folder ancestry, and sharing metadata stored
+  -> service-account Celery task downloads/exports selected-root content
+  -> Drive metadata and selected-root provenance stored
   -> text conversion and chunking
   -> extraction into entities/relationships
   -> embeddings generated
   -> Neo4j updated with provenance
-  -> Drive permissions synced to SpiceDB
+```
+
+## Per-User Visibility Flow
+
+```text
+Workspace admin approves the Django Drive OAuth client
+  -> employee grants Drive metadata access once
+  -> Django stores only an encrypted refresh credential
+  -> Celery checks already-indexed file IDs as that employee
+  -> direct user/document relationships verified in SpiceDB
+  -> matching per-user freshness evidence committed in PostgreSQL
 ```
 
 ## Deployment Shape

@@ -54,32 +54,41 @@ Phase 0 and Phase 1 established the repository, Docker Compose infrastructure,
 Django + DRF backend, Celery worker, PostgreSQL, Redis, Neo4j, SpiceDB, health
 checks, and repeatable validation commands.
 
-Phase 2 code is complete for controlled Google Drive ingestion: per-client
-service-account configuration, admin root selection, server-side scoped sync,
-content export/storage, metadata capture, permission-version hashing,
-audit records, and post-commit extraction queueing are implemented. Live
-Drive validation confirmed the expected folder-sharing limitation:
-`permissions.list()` can fail under folder-only sharing, so full permission
-metadata capture for the pilot still depends on domain-wide delegation in a
-real Workspace.
+Phase 2 code is complete for controlled Google Drive content ingestion:
+per-client service-account identity, keyless Application Default Credentials
+(ADC), legacy mounted-key compatibility, admin root selection, server-side
+scoped sync, content export/storage, metadata capture, audit records, and
+post-commit extraction queueing are implemented. Live Drive validation
+on 2026-07-18 confirmed that keyless impersonated ADC lets the shared-folder
+service account discover the pilot root and export document content. The same
+Viewer identity received `403 insufficientFilePermissions` from
+`permissions.list()`, confirming that folder sharing does not reliably expose
+effective user ACLs. ADR-015
+therefore keeps the service account as the content reader and moves the POC's
+employee-visibility authority to admin-approved per-user Drive OAuth.
 
 Phase 3 is code complete and merged into `main`: the graph app, ontology,
 Neo4j setup, extraction adapter, document/chunk/entity/relationship writers,
 source provenance guard, Chunk vector-index setup, and extraction-recovery
-hardening are implemented and covered by tests. Phase 4 SpiceDB permission
-sync is code complete with live delegated Workspace validation pending: the
-schema lifecycle, Drive/folder ACL scan, nested group resolution, exact tuple
-reconciliation, verification gate, admin audit API, and fully consistent
-allowed-document lookup are implemented. Verified permission evidence also
-expires at retrieval time after a configured maximum age, so repeated sync
-failures cannot preserve an old grant indefinitely. The next product-risk
+hardening are implemented and covered by tests. Phase 4's delegated ACL/group
+synchronization path is code complete, but ADR-015 supersedes it as the default
+POC permission authority. Phase 6 now has live-validated per-user OAuth
+visibility snapshots, direct SpiceDB document grants, per-user freshness
+evidence, and mode-aware retrieval;
+domain-wide delegation remains an optional future mode rather than a POC
+blocker. The next product-risk
 dependency, Phase 5 retrieval, is code complete: the authenticated
 `/api/query/` contract, SpiceDB pre-filter, fresh PostgreSQL evidence gate,
 provenance-constrained Neo4j keyword/vector/one-hop fact retrieval, bounded
 context, server-owned citations, OpenRouter answer synthesis, and safe refusal
-path are implemented. The next phase is Open WebUI/OIDC integration; live
-delegated Workspace ACL and nested-group validation remains the Phase 4
-external gate.
+path are implemented. Phase 6's Open WebUI adapter and Compose integration are
+code complete and locally validated. Real Google session bootstrap, separate
+admin-approved Drive consent, and indexed-ID visibility synchronization have
+now passed for two Workspace users with intentionally different document
+visibility. Real Open WebUI Google login and fail-closed evidence-expiry
+behavior have also passed. Phase 6 remains open for successful two-user
+answer/citation validation through the actual chat route, plus revocation and
+production-provider UI acceptance.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -114,9 +123,10 @@ Google Drive
   -> ontology-guided graph extraction
   -> Neo4j documents/chunks/entities/relationships/vectors
 
-Google Drive sharing metadata
-  -> permission sync
-  -> SpiceDB users/groups/folders/files/relationships
+Employee Google Drive OAuth
+  -> check only already-indexed Drive file IDs as that employee
+  -> fresh per-user visibility evidence
+  -> direct SpiceDB user/document relationships
 
 Open WebUI question
   -> backend query endpoint
@@ -240,9 +250,16 @@ needs a new type, update the ontology documentation and tests.
 
 ## 9. Google Drive Ingestion Requirements
 
-The first real pilot assumes a per-client Google service account, with
-domain-wide delegation only as a fallback when Workspace policy blocks the
-share-to-connect path.
+The first real pilot uses a per-client Google service account only for content
+ingestion from an explicitly shared folder or Shared Drive. The preferred
+credential source is keyless Application Default Credentials: local development
+uses short-lived service-account impersonation, while a Google Compute Engine
+deployment uses the attached service account through the metadata server. A
+long-lived service-account JSON key is legacy compatibility, not the default.
+Employee
+authorization is separate: each pilot user grants admin-approved per-user
+OAuth access so Google can answer whether that user can see each already
+indexed file. Domain-wide delegation is not required for the POC path.
 
 The Drive connector should:
 
@@ -256,8 +273,8 @@ The Drive connector should:
 - Export Google Sheets to CSV/text summaries.
 - Read PDFs and uploaded text/doc files where practical.
 - Capture file metadata.
-- Capture sharing metadata.
-- Track folder paths and inherited permissions.
+- Capture the selected-root membership and folder path needed for scope and
+  provenance; full ACL metadata is not required in per-user OAuth mode.
 - Store content hashes to avoid unnecessary re-indexing.
 - Feed content into a common ingestion interface.
 
@@ -277,57 +294,70 @@ regardless of file type.
 
 Use SpiceDB. Do not invent a custom permission system.
 
-Phase 4 uses checked-in Authzed schema definitions prefixed with `kgm/` (`kg/`
-is rejected by SpiceDB's minimum namespace-segment length). Drive
-roles remain distinct relationships (`reader`, `commenter`, `writer`,
-`file_organizer`, `organizer`, and `owner`) and combine into a `view`
-permission. Folder `parent->view` inheritance and recursive Google Group
-subject sets are modeled explicitly. Object IDs are deterministic hashes or
-database-key-derived opaque values; raw Drive IDs and email addresses never
-appear in SpiceDB object IDs, logs, or API responses.
+Phase 4's existing delegated mode uses checked-in Authzed schema definitions
+prefixed with `kgm/` and models Drive roles, folder inheritance, and recursive
+Google Groups. ADR-015 retains that implementation only as an optional legacy
+mode. The POC default adds a distinct direct relation from an opaque user
+subject to an indexed document after Google confirms visibility using that
+user's OAuth credential. The relation must not pretend to be a Drive ACL role.
+Raw Drive IDs and email addresses never appear in SpiceDB object IDs, logs, or
+API responses.
 
-The permission model must represent:
+The active POC permission model must represent:
 
-- Users
-- Google Groups
-- Folders
-- Files/documents
-- Folder inheritance
-- Group membership
-- Direct sharing
-- No public, anyone-link, or domain-wide principal in Phase 4; those resources
-  remain retrieval-ineligible until an explicit later policy models them
+- Users.
+- Indexed files/documents.
+- The user's OAuth authorization generation.
+- Per-user document visibility checks and their freshness.
+- Direct verified user-to-document relationships in SpiceDB.
 
-The sync process should:
+Google itself resolves direct, inherited, Shared Drive, Google Group, and
+nested-group access when the indexed file is requested with that employee's
+credential. The POC does not copy Directory group membership or full Drive ACL
+payloads in the per-user mode.
 
-- Read Drive sharing metadata.
-- Write relationships into SpiceDB.
-- Refresh document permissions separately from content extraction.
-- Handle permission-only changes without re-embedding documents.
-- Prefer live or frequently refreshed group membership resolution.
-- Resolve only ACL-referenced Google Groups through the read-only Admin SDK,
-  including pagination and nested membership with cycle protection.
-- Revoke stale relationships only after a complete Drive permission scan;
-  absence from partial or failed scans is never evidence for revocation.
-- Mark candidate documents ineligible before tuple mutation and only restore
-  eligibility after exact tuple verification using the final SpiceDB ZedToken.
-- Refresh each eligible document's verification timestamp only after a complete
-  successful verification, and deny it at query time once that evidence is
-  older than `PERMISSION_VERIFICATION_MAX_AGE_SECONDS` (default 1800). The
-  maximum age must remain longer than the permission-sync cadence; a failed run
-  may preserve the last known safe state only until this hard lifetime expires.
-- Treat missing ACLs, unsupported roles/types, unresolved groups, hierarchy
-  cycles, SpiceDB failures, and verification mismatches as deny conditions.
+The per-user visibility process should:
+
+- Establish the Django browser session through a dedicated Google OIDC
+  bootstrap that reuses the identity-only Open WebUI login client. The
+  bootstrap requests only `openid` and email, verifies state, nonce, PKCE,
+  issuer, audience, email verification, and the Workspace hosted domain, and
+  stores no Google token. It then launches the separate Drive consent flow.
+- Use a separate Django OAuth web flow with `openid`, `email`, and
+  `drive.metadata.readonly`; Open WebUI login tokens are not reused as Drive
+  authorization credentials.
+- Require Workspace admin app approval and one consent per pilot user. Admin
+  approval permits the app; it does not grant file access without the user's
+  authorization.
+- Encrypt refresh tokens at rest with a deployment secret distinct from Django,
+  Open WebUI, service-bearer, and identity-JWT secrets. Tokens never enter logs,
+  API responses, Celery arguments, or SpiceDB.
+- Check only active documents already ingested from the selected root, using
+  Drive `files.get` with Shared Drive support; never enumerate or ingest the
+  employee's unrestricted Drive corpus.
+- Record explicit fresh per-user visibility evidence for positive grants and
+  write a distinct direct relationship to SpiceDB.
+- Reconcile and verify one user's relationships independently. A failed or
+  unknown check denies that document for that user and can never become a
+  grant.
+- Expire per-user visibility evidence at query time. A stale SpiceDB tuple is
+  insufficient without a matching fresh PostgreSQL evidence row.
+- Invalidate affected user visibility evidence when the selected root, OAuth
+  account, authorization generation, or permission mode changes.
+- Refresh visibility separately from content extraction so access changes never
+  trigger re-embedding.
 
 The query process should:
 
-- Ask SpiceDB which documents a user can see.
+- Ask SpiceDB which documents the verified Open WebUI user can see.
 - Restrict retrieval to Neo4j graph elements whose provenance is allowed.
-- Use fully consistent `LookupResources` calls and then gate returned opaque
-  resources against active PostgreSQL rows whose verified permission version
-  still matches and whose verification timestamp has not expired. PostgreSQL
-  stores synchronization evidence only and never answers the authorization
-  question.
+- Use fully consistent `LookupResources` calls and then intersect returned
+  opaque resources with active documents plus fresh, matching per-user
+  visibility evidence. PostgreSQL stores synchronization evidence only and
+  never grants access by itself.
+- Return no context when the user has not connected Drive, the OAuth identity
+  does not exactly match the signed Open WebUI email, the token is revoked, a
+  visibility check is missing or stale, or SpiceDB verification fails.
 
 ## 11. Retrieval Requirements
 
@@ -385,11 +415,35 @@ OpenRouter remains behind the Django answer service. Open WebUI must not bypass
 the permission-safe backend and call OpenRouter directly for knowledge-graph
 questions.
 
+The single-tenant Open WebUI deployment exposes exactly one logical model,
+`client-knowledge-graph`, and automatically makes that model discoverable to
+authenticated users from the configured Workspace domain. Open WebUI's model
+ACL bypass is acceptable only with this one-model allowlist; it is not document
+authorization. Django still verifies the short-lived signed identity and
+SpiceDB plus fresh per-user evidence remain authoritative for every source.
+Adding another upstream model requires removing the bypass or explicitly
+reviewing its exposure.
+
+The compatible chat endpoint supports bounded non-streaming requests and the
+buffered Server-Sent Events required by pinned Open WebUI 0.10.2. Open WebUI's
+bounded tool inventory is accepted only as ignored compatibility metadata; the
+adapter never executes those tools. The complete permission-safe answer and
+server-owned citations are decided before any streaming event is emitted.
+
 Important:
 
 - Open WebUI login should use Google OAuth/OIDC.
+- OAuth signup must be restricted to the same configured Workspace domain.
 - The logged-in identity must match the Google Drive identity used for
   permission checks.
+- Open WebUI Google login and Django Drive consent are separate trust
+  boundaries. The Django callback verifies the Google identity, and every
+  query requires its normalized email to equal the signed Open WebUI email.
+- Because Open WebUI does not create a Django session, the browser first uses a
+  minimal Google OIDC session-bootstrap endpoint backed by the existing
+  identity-only login client. That flow stores no Google token and redirects
+  directly into the separate Drive authorization endpoint after a successful,
+  domain-restricted login.
 - Local password login should be disabled or hidden for production pilots.
 - Signed identity forwarding and the service bearer key use separate secrets;
   neither may be committed, logged, or accepted from browser request data.
@@ -403,10 +457,11 @@ Use Google Drive's change feed.
 Required behavior:
 
 - Content change -> re-extract text, graph facts, chunks, and embeddings.
-- Permission-only change -> update SpiceDB only.
+- Permission-only change -> refresh affected users' visibility evidence and
+  SpiceDB relationships only.
 - Folder move/share change -> update effective access.
-- Google Group membership change -> update or resolve permissions without
-  re-indexing content.
+- Google Group membership change -> Google resolves the user's effective file
+  access on the next visibility refresh; do not re-index content.
 
 Avoid expensive re-embedding for permission-only updates.
 
@@ -465,7 +520,7 @@ Drive connection.
 Persists the admin-selected Drive ingestion root after matching it against
 the visible candidate list.
 
-### `POST /ingest/drive/connection/delegated-subject`
+### `POST /ingest/drive/connection/delegated-subject` (legacy optional mode)
 
 Sets or clears the optional delegated Workspace user used for domain-wide
 delegation.
@@ -479,7 +534,7 @@ Expected behavior:
 - When the value changes, marks retrievable documents for that connection
   non-retrievable until permissions are refreshed under the new identity.
 
-### `GET /ingest/drive/permissions/check`
+### `GET /ingest/drive/permissions/check` (legacy optional mode)
 
 Samples files under the selected Drive root and reports whether the configured
 connection can read Drive permission metadata for them.
@@ -494,6 +549,36 @@ Expected behavior:
 - Used to validate service-account vs. domain-wide delegation readiness before
   relying on content ingestion.
 
+### `GET /api/session/google/start` and `GET /api/session/google/callback`
+
+Creates the authenticated Django browser session required by the Drive OAuth
+endpoints. The flow reuses the Open WebUI identity-only Google client, requests
+only `openid` and email, and verifies one-time session state, nonce, PKCE,
+issuer, audience, email verification, and the configured Workspace domain.
+It stores no Google token and redirects immediately to the separate Drive
+authorization flow.
+
+### `GET /api/drive/oauth/start` and `GET /api/drive/oauth/callback`
+
+Starts and completes the separate per-user Drive authorization-code flow. The
+callback verifies state, Google identity, granted scopes, email verification,
+and the configured Workspace domain before storing only an encrypted refresh
+credential. It never returns tokens to Open WebUI or the browser.
+
+### `GET /api/drive/oauth/status` and `POST /api/drive/oauth/disconnect`
+
+Returns controlled connection status without credential data and lets the user
+revoke local access. Disconnect immediately invalidates that user's visibility
+evidence and removes their managed SpiceDB relationships; Google token
+revocation is attempted without making local denial depend on its success.
+
+### `POST /api/drive/visibility/sync` (planned)
+
+Queues a bounded refresh for the authenticated user's already-indexed
+documents. The request cannot supply file IDs, a Drive root, another identity,
+or a wider scope. A scheduled task also refreshes connected users before their
+evidence expires.
+
 ### `POST /ingest/drive/sync`
 
 Starts or resumes Google Drive ingestion.
@@ -506,7 +591,7 @@ Expected behavior:
 - Update Neo4j.
 - Return counts for scanned, ingested, skipped, failed.
 
-### `POST /permissions/sync`
+### `POST /permissions/sync` (legacy optional mode)
 
 Creates an admin-only, rate-limited permission-sync audit run and queues it.
 The request cannot supply or widen Drive scope.
@@ -614,19 +699,18 @@ commands.
 
 ### Phase 2: Google Drive Ingestion
 
-Status: code complete; live client validation still depends on a Drive setup
-where file permission metadata is readable.
+Status: content-ingestion code complete; per-user visibility completion is now
+tracked in Phase 6 and does not require service-account ACL visibility.
 
 Purpose: ingest supported Google Drive files and metadata while preserving
-source identity and sync state. This phase must capture Drive file metadata,
-owner/creator metadata, folder ancestry, sharing metadata, source permissions
-version, modified time, and content hash.
+source identity and sync state. This phase captures the selected-root scope,
+Drive identity, provenance metadata, modified time, and content hash. Full ACL
+capture is required only by the optional delegated permission mode.
 
 Current foundation: service-account Drive access, admin root selection,
 server-side scoped sync, content export/storage, PostgreSQL metadata, source
-permission version hashing, audit records, and extraction queueing. Folder-only
-sharing can list/read files but generally cannot read per-file permission
-metadata; domain-wide delegation is expected for safe live client ingestion.
+versioning, audit records, and extraction queueing. Folder-only sharing is
+sufficient for the content path; per-user OAuth supplies employee visibility.
 
 ### Phase 3: Neo4j Graph And Provenance
 
@@ -649,8 +733,9 @@ strict rule requiring all source documents for a graph element to be visible.
 
 ### Phase 4: SpiceDB Permissions
 
-Status: code complete (2026-07-11); live delegated Google Workspace ACL and
-Directory group validation remains an external gate.
+Status: delegated ACL/group implementation code complete (2026-07-11) but
+superseded as the default POC authority by ADR-015. The direct per-user
+visibility path is planned as Phase 6 completion work.
 
 Purpose: model Google Drive visibility in SpiceDB and expose allowed-document
 lookup for retrieval. Do not replace this with ad hoc PostgreSQL permission
@@ -660,7 +745,7 @@ If SpiceDB is unavailable or a document's SpiceDB relationships are not written
 and verified, retrieval must fail closed and return no context for that
 document.
 
-Current foundation: checked-in `kgm/` schema and idempotent lifecycle commands,
+Current legacy foundation: checked-in `kgm/` schema and idempotent lifecycle commands,
 opaque connection-scoped identifiers, permission-only Drive folder/document
 snapshots, read-only nested group resolution, exact TOUCH/DELETE reconciliation,
 at-least-as-fresh verification and ACL-version CAS, durable admin sync runs,
@@ -668,7 +753,9 @@ SpiceDB health, and the internal fully consistent
 `allowed_source_document_ids()` Phase 5 handoff. Public/domain visibility and
 incomplete permissions remain excluded. Query-time evidence expiry provides a
 hard fail-closed bound when scheduled permission synchronization repeatedly
-fails; successful syncs refresh that evidence.
+fails; successful syncs refresh that evidence. The new POC mode will keep the
+fully consistent lookup and evidence-expiry pattern while replacing ACL/group
+copying with direct user/document relationships verified by user OAuth.
 
 ### Phase 5: Permission-Safe Retrieval
 
@@ -700,8 +787,9 @@ restricted context or citations.
 
 ### Phase 6: Open WebUI Integration
 
-Status: planning in progress; integration pattern accepted, implementation not
-started (2026-07-13).
+Status: adapter code complete and locally validated (2026-07-14). Completion
+now follows the admin-approved per-user OAuth plan in
+`docs/phase-6-pre-authorized-oauth-completion-plan.md`.
 
 Purpose: expose the backend through Open WebUI and make sure the backend
 receives a trusted Google/OIDC user identity.
@@ -710,6 +798,61 @@ Accepted pattern: a thin OpenAI-compatible adapter in Django, protected by a
 service bearer key and a short-lived signed Open WebUI identity JWT. The
 existing `/api/query/` and `answer_query()` permission boundary remain the
 single retrieval implementation.
+
+Implemented evidence includes fail-closed startup settings, constant-time
+service authentication, strict HS256 identity verification, one-model
+discovery, bounded chat request parsing, safe citation rendering, buffered
+streaming, Compose hardening, adapter leak tests, and a successful local
+Open WebUI chat using synthetic Atlas data. This does not close the phase: the
+local acceptance used password bootstrap and extractive answering rather than
+real Google login and the production OpenRouter route. ADR-015 WP1-WP3 are
+complete locally: fail-closed per-user settings, a dedicated versioned
+token-encryption boundary, additive authorization/evidence models and
+migration, read-only secret mounts, and the session-bound Django Drive OAuth
+connect/status/reconnect/disconnect flow are validated. The OAuth flow binds
+the exact authenticated session email to verified Google claims, rejects
+broader Drive scopes, persists only encrypted refresh credentials, rotates
+evidence generations, and disconnects locally before best-effort revocation.
+The additive `oauth_viewer` SpiceDB relation now has exact one-user scoped
+read/reconcile/delete helpers, causal verification, schema assertions, and
+delegated-mode isolation. It is not populated by onboarding alone. The
+user-token Drive adapter is also implemented and fake-validated: it accepts
+only an authorization primary key, selects active indexed IDs from PostgreSQL,
+and issues only bounded `files.get` metadata checks with Shared Drive support;
+it has no list/export/download or request-supplied-ID path. Keyless ADC live
+validation selected the exact renamed `Knowledge Graph Pilot` root, and the
+controlled authority switch to `per_user_oauth` re-ingested and
+graph-extracted all three pilot documents. In this mode successful graph
+extraction marks the coarse document-content gate ready without treating that
+state as an authorization grant; retrieval still requires the independently
+verified direct SpiceDB tuple plus fresh matching per-user evidence. Durable visibility runs
+now pre-invalidate only one
+authorization, reconcile and causally verify that user's direct tuples, commit
+generation-bound positive evidence only after verification, retry through
+bounded locks, schedule refreshes, and sweep stale work fail-closed. Retrieval
+uses a fully consistent direct `oauth_viewer` read in per-user mode, intersects
+it with fresh matching `UserDocumentVisibility`, and repeats the mode-aware
+PostgreSQL deny gate after Neo4j before any context reaches OpenRouter. It never
+unions or falls back to delegated grants. ADR-017's identity-only Google OIDC
+session bootstrap is implemented with state, nonce, PKCE, exact claim/domain
+verification, unusable-password users, and no Google token persistence. The
+separate Drive authorization flow also uses session-bound state and PKCE and
+exchanges only the authorization code after callback-state validation. On
+2026-07-18 both pilot users completed the identity bootstrap and Drive consent.
+Each durable visibility run considered the same three indexed documents and
+finished with exactly two verified-visible and one denied result. The final
+fully consistent SpiceDB plus fresh-evidence lookup returned only the user's
+own private document and the document shared with both users, while denying the
+other user's private document. Real Open WebUI Google login then succeeded for
+the first pilot user. Its first chat requests correctly refused because the
+user's 1,800-second visibility-evidence lifetime had expired; after a fresh
+three-document synchronization, permission-filtered retrieval again returned
+only that user's private document and the shared document. The exact signed
+Open WebUI identity plus service-bearer adapter request also passed through the
+production OpenRouter route with `openai/gpt-4.1-mini`: it returned both
+permitted server-owned citations and no other user's source. The remaining
+work is successful cited chat in the visible UI for both users and revocation
+acceptance.
 
 ### Phase 7: Change Feed And Evaluation
 

@@ -131,23 +131,30 @@ Internal services bind to localhost-only alternate ports by default:
 
 ## Current Phase
 
-Phases 1 and 2 are code complete (Phase 2's live content-export validation
-waits on domain-wide delegation — see ADR-009). Phase 3, Neo4j graph and
+Phases 1 and 2 are code complete for service-account content ingestion from a
+selected root; employee visibility now follows ADR-015's per-user OAuth plan
+rather than waiting on delegation. Phase 3, Neo4j graph and
 provenance, is code complete and merged into `main`; its guard-wiring seam
-moved to the Phase 5 tracker. Phase 4 SpiceDB permission sync is code complete
-with live delegated Workspace validation pending. Phase 5 permission-safe
+moved to the Phase 5 tracker. Phase 4's delegated ACL/group sync is code
+complete but retained only as an optional legacy mode; direct per-user
+SpiceDB visibility is Phase 6 completion work. Phase 5 permission-safe
 retrieval is code complete and live validated: the authenticated query
 contract, SpiceDB pre-filter, fresh evidence gate, guarded hybrid
 keyword/vector/one-hop graph retrieval, bounded context, server-owned
-citations, OpenRouter synthesis, and safe refusal are implemented. Phase 6
-planning selected a thin Django OpenAI-compatible adapter protected by a
-service key and signed Open WebUI identity JWT. Implementation and Google/OIDC
-live validation are next; see `docs/phase-6-implementation-plan.md`.
+citations, OpenRouter synthesis, and safe refusal are implemented. Phase 6's
+thin Django OpenAI-compatible adapter, service authentication, signed Open WebUI
+identity JWT, bounded request handling, buffered streaming, and private
+single-model Compose configuration are code complete and locally validated.
+Real Google/OIDC login, separate admin-approved Django Drive consent, fresh
+per-user visibility synchronization, and allowed-versus-restricted two-user
+Workspace acceptance remain before Phase 6 can close; see
+`docs/phase-6-pre-authorized-oauth-completion-plan.md`.
 
 Read:
 
 - `docs/phase-5-completion-report.md`
 - `docs/phase-6-implementation-plan.md`
+- `docs/phase-6-pre-authorized-oauth-completion-plan.md`
 - `ai-context/phases/phase-6-open-webui-integration.md`
 - `ai-context/phases/phase-5-permission-safe-retrieval.md`
 - `ai-context/phases/phase-3-neo4j-graph-and-provenance.md`
