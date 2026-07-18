@@ -31,15 +31,16 @@ Expose the permission-safe backend through Open WebUI as the main user interface
   identity forwarding, and disabled direct/tool/file retrieval surfaces.)
 - [x] Configure Google auth path. Effort: Extra High. (Compose and the operator
   environment contract are implemented. The identity-only Django callback and
-  separate Drive callback are registered and passed real Workspace validation;
-  the actual Open WebUI callback/login remains the UI acceptance gate.)
+  separate Drive callback are registered, and both real Workspace users passed
+  Open WebUI login plus separate Drive consent.)
 - [x] Pass authenticated user identity to backend. Effort: Extra High. (The
   service bearer and short-lived HS256 identity JWT are verified separately;
   plaintext and body identity are rejected.)
 - [x] Route model calls through OpenRouter. Effort: High. (The adapter delegates
   only to the existing `answer_query()` boundary. A live signed-user adapter
   request passed through OpenRouter with exactly the two permitted citations on
-  2026-07-18; visible-UI confirmation remains.)
+  2026-07-18, and the configured DeepSeek route subsequently passed through the
+  visible UI for both users.)
 - [x] Test end-to-end chat flow. Effort: Extra High. (Local Open WebUI accepted
   a signed user request and returned the permission-safe synthetic Atlas answer
   with citation, including the buffered streaming path.)
@@ -100,9 +101,12 @@ Expose the permission-safe backend through Open WebUI as the main user interface
   share removal/re-addition, User 2 disconnect/reconnect, evidence expiry,
   DeepSeek routing, and SpiceDB outage/recovery all failed closed or restored
   only the exact permitted sources on 2026-07-18.)
-- [ ] Live-validate that a new or reconnected Drive callback immediately
+- [x] Live-validate that a new or reconnected Drive callback immediately
   queues and completes the user-specific refresh without waiting for the
-  periodic scheduler. Effort: Medium.
+  periodic scheduler. Effort: Medium. (User 2 refused safely immediately after
+  disconnect, then reconnected and received only `PURPLE-7395`, `User 2 private
+  document`, and `Visible to both users` after the callback-triggered run. The
+  15-minute scheduler wait was not required.)
 
 Adapter implementation history: `docs/phase-6-implementation-plan.md`.
 
@@ -139,12 +143,14 @@ Google OIDC callback and the separate PKCE-protected Drive callback passed for
 both pilot users. Each user received exactly their private document and the
 shared document through the final SpiceDB plus fresh-evidence allowlist, while
 the other user's private document was denied. Focused tests, the complete
-441-test backend suite, Ruff, formatting, migrations, Django
+443-test backend suite, Ruff, formatting, migrations, Django
 checks, Compose rendering, and a live local Open WebUI synthetic-data chat
 passed. Real Open WebUI Google login, exact two-user cited retrieval, access
 removal and restoration, OAuth disconnect and reconnect, stale-evidence
 refusal, DeepSeek provider routing, and SpiceDB outage/recovery all passed
-through the actual UI. The callback now queues a bounded user-specific refresh
-immediately after consent while preserving the periodic scheduler as fallback.
-The phase remains open only for live validation of that immediate post-consent
-refresh and the final regression/documentation checkpoint.
+through the actual UI. The callback's bounded user-specific refresh also passed
+a live disconnect/reconnect without waiting for the periodic scheduler. A
+shared-only question returned the correct fact but cited an additional
+permitted source, which is a relevance-quality follow-up rather than a leak.
+The phase intentionally remains open pending formal report review and operator
+closeout; it is not marked complete in this checkpoint.
