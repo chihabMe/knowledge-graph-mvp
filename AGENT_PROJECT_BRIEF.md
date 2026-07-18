@@ -86,9 +86,12 @@ code complete and locally validated. Real Google session bootstrap, separate
 admin-approved Drive consent, and indexed-ID visibility synchronization have
 now passed for two Workspace users with intentionally different document
 visibility. Real Open WebUI Google login and fail-closed evidence-expiry
-behavior have also passed. Phase 6 remains open for successful two-user
-answer/citation validation through the actual chat route, plus revocation and
-production-provider UI acceptance.
+behavior have also passed. The complete two-user chat, access removal and
+restoration, OAuth disconnect and reconnect, provider-route, evidence-expiry,
+and SpiceDB outage matrix has passed. A post-consent callback also queued and
+completed a user-specific refresh without waiting for the periodic scheduler.
+Phase 6 intentionally remains open pending formal closeout review and final
+report acceptance.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -820,8 +823,9 @@ restricted context or citations.
 
 ### Phase 6: Open WebUI Integration
 
-Status: adapter code complete and locally validated (2026-07-14). Completion
-now follows the admin-approved per-user OAuth plan in
+Status: implementation and core live acceptance validated; formal closeout is
+intentionally pending (2026-07-18). Completion follows the admin-approved
+per-user OAuth plan in
 `docs/phase-6-pre-authorized-oauth-completion-plan.md`.
 
 Purpose: expose the backend through Open WebUI and make sure the backend
@@ -895,9 +899,14 @@ allowlist. Disconnecting User 2 immediately removed context and citations;
 reconnection remained denied until a fresh two-visible/one-denied run completed,
 then returned only User 2's permitted code and sources. Evidence-expiry and
 provider-route cases also passed. The OAuth callback now queues an immediate
-user-specific visibility refresh with periodic scheduling as fallback. The
-remaining Phase 6 gate is live validation that this immediate post-consent run
-removes the previous scheduled-wait onboarding delay.
+user-specific visibility refresh with periodic scheduling as fallback. A live
+User 2 disconnect/reconnect then refused safely while evidence was absent and,
+after the callback-triggered run completed, returned only the permitted private
+code and the shared source without waiting for the periodic scheduler. A
+shared-document question returned the correct shared fact, although the
+server-owned citations also included another permitted User 2 source; this is
+a citation-relevance issue rather than an authorization leak. Phase 6 remains
+open by operator decision pending formal report review and closeout.
 
 ### Phase 7: Change Feed And Evaluation
 
