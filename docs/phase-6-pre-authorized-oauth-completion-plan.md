@@ -613,8 +613,9 @@ DeepSeek production-provider route, and SpiceDB-unavailable/recovery behavior
 all passed through Open WebUI without leaking hidden facts or citations. The
 new immediate post-consent refresh was then validated with User 2: disconnect
 caused a safe refusal, reconnect queued a user-specific run, and the next
-successful answer returned only `PURPLE-7395`, `User 2 private document`, and
-`Visible to both users` without waiting for the periodic scheduler. A question
+successful answer returned only the expected private canary value, `User 2
+private document`, and `Visible to both users` without waiting for the
+periodic scheduler. A question
 about only the shared document returned the correct shared fact but also cited
 the other permitted User 2 source. This is citation over-inclusion, not an
 authorization leak. Formal Phase 6 closeout remains intentionally pending by

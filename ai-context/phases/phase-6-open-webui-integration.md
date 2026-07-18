@@ -104,9 +104,9 @@ Expose the permission-safe backend through Open WebUI as the main user interface
 - [x] Live-validate that a new or reconnected Drive callback immediately
   queues and completes the user-specific refresh without waiting for the
   periodic scheduler. Effort: Medium. (User 2 refused safely immediately after
-  disconnect, then reconnected and received only `PURPLE-7395`, `User 2 private
-  document`, and `Visible to both users` after the callback-triggered run. The
-  15-minute scheduler wait was not required.)
+  disconnect, then reconnected and received only the expected private canary
+  value, `User 2 private document`, and `Visible to both users` after the
+  callback-triggered run. The 15-minute scheduler wait was not required.)
 
 Adapter implementation history: `docs/phase-6-implementation-plan.md`.
 
