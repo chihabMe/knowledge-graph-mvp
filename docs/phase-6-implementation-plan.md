@@ -1,8 +1,8 @@
 # Phase 6 Implementation Plan: Open WebUI Integration
 
 Prepared: 2026-07-13
-Implementation status: Code complete; local Open WebUI acceptance passed
-Acceptance status: Two-user backend authorization passed; real Open WebUI Google chat pending
+Implementation status: Code complete; local and core live acceptance passed
+Acceptance status: Core two-user UI matrix passed; formal closeout intentionally pending
 Predecessor: Phase 5 complete for backend development acceptance
 
 > **Completion-plan update (2026-07-14):** ADR-015 selects admin-approved
@@ -11,6 +11,14 @@ Predecessor: Phase 5 complete for backend development acceptance
 > remains the implementation record for the completed Open WebUI adapter and
 > signed-identity boundary; where permission-authority steps conflict, ADR-015
 > and the new completion plan win.
+
+> **Live-acceptance update (2026-07-18):** Both Workspace users passed real
+> Google login, separate Drive authorization, permission-filtered chat,
+> cross-user isolation, access removal/restoration, OAuth
+> disconnect/reconnect, evidence expiry, provider routing, and SpiceDB
+> outage/recovery. The callback-triggered post-consent refresh also restored
+> User 2 without waiting for the scheduler. The phase remains open by operator
+> decision until formal report review and closeout.
 
 ## Goal
 
@@ -595,19 +603,23 @@ Implementation tasks:
 
 - [x] OpenAI-compatible endpoint selected as the integration pattern.
 - [x] Open WebUI service settings configured and reproducible.
-- [ ] Google OAuth/OIDC login configured.
-- [ ] Authenticated Google identity reaches Django as a verified signed JWT.
+- [x] Google OAuth/OIDC login configured.
+- [x] Authenticated Google identity reaches Django as a verified signed JWT.
 - [x] Knowledge-graph model requests route through the existing safe OpenRouter
   boundary.
 - [x] End-to-end Open WebUI chat flow tested locally with synthetic data.
 
 Validation:
 
-- [ ] User can log in with Google.
+- [x] User can log in with Google.
 - [x] Backend receives a cryptographically trusted signed identity locally.
 - [x] User can ask a question through Open WebUI locally.
 - [x] Backend returns a permission-safe answer with permitted citations locally.
-- [ ] Restricted facts remain hidden through the actual UI route.
+- [x] Restricted facts remain hidden through the actual UI route.
+
+These factual checks are satisfied, but this historical implementation record
+does not mark the phase complete. Formal closeout remains deferred to the
+active completion plan and operator approval.
 
 ## Exact First Implementation Slice
 
