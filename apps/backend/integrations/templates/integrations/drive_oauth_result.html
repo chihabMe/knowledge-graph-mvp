@@ -10,6 +10,11 @@
     <main>
       {% if connected %}
         <h1>Google Drive connected</h1>
+        {% if sync_queued %}
+          <p>Your document permissions are synchronizing now.</p>
+        {% else %}
+          <p>Your document permissions will synchronize automatically.</p>
+        {% endif %}
         <p>You can close this page and return to chat.</p>
       {% else %}
         <h1>Google Drive was not connected</h1>

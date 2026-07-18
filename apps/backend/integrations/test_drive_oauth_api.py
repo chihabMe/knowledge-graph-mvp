@@ -84,10 +84,13 @@ class DriveOAuthApiTests(TestCase):
 
     def test_provider_error_callback_consumes_state_through_service_boundary(self):
         self.client.force_login(self.user)
-        with patch(
-            "integrations.drive_oauth_views.complete_authorization",
-            side_effect=UserDriveOAuthError("authorization_response_invalid"),
-        ) as complete:
+        with (
+            patch(
+                "integrations.drive_oauth_views.complete_authorization",
+                side_effect=UserDriveOAuthError("authorization_response_invalid"),
+            ) as complete,
+            patch("integrations.drive_oauth_views.queue_user_visibility_sync") as queue,
+        ):
             response = self.client.get(
                 reverse("drive-oauth-callback"),
                 {"state": "test-state", "error": "access_denied"},
@@ -95,7 +98,61 @@ class DriveOAuthApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertTrue(complete.call_args.kwargs["provider_error"])
+        queue.assert_not_called()
         self.assertNotContains(response, "access_denied", status_code=400)
+
+    def test_successful_callback_queues_only_authenticated_user_visibility(self):
+        self.client.force_login(self.user)
+        with (
+            patch("integrations.drive_oauth_views.complete_authorization") as complete,
+            patch("integrations.drive_oauth_views.run_user_visibility_sync.delay") as dispatch,
+            patch(
+                "integrations.drive_oauth_views.queue_user_visibility_sync",
+                return_value=SimpleNamespace(pk=18, status="queued"),
+            ) as queue,
+        ):
+            response = self.client.get(
+                reverse("drive-oauth-callback"),
+                {"state": "test-state", "code": "test-code"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Google Drive connected")
+        self.assertContains(response, "Your document permissions are synchronizing now.")
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertEqual(response["Referrer-Policy"], "no-referrer")
+        complete.assert_called_once()
+        complete_kwargs = complete.call_args.kwargs
+        self.assertEqual(complete_kwargs["session"].session_key, self.client.session.session_key)
+        self.assertEqual(complete_kwargs["user_email"], "pilot@example.com")
+        self.assertEqual(complete_kwargs["state"], "test-state")
+        self.assertEqual(complete_kwargs["authorization_code"], "test-code")
+        self.assertFalse(complete_kwargs["provider_error"])
+        self.assertEqual(queue.call_args.kwargs["user_email"], "pilot@example.com")
+        self.assertIs(queue.call_args.kwargs["dispatch"], dispatch)
+
+    def test_callback_stays_connected_when_immediate_sync_dispatch_fails(self):
+        self.client.force_login(self.user)
+        with (
+            patch("integrations.drive_oauth_views.complete_authorization") as complete,
+            patch(
+                "integrations.drive_oauth_views.queue_user_visibility_sync",
+                side_effect=RuntimeError("sensitive broker failure"),
+            ),
+            self.assertLogs("integrations.drive_oauth_views", level="WARNING") as captured,
+        ):
+            response = self.client.get(
+                reverse("drive-oauth-callback"),
+                {"state": "test-state", "code": "test-code"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Google Drive connected")
+        self.assertContains(response, "Your document permissions will synchronize automatically.")
+        self.assertNotContains(response, "sensitive broker failure")
+        self.assertNotIn("sensitive broker failure", " ".join(captured.output))
+        self.assertIn("RuntimeError", " ".join(captured.output))
+        complete.assert_called_once()
 
     def test_disconnect_returns_success_after_local_service_completes(self):
         self.client.force_login(self.user)

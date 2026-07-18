@@ -61,7 +61,10 @@ Expose the permission-safe backend through Open WebUI as the main user interface
   claim/email/domain binding, narrow-scope enforcement, ciphertext-only token
   persistence, reconnect generation invalidation, local-first disconnect,
   throttling, and minimal no-secret responses passed 19 focused tests and the
-  complete 367-test backend suite on 2026-07-15. No document grant is created.)
+  complete 367-test backend suite on 2026-07-15. A successful callback now
+  queues the existing bounded refresh for only the authenticated user and
+  reports either active synchronization or scheduled fallback. OAuth
+  completion alone still creates no document grant.)
 - [x] Add the distinct direct SpiceDB user/document relation and exact
   user-scoped reconciliation. Effort: Extra High. (`oauth_viewer` is filtered
   by one connection and opaque user ID, reconciles only active indexed rows,
@@ -91,8 +94,15 @@ Expose the permission-safe backend through Open WebUI as the main user interface
   authoritative single-model configuration now admits only the configured
   Workspace OAuth domain and automatically exposes only
   `client-knowledge-graph` to standard users.)
-- [ ] Pass live allowed/restricted, revocation, expiry, and provider-route
-  acceptance through the actual UI. Effort: Extra High.
+- [x] Pass live allowed/restricted, revocation, expiry, provider-route, and
+  SpiceDB-failure acceptance through the actual UI. Effort: Extra High. (Both
+  users received only their own private fact plus the shared source. User 1
+  share removal/re-addition, User 2 disconnect/reconnect, evidence expiry,
+  DeepSeek routing, and SpiceDB outage/recovery all failed closed or restored
+  only the exact permitted sources on 2026-07-18.)
+- [ ] Live-validate that a new or reconnected Drive callback immediately
+  queues and completes the user-specific refresh without waiting for the
+  periodic scheduler. Effort: Medium.
 
 Adapter implementation history: `docs/phase-6-implementation-plan.md`.
 
@@ -108,11 +118,10 @@ Active completion plan:
 - [x] User can ask questions through the actual Open WebUI interface locally.
 - [x] Backend returns permission-safe cited answers for locally authorized data.
 - [x] Restricted facts remain hidden at the live backend authorization and
-  fresh-evidence boundary; actual Open WebUI presentation remains pending.
-- [ ] Removing Drive access, disconnecting OAuth, or expiring evidence removes
-  answer context and citations within the documented freshness bound. (The
-  evidence-expiry case passed through the actual UI; access removal and
-  disconnect/revocation remain.)
+  fresh-evidence boundary and through the actual Open WebUI presentation.
+- [x] Removing Drive access, disconnecting OAuth, or expiring evidence removes
+  answer context and citations within the documented freshness bound. (All
+  three cases passed through the actual UI on 2026-07-18.)
 
 ## Completion Status
 
@@ -132,7 +141,10 @@ shared document through the final SpiceDB plus fresh-evidence allowlist, while
 the other user's private document was denied. Focused tests, the complete
 441-test backend suite, Ruff, formatting, migrations, Django
 checks, Compose rendering, and a live local Open WebUI synthetic-data chat
-passed. Real Open WebUI Google login and a fail-closed stale-evidence refusal
-also passed for user 1. The phase remains open until refreshed cited answers
-pass for both users and restricted facts and citations stay hidden through
-revocation, the production provider route, and SpiceDB-failure cases.
+passed. Real Open WebUI Google login, exact two-user cited retrieval, access
+removal and restoration, OAuth disconnect and reconnect, stale-evidence
+refusal, DeepSeek provider routing, and SpiceDB outage/recovery all passed
+through the actual UI. The callback now queues a bounded user-specific refresh
+immediately after consent while preserving the periodic scheduler as fallback.
+The phase remains open only for live validation of that immediate post-consent
+refresh and the final regression/documentation checkpoint.

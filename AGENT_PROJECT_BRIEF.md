@@ -465,6 +465,34 @@ Required behavior:
 
 Avoid expensive re-embedding for permission-only updates.
 
+Production permission-freshness target:
+
+- Keep the current 15-minute refresh and 30-minute evidence lifetime for the
+  POC until delayed/failed-run monitoring is operational.
+- For the bounded single-client production pilot, refresh connected users at
+  least every 5 minutes and expire positive visibility evidence after 10
+  minutes. This creates a normal 0-5 minute propagation window and a hard
+  fail-closed bound after two missed refresh opportunities.
+- Alert before the 10-minute evidence deadline, not after access has already
+  failed closed. Track scheduler heartbeat, last successful run age, run
+  duration, denied/unknown/error counts, and refresh backlog.
+- Use Drive change-feed and push-notification signals to trigger faster
+  affected-document/user refreshes where possible, but retain the periodic
+  sweep as the reconciliation authority. Notifications are signals rather than
+  authorization facts, channels expire, and inherited folder changes may need
+  descendant reconciliation.
+- Revalidate the interval against real user/document counts and Google quota
+  consumption before increasing the configured pilot caps.
+
+Chat-history retention is a separate production policy from retrieval
+authorization. Revocation must block future retrieval but cannot retract an
+answer already delivered into a chat. Before production handoff, agree a
+client-approved deletion/retention period, document user/admin deletion and
+account-removal behavior, and avoid promising per-document historical-answer
+purging unless an answer-to-source deletion index is implemented. The pilot
+recommendation is a configurable 30-day default, subject to the client's legal,
+security, and records requirements.
+
 ## 14. Evaluation And Leak Testing
 
 The prototype is not successful unless leak tests pass.
@@ -563,7 +591,12 @@ authorization flow.
 Starts and completes the separate per-user Drive authorization-code flow. The
 callback verifies state, Google identity, granted scopes, email verification,
 and the configured Workspace domain before storing only an encrypted refresh
-credential. It never returns tokens to Open WebUI or the browser.
+credential. A successful callback immediately queues the existing bounded
+visibility refresh for only the verified Django identity. If dispatch is
+temporarily unavailable, the connection remains valid and the durable queued
+run or periodic scheduler retries without requiring another consent flow. The
+result page distinguishes active synchronization from scheduled fallback. It
+never returns tokens to Open WebUI or the browser.
 
 ### `GET /api/drive/oauth/status` and `POST /api/drive/oauth/disconnect`
 
@@ -572,7 +605,7 @@ revoke local access. Disconnect immediately invalidates that user's visibility
 evidence and removes their managed SpiceDB relationships; Google token
 revocation is attempted without making local denial depend on its success.
 
-### `POST /api/drive/visibility/sync` (planned)
+### `POST /api/drive/visibility/sync`
 
 Queues a bounded refresh for the authenticated user's already-indexed
 documents. The request cannot supply file IDs, a Drive root, another identity,
@@ -850,19 +883,35 @@ three-document synchronization, permission-filtered retrieval again returned
 only that user's private document and the shared document. The exact signed
 Open WebUI identity plus service-bearer adapter request also passed through the
 production OpenRouter route with `openai/gpt-4.1-mini`: it returned both
-permitted server-owned citations and no other user's source. The remaining
-work is successful cited chat in the visible UI for both users and revocation
-acceptance.
+permitted server-owned citations and no other user's source. The configured
+DeepSeek route then passed through the visible UI for both users: each received
+only their own private verification code and permitted source titles. Removing
+User 1's private-document share produced one visible, two denied, and zero
+unknown results; new chats refused the removed fact until the share was
+restored and a later run rebuilt the exact two-document allowlist. Stopping
+SpiceDB caused controlled refusals with no context, and restart did not reuse
+the interrupted positive evidence; later successful runs restored each exact
+allowlist. Disconnecting User 2 immediately removed context and citations;
+reconnection remained denied until a fresh two-visible/one-denied run completed,
+then returned only User 2's permitted code and sources. Evidence-expiry and
+provider-route cases also passed. The OAuth callback now queues an immediate
+user-specific visibility refresh with periodic scheduling as fallback. The
+remaining Phase 6 gate is live validation that this immediate post-consent run
+removes the previous scheduled-wait onboarding delay.
 
 ### Phase 7: Change Feed And Evaluation
 
 Purpose: keep graph data and permissions current through the Drive change feed,
-and prove safety with repeatable answer-quality and leak tests.
+prove safety with repeatable answer-quality and leak tests, implement the
+5-minute refresh/10-minute evidence-expiry production target, and monitor
+failed or delayed synchronization before enabling those tighter limits.
 
 ### Phase 8: Deployment Handoff
 
 Purpose: make the POC understandable, maintainable, recoverable, and reusable
-for future client implementations.
+for future client implementations. Handoff includes the permission-freshness
+SLA, synchronization monitoring/runbook, and a client-approved chat-history
+deletion and retention policy.
 
 ## 17. Pricing And Scope Notes
 

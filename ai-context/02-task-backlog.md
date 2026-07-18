@@ -103,7 +103,12 @@ This backlog is ordered by dependency and risk.
 ## Phase 7: Change Feed And Evaluation
 
 - Add Google Drive change feed handling.
+- Add change-triggered synchronization where possible while retaining a
+  periodic reconciliation sweep.
 - Separate content updates from permission-only updates.
+- Validate and enable a 5-minute visibility refresh with 10-minute evidence
+  expiry under the bounded pilot caps; keep 15/30 until monitoring is ready.
+- Monitor failed/delayed synchronization and alert before evidence expiry.
 - Add evaluation question set.
 - Add leak tests.
 - Add scheduled evaluation job.
@@ -113,5 +118,7 @@ This backlog is ordered by dependency and risk.
 - Add backup docs.
 - Add restore docs.
 - Add maintenance checklist.
+- Document the permission-freshness SLA and synchronization incident runbook.
+- Define, approve, configure, and test a chat-history deletion/retention policy.
 - Add environment setup docs.
 - Add demo script.

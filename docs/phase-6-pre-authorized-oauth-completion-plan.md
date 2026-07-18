@@ -1,7 +1,7 @@
 # Phase 6 Completion Plan: Admin-Approved Per-User Drive OAuth
 
 Prepared: 2026-07-14
-Status: Implementation in progress; WP1-WP3 locally complete
+Status: Final live callback-refresh validation remains
 Canonical decision: ADR-015 in `ai-context/04-decisions.md`
 Replaces as POC default: domain-wide-delegated ACL and Directory group sync
 
@@ -465,17 +465,21 @@ passed 23 focused tests, Ruff, migration drift, Django, and Compose rendering.
 
 Exit: a pilot user can connect once, but no document grant exists yet.
 
-Status: Complete and live-validated (2026-07-18). Authenticated Django-session endpoints
-now create hashed, short-lived, single-use state; request offline consent;
-verify the Google issuer, audience, subject, verified email, hosted domain, and
-exact session email; require the narrow Drive metadata scope; reject broader
-Drive scopes; use PKCE for the authorization-code exchange; encrypt first-use refresh credentials; preserve only decryptable
-ciphertext on reconnect; rotate authorization generations and evidence; and
-deny locally before best-effort remote revocation. The minimal response page
-and status API expose no identity, scope, file, or credential material. The
-19-test OAuth/API slice and complete 367-test backend suite passed with Ruff,
-migration drift, Django, and whitespace validation. No document grant is
-created by this work package.
+Status: Complete and live-validated (2026-07-18). Authenticated Django-session
+endpoints now create hashed, short-lived, single-use state; request offline
+consent; verify the Google issuer, audience, subject, verified email, hosted
+domain, and exact session email; require the narrow Drive metadata scope;
+reject broader Drive scopes; use PKCE for the authorization-code exchange;
+encrypt first-use refresh credentials; preserve only decryptable ciphertext on
+reconnect; rotate authorization generations and evidence; and deny locally
+before best-effort remote revocation. The minimal response page and status API
+expose no identity, scope, file, or credential material. A successful callback
+immediately queues the existing bounded visibility refresh for only the
+authenticated identity and reports either active synchronization or the
+durable scheduled fallback. Consent completion alone creates no grant. The
+OAuth/API slice and complete backend suite pass with Ruff, migration drift,
+Django, and whitespace validation. No document grant is created by this work
+package.
 
 ### WP3 — Direct SpiceDB relationship
 
@@ -520,8 +524,9 @@ verified-visible and one denied result.
 
 Exit: access removal and remote uncertainty both remove fresh retrieval evidence.
 
-Status: Complete and live-validated (2026-07-18); revocation and expiry remain
-part of WP8 acceptance. Durable per-authorization runs pre-invalidate
+Status: Complete and live-validated (2026-07-18). Access removal, OAuth
+disconnect/reconnect, evidence expiry, and SpiceDB outage/recovery passed the
+actual UI acceptance matrix. Durable per-authorization runs pre-invalidate
 positive evidence before Drive checks, select only active indexed IDs, enforce
 the pilot caps, reconcile one user's exact direct tuples, verify causally, and
 commit fresh positive evidence only while both generations still match. Celery
@@ -583,10 +588,9 @@ local denial. Focused ingestion, extraction, cutover, and disconnect tests pass.
 Exit: a real Workspace login reaches Django and is bound to its own Drive
 authorization.
 
-Status: Django session bootstrap and separate Drive onboarding are
-live-validated for both pilot users (2026-07-18), with 441 backend tests. The
-remaining WP7 gate is real Google login through Open WebUI and verification
-that its signed identity JWT matches the already connected Drive identity.
+Status: Complete and live-validated for both pilot users (2026-07-18). Real
+Google login through Open WebUI, the separate Django Drive onboarding flow,
+and exact signed-identity-to-Drive-identity binding all passed.
 
 ### WP8 — Live two-user and revocation acceptance
 
@@ -600,12 +604,15 @@ that its signed identity JWT matches the already connected Drive identity.
 
 Exit: every Phase 6 validation item has real UI evidence and no leak.
 
-Status: Backend two-user matrix partially complete (2026-07-18). User 1's
-final allowlist contains only `User 1 private document` and `Visible to both
-users`; user 2's contains only `User 2 private document` and `Visible to both
-users`. Each user's evidence explicitly denies the other private document.
-Actual Open WebUI questions/citations, access removal, disconnect/revocation,
-evidence expiry, provider routing, and SpiceDB-unavailable behavior remain.
+Status: Live matrix complete (2026-07-18). User 1 received only
+`User 1 private document` and `Visible to both users`; user 2 received only
+`User 2 private document` and `Visible to both users`. Each user's evidence
+explicitly denied the other private document. User 1 access removal and
+restoration, User 2 OAuth disconnect and reconnect, evidence expiry, the
+DeepSeek production-provider route, and SpiceDB-unavailable/recovery behavior
+all passed through Open WebUI without leaking hidden facts or citations. The
+remaining Phase 6 check is live confirmation that the newly added immediate
+post-consent refresh removes the previous periodic-scheduler onboarding wait.
 
 ### WP9 — Handoff and completion
 

@@ -1,5 +1,7 @@
 """Minimal authenticated endpoints for the per-user Drive OAuth boundary."""
 
+import logging
+
 from django.shortcuts import redirect, render
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
@@ -21,6 +23,8 @@ from integrations.drive.user_visibility_sync import (
 )
 from integrations.tasks import run_user_visibility_sync
 from retrieval.identity import TrustedIdentityUnavailable, trusted_user_email
+
+logger = logging.getLogger(__name__)
 
 
 def _trusted_email(request) -> str:
@@ -78,10 +82,12 @@ class DriveOAuthCallbackView(APIView):
     throttle_scope = "drive-oauth-callback"
 
     def get(self, request):
+        sync_queued = False
         try:
+            user_email = _trusted_email(request)
             complete_authorization(
                 session=request.session,
-                user_email=_trusted_email(request),
+                user_email=user_email,
                 state=request.query_params.get("state"),
                 authorization_code=request.query_params.get("code"),
                 provider_error=bool(
@@ -96,10 +102,25 @@ class DriveOAuthCallbackView(APIView):
                 status=_status_for_error(exc),
             )
         else:
+            try:
+                queue_user_visibility_sync(
+                    user_email=user_email,
+                    dispatch=run_user_visibility_sync.delay,
+                )
+            except Exception as exc:
+                # The completed authorization remains valid. A durable queued
+                # run or the periodic scheduler can retry without making the
+                # user repeat consent. Never expose provider/broker details.
+                logger.warning(
+                    "Immediate user visibility synchronization dispatch failed (%s).",
+                    exc.__class__.__name__,
+                )
+            else:
+                sync_queued = True
             response = render(
                 request,
                 "integrations/drive_oauth_result.html",
-                {"connected": True},
+                {"connected": True, "sync_queued": sync_queued},
             )
         response["Cache-Control"] = "no-store"
         response["Referrer-Policy"] = "no-referrer"
