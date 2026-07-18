@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from uuid import uuid4
@@ -38,6 +39,8 @@ SUPPORTED_ROLES = {
     "owner",
 }
 ROLE_RELATIONS = {"fileOrganizer": "file_organizer"}
+
+logger = logging.getLogger(__name__)
 
 
 class PermissionSyncError(RuntimeError):
@@ -81,7 +84,22 @@ def synchronize_permissions(
         resources = drive_client.list_permission_resources(connection)
         _persist_complete_scan(connection, resources)
         result = _desired_state(connection, group_resolver)
+        # Delegated desired state is built only from Drive ACL roles, parent
+        # links, and group memberships; oauth_viewer belongs exclusively to
+        # the per_user_oauth authority and must never be written here.
+        if any(item.relation == "oauth_viewer" for item in result.desired):
+            raise PermissionSyncError("oauth_viewer_in_delegated_state")
         current = spicedb.read_managed_tuples(connection_prefix(connection.pk))
+        stray_oauth_viewer = sum(item.relation == "oauth_viewer" for item in current)
+        if stray_oauth_viewer:
+            # Finding these during a delegated run means an authority cutover
+            # cleanup did not complete. They are never in the desired state,
+            # so the exact-set write below removes them; removal closes the
+            # cross-mode grant path, whereas aborting would leave it open.
+            logger.error(
+                "Delegated permission sync found %d stray oauth_viewer tuple(s); removing.",
+                stray_oauth_viewer,
+            )
         touches = result.desired - current
         deletes = current - result.desired
         # Even an unchanged non-empty set gets a write token for the evidence row.
