@@ -23,6 +23,11 @@ from retrieval.open_webui_views import (
     OpenWebUIChatCompletionsView,
     OpenWebUIModelsView,
 )
+from retrieval.serializers import (
+    MAX_OPEN_WEBUI_MESSAGE_CHARS,
+    MAX_OPEN_WEBUI_MESSAGES,
+    MAX_OPEN_WEBUI_TOOLS,
+)
 from retrieval.services import QueryResult
 from retrieval.types import RetrievalEvidence, RetrievedChunk
 
@@ -301,6 +306,87 @@ class OpenWebUIApiContractTests(SimpleTestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data,
+            {
+                "error": {
+                    "message": "The chat request could not be processed.",
+                    "type": "invalid_request_error",
+                    "code": "invalid_request",
+                }
+            },
+        )
+        self.assertNotIn("attacker@example.com", str(response.data))
+        answer_query_mock.assert_not_called()
+
+    @patch("retrieval.open_webui_views.answer_query")
+    def test_long_conversation_returns_controlled_compatible_error(self, answer_query_mock):
+        sensitive_content = "private-payload-that-must-not-be-reflected"
+        response = self.client.post(
+            "/v1/chat/completions",
+            {
+                "model": "client-knowledge-graph",
+                "messages": [{"role": "assistant", "content": "Previous answer"}]
+                * MAX_OPEN_WEBUI_MESSAGES
+                + [{"role": "user", "content": sensitive_content}],
+                "stream": True,
+            },
+            format="json",
+            **self.service_headers(identity_assertion=identity_token()),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data,
+            {
+                "error": {
+                    "message": "This conversation is too long. Start a new chat and try again.",
+                    "type": "invalid_request_error",
+                    "code": "conversation_too_long",
+                }
+            },
+        )
+        self.assertEqual(response["Cache-Control"], "no-store")
+        serialized = str(response.data)
+        self.assertNotIn("non_field_errors", serialized)
+        self.assertNotIn(str(MAX_OPEN_WEBUI_MESSAGES), serialized)
+        self.assertNotIn(sensitive_content, serialized)
+        answer_query_mock.assert_not_called()
+
+    @patch("retrieval.open_webui_views.answer_query")
+    def test_other_bounded_payload_errors_are_generic_and_do_not_query(self, answer_query_mock):
+        invalid_payloads = (
+            {
+                "model": "client-knowledge-graph",
+                "messages": [{"role": "user", "content": "x" * (MAX_OPEN_WEBUI_MESSAGE_CHARS + 1)}],
+                "stream": False,
+            },
+            {
+                "model": "client-knowledge-graph",
+                "messages": [{"role": "user", "content": "Question"}],
+                "stream": False,
+                "tools": [{}] * (MAX_OPEN_WEBUI_TOOLS + 1),
+            },
+        )
+        expected = {
+            "error": {
+                "message": "The chat request could not be processed.",
+                "type": "invalid_request_error",
+                "code": "invalid_request",
+            }
+        }
+
+        for payload in invalid_payloads:
+            with self.subTest(payload_keys=tuple(payload)):
+                response = self.client.post(
+                    "/v1/chat/completions",
+                    payload,
+                    format="json",
+                    **self.service_headers(identity_assertion=identity_token()),
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(response.data, expected)
+                self.assertEqual(response["Cache-Control"], "no-store")
         answer_query_mock.assert_not_called()
 
     def test_views_pin_authentication_permission_and_throttle_boundaries(self):

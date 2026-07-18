@@ -705,6 +705,13 @@ short-lived signed Open WebUI identity JWT, extract a bounded user question,
 and call the existing `answer_query()` service. Request-supplied identity and
 plain forwarded email headers are never authorization evidence.
 
+Invalid compatible requests return a bounded OpenAI-style `error` envelope
+rather than raw DRF serializer details. A conversation beyond the configured
+message bound receives the controlled `conversation_too_long` code and an
+instruction to start a new chat. Other malformed or oversized payloads receive
+only `invalid_request`. Neither path reflects request content or calls the
+permission, retrieval, embedding, or answer-provider services.
+
 The first slice may be non-streaming. It must translate the existing answer,
 controlled refusal, and server-owned permitted citations without sending chat
 history or any unrestricted context directly to OpenRouter.
@@ -905,8 +912,11 @@ after the callback-triggered run completed, returned only the permitted private
 code and the shared source without waiting for the periodic scheduler. A
 shared-document question returned the correct shared fact, although the
 server-owned citations also included another permitted User 2 source; this is
-a citation-relevance issue rather than an authorization leak. Phase 6 remains
-open by operator decision pending formal report review and closeout.
+a citation-relevance issue rather than an authorization leak. The adapter also
+normalizes over-32-message and other serializer failures into controlled
+OpenAI-compatible errors without reflecting request content or reaching the
+query service. Phase 6 remains open by operator decision pending formal report
+review and closeout.
 
 ### Phase 7: Change Feed And Evaluation
 
