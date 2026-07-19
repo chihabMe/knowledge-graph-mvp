@@ -80,9 +80,9 @@ field, and visibility changes must not trigger re-embedding.
 ## Validation
 
 - [x] Test folder scan succeeds. Live-validated 2026-07-08: root discovery
-  and file listing both succeeded against a real Drive folder (`kg-graph`,
-  service account in Drake's GCP project). See ADR-009 for the pilot-folder
-  caveat (personal account, not Drake's Workspace domain).
+  and file listing both succeeded against a temporary Drive folder using a
+  pilot service account. See ADR-009 for the pilot-folder caveat (personal
+  account, not a client Workspace domain).
 - [~] Supported files ingest. (Metadata capture live-validated end-to-end;
   the one available live test file failed legacy `permissions.list()` — see
   ADR-009 — so the current pre-cutover code correctly excluded it before the

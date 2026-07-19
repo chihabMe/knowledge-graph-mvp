@@ -17,7 +17,7 @@ services:
         limits:
           memory: 1G
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     # Google credentials stay outside the repo. Local ADC and legacy keys are
     # read-only; an attached Compute Engine service account needs no file.
     # The development OAuth token gets a dedicated writable directory.
@@ -114,7 +114,7 @@ services:
           # app process.
           memory: 1536M
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     # The Drive sync task runs here, so the worker needs the same credential
     # sources and the dedicated writable OAuth-token directory.
     volumes:
@@ -163,7 +163,7 @@ services:
     restart: "no"
     logging: *default-logging
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-user-oauth-client.json:ro
       - ${GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE:-/dev/null}:/run/secrets/google-user-token-keyring.json:ro
@@ -191,7 +191,7 @@ services:
         limits:
           memory: 256M
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-user-oauth-client.json:ro
       - ${GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE:-/dev/null}:/run/secrets/google-user-token-keyring.json:ro

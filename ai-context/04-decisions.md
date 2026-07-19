@@ -146,8 +146,9 @@ decision. The service account and selected-root flow remain active for content
 ingestion; the POC now uses per-user OAuth for employee visibility.
 
 Decision: Each client deployment gets its own Google service account,
-created by us in our GCP project (exception: Drake's pilot uses an SA in his
-own project). Clients never touch GCP. Connecting Drive = the client shares
+created by us in our GCP project (the pilot deployment may instead use a
+service account in a client-owned project). Clients never touch GCP.
+Connecting Drive = the client shares
 a folder with the service account's email as Viewer — the same action as
 sharing with a person. The current Drive-ingestion work must include an admin
 connection/settings flow that lists folders shared with the service account
@@ -169,14 +170,14 @@ Reason:
   domains that block external sharing or restrict permission-list reads.
 
 **ACL visibility under folder-level sharing — resolved 2026-07-08 by live
-test.** Sharing a folder with the service account (tested at Editor role,
-via `kg-graph` in a personal Google account, service account in Drake's GCP
-project) lets the service account list and read files inside it, but
+test.** Sharing a folder with the service account (tested at Editor role
+against a temporary folder in a personal Google account) lets the service
+account list and read files inside it, but
 `permissions.list()` on those files returns `403 insufficientFilePermissions`
 — folder-level sharing does not grant "manage permissions" rights on the
 files inside it. This is a Drive API access-control property, not specific
-to personal vs. Workspace accounts, so it is expected to reproduce for
-Drake's real pilot folder too. Practical effect: under the default
+to personal vs. Workspace accounts, so it is expected to reproduce for a
+real pilot folder too. Practical effect: under the default
 "share to connect" model, per-file permission metadata will generally be
 unreadable, and Phase 2 now fails those documents closed
 (`exclusion_reason = permission_metadata_incomplete`, `retrieval_eligible =
@@ -552,6 +553,45 @@ Trade-offs:
 
 Status: Accepted and implemented (2026-07-18). The exact callback registration
 and live two-user acceptance remain.
+
+## ADR-013: Pre-Filter Vector Similarity And Server-Owned Answer Citations
+
+Decision: Phase 5 uses one deployment-configured OpenRouter embedding adapter
+for both stored Chunk vectors and question vectors. Retrieval fuses bounded
+keyword chunks, vector-similar chunks, and one-hop graph facts, but every Neo4j
+path first applies the SpiceDB-derived source-document allowlist and the full
+provenance guard.
+
+Neo4j 5's vector-index procedure is deliberately not used by the permission
+boundary because it selects global nearest-neighbor candidates before an
+arbitrary per-request document predicate can be applied. The safe path matches
+allowed, provenance-complete Chunk/Document records first and computes
+`vector.similarity.cosine()` or `vector.similarity.euclidean()` only within
+that bounded set. The existing Chunk vector index stays provisioned for a
+future pre-filter-capable or safely partitioned strategy; retrieving global
+candidates and filtering them afterward remains forbidden.
+
+OpenRouter answer synthesis is independently opt-in. It receives only bounded
+JSONL context assembled after SpiceDB, Neo4j provenance, and fresh PostgreSQL
+evidence checks. Source text is labeled untrusted data. The model returns only
+an answer and a support boolean through a strict schema; Drive URLs and chunk
+citations are always constructed by the server from the exact context evidence.
+
+Reason:
+
+- Permission enforcement must happen before vector scoring/candidate return,
+  not as post-retrieval cleanup.
+- Using the same embedding model and dimensions for indexing and questions
+  prevents incompatible vector spaces.
+- Reciprocal-rank fusion combines vector and keyword order without pretending
+  their raw scores are comparable.
+- Keeping citations outside model output prevents invented or restricted Drive
+  links from entering the citation contract.
+- Independent provider switches ensure enabling extraction or embeddings does
+  not silently start sending retrieval context to an answer model.
+
+Status: Accepted (2026-07-13). Live-validated on Neo4j 5.26 with the development
+OAuth Drive PDF and OpenRouter.
 
 ## Open / Needs Explicit Confirmation
 

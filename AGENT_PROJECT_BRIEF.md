@@ -400,23 +400,13 @@ Answer behavior:
 
 Open WebUI is the intended front end.
 
-Phase 6 integrates Open WebUI through an OpenAI-compatible endpoint implemented
-in the existing Django backend. An Open WebUI Pipeline/Function is not part of
-the primary retrieval path. Django keeps `/api/query/` as its internal,
-directly testable contract and adds thin `GET /v1/models` and
-`POST /v1/chat/completions` adapters for Open WebUI.
+The backend may integrate through either:
 
-Open WebUI authenticates users through Google OAuth/OIDC and forwards each
-signed-in identity in a short-lived signed user-info JWT. Django must verify the
-JWT signature, algorithm, issuer, issued/expiry times, and normalized email
-before calling the existing permission-safe query service. The OpenAI-compatible
-connection also uses a separate least-privilege service bearer key. Plain email
-headers and request-body identity remain untrusted. Direct browser-to-backend
-connections are not used.
+- An Open WebUI Pipeline/Function, or
+- An OpenAI-compatible API endpoint used by Open WebUI.
 
-OpenRouter remains behind the Django answer service. Open WebUI must not bypass
-the permission-safe backend and call OpenRouter directly for knowledge-graph
-questions.
+The prototype currently favors an OpenAI-compatible endpoint because it is easy
+to connect and test.
 
 The single-tenant Open WebUI deployment exposes exactly one logical model,
 `client-knowledge-graph`, and automatically makes that model discoverable to
@@ -448,8 +438,6 @@ Important:
   directly into the separate Drive authorization endpoint after a successful,
   domain-restricted login.
 - Local password login should be disabled or hidden for production pilots.
-- Signed identity forwarding and the service bearer key use separate secrets;
-  neither may be committed, logged, or accepted from browser request data.
 
 ## 13. Change-Driven Re-Indexing
 
@@ -530,7 +518,7 @@ The evaluation runner should report:
 
 These are the target public interfaces:
 
-### `GET /health`
+### `GET /api/health/`
 
 Reports health for:
 
