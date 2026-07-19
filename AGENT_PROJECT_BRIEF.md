@@ -90,8 +90,10 @@ behavior have also passed. The complete two-user chat, access removal and
 restoration, OAuth disconnect and reconnect, provider-route, evidence-expiry,
 and SpiceDB outage matrix has passed. A post-consent callback also queued and
 completed a user-specific refresh without waiting for the periodic scheduler.
-Phase 6 intentionally remains open pending formal closeout review and final
-report acceptance.
+The operator reviewed the Phase 6 reports and approved formal closeout on
+2026-07-19; the observed citation over-inclusion was ruled a non-blocking
+relevance-quality follow-up tracked in issue #6. Phase 7, change feed and
+evaluation, is the active phase.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -818,9 +820,9 @@ restricted context or citations.
 
 ### Phase 6: Open WebUI Integration
 
-Status: implementation and core live acceptance validated; formal closeout is
-intentionally pending (2026-07-18). Completion follows the admin-approved
-per-user OAuth plan in
+Status: complete. Implementation and live acceptance are validated, and the
+operator approved formal closeout on 2026-07-19. Completion followed the
+admin-approved per-user OAuth plan in
 `docs/phase-6-pre-authorized-oauth-completion-plan.md`.
 
 Purpose: expose the backend through Open WebUI and make sure the backend
@@ -903,8 +905,9 @@ server-owned citations also included another permitted User 2 source; this is
 a citation-relevance issue rather than an authorization leak. The adapter also
 normalizes over-32-message and other serializer failures into controlled
 OpenAI-compatible errors without reflecting request content or reaching the
-query service. Phase 6 remains open by operator decision pending formal report
-review and closeout.
+query service. After formal report review, the operator ruled the citation
+over-inclusion a non-blocking relevance-quality follow-up (tracked in issue
+#6) and approved Phase 6 closeout on 2026-07-19.
 
 ### Phase 7: Change Feed And Evaluation
 

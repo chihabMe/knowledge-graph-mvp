@@ -117,15 +117,17 @@ Neo4j, composes the allowlist and provenance guard into keyword/vector/one-hop
 retrieval, assembles bounded context, calls OpenRouter behind a service
 boundary, and keeps citations server-owned.
 
+Phase 6 Open WebUI integration with admin-approved per-user Drive OAuth is
+complete: the live two-user acceptance matrix passed through the real Open
+WebUI route and the operator approved formal closeout on 2026-07-19.
+
 The next implementation steps are:
 
-1. Finish Phase 6 from
-   `docs/phase-6-pre-authorized-oauth-completion-plan.md`: keep the service
-   account for content, add admin-approved per-user Drive OAuth with encrypted
-   credentials and fresh direct SpiceDB visibility, then prove allowed-versus-
-   restricted behavior through the actual Open WebUI route. The adapter, signed
-   identity boundary, buffered streaming, and Compose wiring are locally
-   complete.
+1. Execute Phase 7 from `docs/phase-7-implementation-plan.md`: freshness
+   monitoring and pre-expiry alerting, Drive change-feed polling strictly as
+   an accelerator over the periodic sweeps, the 5-minute refresh/10-minute
+   evidence-expiry production target, the content-currency retrieval gate
+   (issue #5), and the scheduled evaluation runner.
 2. Keep `.env.example` and tracked docs OpenRouter-shaped.
 3. Preserve provenance on every graph write and keep retrieval fail-closed.
 4. Keep delegated ACL/group sync only as an explicit optional mode; never union

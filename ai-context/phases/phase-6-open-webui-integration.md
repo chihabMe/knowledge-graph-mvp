@@ -152,5 +152,8 @@ through the actual UI. The callback's bounded user-specific refresh also passed
 a live disconnect/reconnect without waiting for the periodic scheduler. A
 shared-only question returned the correct fact but cited an additional
 permitted source, which is a relevance-quality follow-up rather than a leak.
-The phase intentionally remains open pending formal report review and operator
-closeout; it is not marked complete in this checkpoint.
+
+Phase 6 is complete. The operator reviewed both untracked Phase 6 reports and
+approved formal closeout on 2026-07-19, ruling the citation over-inclusion a
+non-blocking relevance-quality follow-up tracked in GitHub issue #6. The full backend validation (449 tests, Ruff, migration drift) was
+re-run green in Docker on the closeout date.

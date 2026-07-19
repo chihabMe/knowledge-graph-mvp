@@ -152,17 +152,18 @@ SpiceDB visibility is Phase 6 completion work. Phase 5 permission-safe
 retrieval is code complete and live validated: the authenticated query
 contract, SpiceDB pre-filter, fresh evidence gate, guarded hybrid
 keyword/vector/one-hop graph retrieval, bounded context, server-owned
-citations, OpenRouter synthesis, and safe refusal are implemented. Phase 6's
-thin Django OpenAI-compatible adapter, service authentication, signed Open WebUI
-identity JWT, bounded request handling, buffered streaming, and private
-single-model Compose configuration are code complete and locally validated.
-Real Google/OIDC login, separate admin-approved Django Drive consent, fresh
-per-user visibility synchronization, and allowed-versus-restricted two-user
-Workspace acceptance remain before Phase 6 can close; see
-`docs/phase-6-pre-authorized-oauth-completion-plan.md`.
+citations, OpenRouter synthesis, and safe refusal are implemented. Phase 6 is
+complete: the thin Django OpenAI-compatible adapter, real Google/OIDC login,
+separate admin-approved Django Drive consent, fresh per-user visibility
+synchronization, and the allowed-versus-restricted two-user Workspace
+acceptance matrix all passed through the actual Open WebUI, and the operator
+approved formal closeout on 2026-07-19. Phase 7, change feed and evaluation,
+is the active phase; see `docs/phase-7-implementation-plan.md` and
+`ai-context/phases/phase-7-change-feed-and-evaluation.md`.
 
 Read:
 
+- `docs/phase-7-implementation-plan.md`
 - `docs/phase-5-completion-report.md`
 - `docs/phase-6-implementation-plan.md`
 - `docs/phase-6-pre-authorized-oauth-completion-plan.md`
