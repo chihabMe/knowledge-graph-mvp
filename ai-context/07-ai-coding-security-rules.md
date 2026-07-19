@@ -207,6 +207,7 @@ Before committing code, run the relevant subset:
 ```bash
 make config
 make lint
+make migration-check
 make test
 docker compose -f infra/compose.infrastructure.yml config
 docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml config

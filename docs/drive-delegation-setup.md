@@ -1,4 +1,4 @@
-# Enabling Drive Permission Sync (Workspace Admin, ~10 minutes)
+# Enabling Drive Permission Sync
 
 The knowledge layer only answers from documents a user is allowed to see. To
 know who is allowed, it must read each file's sharing list ("who has access")
@@ -22,11 +22,20 @@ Two **read-only** scopes, and nothing else:
 | `https://www.googleapis.com/auth/drive.readonly` | Read Drive files and their sharing lists |
 | `https://www.googleapis.com/auth/admin.directory.group.member.readonly` | Read Google Group membership (to expand group-based access) |
 
-Neither scope can modify, delete, or share anything. Access stays bounded to
-the folder or shared drive the admin selects as the ingestion root; the
-delegation makes the sharing metadata readable, it does not widen the scope.
+Neither scope can modify, delete, or share anything. Domain-wide delegation
+authorizes the service account to impersonate a Workspace user within those
+scopes. Google limits access by the impersonated user's permissions and the
+authorized scopes; Google does **not** enforce the ingestion root selected in
+this application. The backend enforces that root when it scans Drive.
 
-## Steps
+Use a dedicated, least-privileged delegated subject with only the Workspace
+roles and Drive access required for this deployment. Protect and rotate the
+service-account key as a high-impact credential.
+
+Reference: [Google's server-to-server OAuth and domain-wide delegation
+guide](https://developers.google.com/identity/protocols/oauth2/service-account).
+
+## Workspace administrator steps (~10 minutes)
 
 1. Sign in to the Google Admin console (`admin.google.com`) as a Workspace
    super admin.
@@ -45,17 +54,42 @@ Use the numeric **Client ID**, not the service-account email address — the
 delegation screen only accepts the numeric ID, and the scope strings must match
 character for character or the API returns `unauthorized_client`.
 
-Changes can take a few minutes to propagate.
+Changes usually take a few minutes to propagate, but Google notes that they may
+take up to 24 hours in some cases.
 
-## What we do next
+## Deployment operator steps
+
+The endpoints below are admin-only. The current backend uses Django session
+authentication and does not yet expose the Phase 6 Google/OIDC login flow. The
+operator must therefore use an existing authenticated staff session. Every
+POST also requires the session's CSRF cookie and matching header.
+
+Set these shell variables from a controlled authenticated operator session;
+the cookie values are secrets and must never be committed, pasted into tickets,
+or stored in shell history:
+
+```bash
+BASE_URL="https://api.example.com"
+SESSION_ID="<authenticated-staff-sessionid>"
+CSRF_TOKEN="<matching-csrf-token>"
+ADMIN_COOKIE="sessionid=${SESSION_ID}; csrftoken=${CSRF_TOKEN}"
+```
+
+If no controlled staff session exists, stop. Do not temporarily expose these
+endpoints or add a shared bearer key; implement the planned authenticated
+operator path first.
 
 1. Set the delegated subject (a Workspace user whose identity the service
    account acts as when reading metadata — typically an admin):
 
    ```bash
-   curl -X POST https://<host>/api/integrations/drive/connection/delegated-subject/ \
-     -H 'Content-Type: application/json' \
-     -d '{"delegated_subject_email": "admin@<client-domain>"}'
+   curl --fail-with-body \
+     --request POST \
+     "${BASE_URL}/api/ingest/drive/connection/delegated-subject/" \
+     --cookie "${ADMIN_COOKIE}" \
+     --header "X-CSRFToken: ${CSRF_TOKEN}" \
+     --header "Content-Type: application/json" \
+     --data '{"delegated_subject_email": "workspace-operator@example.com"}'
    ```
 
    Changing this invalidates existing retrieval eligibility on purpose: the
@@ -64,17 +98,44 @@ Changes can take a few minutes to propagate.
 2. Confirm sharing lists are now readable:
 
    ```bash
-   curl https://<host>/api/integrations/drive/permissions/check/
+   curl --fail-with-body \
+     "${BASE_URL}/api/ingest/drive/permissions/check/" \
+     --cookie "${ADMIN_COOKIE}"
    ```
 
-   Expect `unreadable_files: 0`. If files are still unreadable, the delegation
-   has not propagated or a scope string does not match exactly.
+   Expect `permission_metadata_access: "ok"`, `permissions_unreadable: 0`,
+   and `folder_listing_errors: 0`. If files are still unreadable, confirm the
+   delegated subject, API enablement, root selection, scope strings, and
+   delegation propagation.
 
-3. Run a permission sync (it also runs on a schedule) and confirm documents
-   reach `retrieval_eligible`.
+3. Run a permission sync (it also runs on a schedule):
+
+   ```bash
+   curl --fail-with-body \
+     --request POST \
+     "${BASE_URL}/api/permissions/sync/" \
+     --cookie "${ADMIN_COOKIE}" \
+     --header "X-CSRFToken: ${CSRF_TOKEN}" \
+     --header "Content-Type: application/json" \
+     --data '{}'
+   ```
+
+   Poll the returned run ID with
+   `GET /api/permissions/sync/{run_id}/`. A `succeeded` status means every
+   in-scope document passed the permission model; `partial` means one or more
+   documents were deliberately excluded. Confirm `documents_verified` and
+   `documents_excluded` before treating the connection as ready.
 
 ## Revoking
 
-Delete the entry from the same domain-wide delegation screen, or unshare the
-ingestion folder. Either one cuts access; unsharing the folder also removes
-file access, deleting the delegation only removes metadata access.
+Deleting the domain-wide delegation entry, disabling the service-account key,
+or unsharing the source folder blocks future Google API access according to
+the chosen action. It does not by itself delete content already stored in
+PostgreSQL/Neo4j or guarantee immediate removal of existing SpiceDB tuples.
+
+For immediate containment, stop the client-facing deployment or otherwise
+disable retrieval, revoke the Google-side access, and keep retrieval disabled
+until a successful complete permission scan or a documented purge has removed
+the stale authorization/data state. Phase 7 change-feed work and Phase 8
+operations documentation must define and test the normal automated revocation
+and purge procedure.

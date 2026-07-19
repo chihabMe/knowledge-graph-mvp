@@ -17,7 +17,7 @@ services:
         limits:
           memory: 1G
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     # Google credentials stay outside the repo. Keys are read-only; the OAuth
     # token gets a dedicated writable directory so refresh can atomically
     # replace the file without making the other secrets writable.
@@ -90,7 +90,7 @@ services:
           # app process.
           memory: 1536M
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     # The Drive sync task runs here, so the worker needs the same credential
     # mounts and the dedicated writable OAuth-token directory.
     volumes:
@@ -132,7 +132,7 @@ services:
     restart: "no"
     logging: *default-logging
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     command:
       - python
       - manage.py
@@ -154,7 +154,7 @@ services:
         limits:
           memory: 256M
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     command:
       - celery
       - -A

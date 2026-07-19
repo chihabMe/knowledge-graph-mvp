@@ -21,6 +21,10 @@ Recommended settings:
 
 - Private repository for now.
 - Default branch: `main`.
+- Require pull requests before changes reach `main`.
+- Require the `Backend validation` GitHub Actions check.
+- Require branches to be current before merging.
+- Block force pushes and branch deletion on `main`.
 - Do not commit `.env`.
 - Do not commit Google service account credentials.
 - Do not commit customer Drive exports or real customer files.
@@ -47,4 +51,3 @@ Never commit:
 - SpiceDB preshared key
 - Database passwords
 - Customer documents
-

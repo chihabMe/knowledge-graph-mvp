@@ -140,8 +140,9 @@ Status: Accepted (2026-07-08).
 ## ADR-009: Drive Access Via Per-Client Service Account, Provisioned By Us; Dynamic "Share To Connect" Folder Selection
 
 Decision: Each client deployment gets its own Google service account,
-created by us in our GCP project (exception: Drake's pilot uses an SA in his
-own project). Clients never touch GCP. Connecting Drive = the client shares
+created by us in our GCP project (the pilot deployment may instead use a
+service account in a client-owned project). Clients never touch GCP.
+Connecting Drive = the client shares
 a folder with the service account's email as Viewer — the same action as
 sharing with a person. The current Drive-ingestion work must include an admin
 connection/settings flow that lists folders shared with the service account
@@ -163,14 +164,14 @@ Reason:
   domains that block external sharing or restrict permission-list reads.
 
 **ACL visibility under folder-level sharing — resolved 2026-07-08 by live
-test.** Sharing a folder with the service account (tested at Editor role,
-via `kg-graph` in a personal Google account, service account in Drake's GCP
-project) lets the service account list and read files inside it, but
+test.** Sharing a folder with the service account (tested at Editor role
+against a temporary folder in a personal Google account) lets the service
+account list and read files inside it, but
 `permissions.list()` on those files returns `403 insufficientFilePermissions`
 — folder-level sharing does not grant "manage permissions" rights on the
 files inside it. This is a Drive API access-control property, not specific
-to personal vs. Workspace accounts, so it is expected to reproduce for
-Drake's real pilot folder too. Practical effect: under the default
+to personal vs. Workspace accounts, so it is expected to reproduce for a
+real pilot folder too. Practical effect: under the default
 "share to connect" model, per-file permission metadata will generally be
 unreadable, and Phase 2 now fails those documents closed
 (`exclusion_reason = permission_metadata_incomplete`, `retrieval_eligible =
