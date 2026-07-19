@@ -38,6 +38,8 @@
 - Group-based access works.
 - Folder-inherited access works.
 - Permission-only change updates SpiceDB without re-embedding.
+- Expired permission-verification evidence denies access even when a stale
+  SpiceDB grant remains.
 
 ### Retrieval Tests
 

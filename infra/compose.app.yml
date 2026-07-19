@@ -18,13 +18,18 @@ services:
           memory: 1G
     env_file:
       - ${APP_ENV_FILE:-../.env}
-    # The Google service-account key stays outside the repo on the host and
-    # is mounted read-only; the container-side path overrides the host path
-    # from .env. /dev/null keeps the stack bootable before the key exists.
+    # Google credentials stay outside the repo. Keys are read-only; the OAuth
+    # token gets a dedicated writable directory so refresh can atomically
+    # replace the file without making the other secrets writable.
     volumes:
       - ${GOOGLE_SERVICE_ACCOUNT_FILE:-/dev/null}:/run/secrets/google-service-account.json:ro
+      - ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-oauth-client.json:ro
+      - ${GOOGLE_OAUTH_TOKEN_DIR:-/dev/null}:/run/secrets/google-oauth-token-store:rw
     environment:
+      GOOGLE_DRIVE_AUTH_MODE: ${GOOGLE_DRIVE_AUTH_MODE:-service_account}
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-oauth-client.json
+      GOOGLE_OAUTH_TOKEN_FILE: /run/secrets/google-oauth-token-store/google-oauth-token.json
     command:
       - gunicorn
       - config.wsgi:application
@@ -86,12 +91,17 @@ services:
           memory: 1536M
     env_file:
       - ${APP_ENV_FILE:-../.env}
-    # The Drive sync task runs here, so the worker needs the same read-only
-    # key mount as the web container.
+    # The Drive sync task runs here, so the worker needs the same credential
+    # mounts and the dedicated writable OAuth-token directory.
     volumes:
       - ${GOOGLE_SERVICE_ACCOUNT_FILE:-/dev/null}:/run/secrets/google-service-account.json:ro
+      - ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-oauth-client.json:ro
+      - ${GOOGLE_OAUTH_TOKEN_DIR:-/dev/null}:/run/secrets/google-oauth-token-store:rw
     environment:
+      GOOGLE_DRIVE_AUTH_MODE: ${GOOGLE_DRIVE_AUTH_MODE:-service_account}
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-oauth-client.json
+      GOOGLE_OAUTH_TOKEN_FILE: /run/secrets/google-oauth-token-store/google-oauth-token.json
     command:
       - celery
       - -A

@@ -288,7 +288,10 @@ ineligible before relationship changes and become eligible only after the
 complete desired tuple set is verified at least as fresh as the final write.
 Stale resources are revoked only following a complete scan. Authorization
 lookups use fully consistent SpiceDB `LookupResources`; PostgreSQL can reject
-stale/unverified results but can never grant access by itself.
+version-mismatched, unverified, or expired results but can never grant access
+by itself. A successful full verification refreshes the evidence timestamp;
+query-time filtering denies evidence older than the configured maximum age, so
+failed reconciliation cannot preserve an old grant indefinitely.
 
 Reason:
 
@@ -297,10 +300,50 @@ Reason:
 - Explicit parents and recursive subject sets match Drive inheritance and
   nested Workspace groups without application-side allow decisions.
 - Omitting wildcard/domain subjects prevents accidental public visibility.
-- The pre-invalidation, verification, version-CAS, and fully consistent read
-  rules make incomplete Google or SpiceDB state fail closed.
+- The pre-invalidation, verification, version-CAS, maximum evidence age, and
+  fully consistent read rules make incomplete or stale Google/SpiceDB state
+  fail closed.
 
 Status: Accepted (2026-07-11).
+
+## ADR-013: Pre-Filter Vector Similarity And Server-Owned Answer Citations
+
+Decision: Phase 5 uses one deployment-configured OpenRouter embedding adapter
+for both stored Chunk vectors and question vectors. Retrieval fuses bounded
+keyword chunks, vector-similar chunks, and one-hop graph facts, but every Neo4j
+path first applies the SpiceDB-derived source-document allowlist and the full
+provenance guard.
+
+Neo4j 5's vector-index procedure is deliberately not used by the permission
+boundary because it selects global nearest-neighbor candidates before an
+arbitrary per-request document predicate can be applied. The safe path matches
+allowed, provenance-complete Chunk/Document records first and computes
+`vector.similarity.cosine()` or `vector.similarity.euclidean()` only within
+that bounded set. The existing Chunk vector index stays provisioned for a
+future pre-filter-capable or safely partitioned strategy; retrieving global
+candidates and filtering them afterward remains forbidden.
+
+OpenRouter answer synthesis is independently opt-in. It receives only bounded
+JSONL context assembled after SpiceDB, Neo4j provenance, and fresh PostgreSQL
+evidence checks. Source text is labeled untrusted data. The model returns only
+an answer and a support boolean through a strict schema; Drive URLs and chunk
+citations are always constructed by the server from the exact context evidence.
+
+Reason:
+
+- Permission enforcement must happen before vector scoring/candidate return,
+  not as post-retrieval cleanup.
+- Using the same embedding model and dimensions for indexing and questions
+  prevents incompatible vector spaces.
+- Reciprocal-rank fusion combines vector and keyword order without pretending
+  their raw scores are comparable.
+- Keeping citations outside model output prevents invented or restricted Drive
+  links from entering the citation contract.
+- Independent provider switches ensure enabling extraction or embeddings does
+  not silently start sending retrieval context to an answer model.
+
+Status: Accepted (2026-07-13). Live-validated on Neo4j 5.26 with the development
+OAuth Drive PDF and OpenRouter.
 
 ## Open / Needs Explicit Confirmation
 

@@ -7,4 +7,5 @@ urlpatterns = [
     path("api/ingest/", include("integrations.urls")),
     path("api/health/", include("health.urls")),
     path("api/permissions/", include("authorization.urls")),
+    path("api/query/", include("retrieval.urls")),
 ]

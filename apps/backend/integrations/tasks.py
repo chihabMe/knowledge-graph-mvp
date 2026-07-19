@@ -173,8 +173,8 @@ def schedule_permission_syncs() -> dict[str, int]:
 
     Group membership changes never alter a document's own ACL hash, so the
     drive-sync preserve gate cannot see them; only a periodic reconciliation
-    deletes stale SpiceDB member tuples. This beat task bounds revocation
-    staleness to its schedule interval.
+    deletes stale SpiceDB member tuples. This beat task is the healthy refresh
+    cadence; query-time verification expiry is the hard bound when runs fail.
     """
     scheduled = 0
     redispatched = 0

@@ -119,6 +119,8 @@ python manage.py check --deploy
 - If provenance is incomplete, default to deny.
 - If SpiceDB is unavailable, retrieval must fail closed and return no graph context.
 - If a document has not been written and verified in SpiceDB, it is not eligible for retrieval.
+- If a document's successful SpiceDB verification is older than
+  `PERMISSION_VERIFICATION_MAX_AGE_SECONDS`, it is not eligible for retrieval.
 - If a graph fact comes from multiple source documents, require all required source documents to be visible unless a later documented policy says otherwise.
 - Add leak tests for every retrieval feature.
 
@@ -128,8 +130,11 @@ python manage.py check --deploy
 - API exception -> return a controlled error response, never a stack trace.
 - SpiceDB unavailable -> return no retrieval context, not all context.
 - Missing source provenance -> exclude the graph record from retrieval.
-- Permission sync failed -> keep the last known safe permission state; do not clear permissions into an allow-all state.
+- Permission sync failed -> keep the last verified permission state only until
+  its configured maximum age; never clear permissions into an allow-all state.
 - Permission metadata exists but SpiceDB relationships are not verified -> document is not retrievable.
+- Permission verification evidence expired -> document is not retrievable,
+  even if SpiceDB still returns an old grant.
 - Partial permission sync failure -> every document touched by the run remains retrieval-ineligible until the run completes and all SpiceDB relationships are verified.
 - Shared-link/public visibility is unknown -> exclude the document from retrieval until explicitly modeled.
 

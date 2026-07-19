@@ -100,6 +100,10 @@ Queue a Celery smoke task:
 make smoke
 ```
 
+Phase 5 configuration, embedding reindexing, and authenticated development
+query examples are documented in
+[`docs/permission-safe-retrieval.md`](docs/permission-safe-retrieval.md).
+
 ## Service Startup
 
 `make up` layers `infra/compose.dev.yml` over the base Compose files. It starts
@@ -142,11 +146,16 @@ Phases 1 and 2 are code complete (Phase 2's live content-export validation
 waits on domain-wide delegation — see ADR-009). Phase 3, Neo4j graph and
 provenance, is code complete and merged into `main`; its guard-wiring seam
 moved to the Phase 5 tracker. Phase 4 SpiceDB permission sync is code complete
-with live delegated Workspace validation pending. Next: Phase 5
-permission-safe retrieval.
+with live delegated Workspace validation pending. Phase 5 permission-safe
+retrieval is code complete and live validated: the authenticated query
+contract, SpiceDB pre-filter, fresh evidence gate, guarded hybrid
+keyword/vector/one-hop graph retrieval, bounded context, server-owned
+citations, OpenRouter synthesis, and safe refusal are implemented. Phase 6
+Open WebUI and trusted Google/OIDC identity integration is next.
 
 Read:
 
+- `ai-context/phases/phase-5-permission-safe-retrieval.md`
 - `ai-context/phases/phase-3-neo4j-graph-and-provenance.md`
 - `ai-context/phases/phase-4-spicedb-permissions.md`
 - `ai-context/phases/phase-2-google-drive-ingestion.md`

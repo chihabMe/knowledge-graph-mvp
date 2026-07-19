@@ -1,13 +1,18 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
 
 import graph.db as graph_db
 from graph.embeddings import (
     ChunkEmbedding,
     ChunkEmbeddingValidationError,
+    EmbeddingResponseError,
     NoOpEmbeddingAdapter,
+    OpenRouterEmbeddingAdapter,
+    build_embedding_adapter,
     validate_chunk_embeddings,
 )
 from graph.extraction import (
@@ -33,7 +38,7 @@ from graph.ontology import (
     validate_entity_type,
     validate_relationship_type,
 )
-from graph.pipeline import extract_document_to_graph, get_extraction_adapter
+from graph.pipeline import extract_document_to_graph, get_embedding_adapter, get_extraction_adapter
 from graph.schema import chunk_vector_index_statement, graph_setup_statements
 from graph.writer import (
     CHUNK_DOCUMENT_RELATIONSHIP,
@@ -126,6 +131,73 @@ class GraphSetupCommandTests(SimpleTestCase):
         self.assertEqual(actual_statements, graph_setup_statements())
 
 
+class GraphEmbeddingReindexCommandTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="root",
+        )
+
+    def create_document(self, suffix: str, *, content_hash="hash", status="succeeded"):
+        document = SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id=f"file-{suffix}",
+            title=f"File {suffix}",
+            mime_type="text/plain",
+            content_hash=content_hash,
+            graph_extraction_status=status,
+        )
+        SourceDocumentContent.objects.create(
+            source_document=document,
+            content=b"stored text",
+            exported_mime_type="text/plain",
+            content_hash=content_hash,
+        )
+        return document
+
+    def test_requires_exactly_one_selection_mode(self):
+        for options in ({}, {"all": True, "source_document_ids": [1]}):
+            with self.subTest(options=options), self.assertRaises(CommandError):
+                call_command("graph_reindex_embeddings", **options)
+
+    @patch("graph.management.commands.graph_reindex_embeddings.queue_document_extraction.delay")
+    def test_specific_current_document_is_reset_and_queued_without_content(self, mock_delay):
+        document = self.create_document("one")
+
+        call_command("graph_reindex_embeddings", source_document_ids=[document.pk])
+
+        document.refresh_from_db()
+        self.assertEqual(
+            document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.PENDING,
+        )
+        self.assertIsNotNone(document.graph_extraction_queued_at)
+        mock_delay.assert_called_once_with(document.pk, "hash")
+        self.assertNotIn("stored text", repr(mock_delay.call_args))
+
+    @patch("graph.management.commands.graph_reindex_embeddings.queue_document_extraction.delay")
+    def test_all_skips_running_stale_and_missing_content_documents(self, mock_delay):
+        current = self.create_document("current")
+        self.create_document(
+            "running",
+            status=SourceDocument.GraphExtractionStatus.RUNNING,
+        )
+        stale = self.create_document("stale")
+        stale.content_hash = "newer-hash"
+        stale.save(update_fields=["content_hash"])
+        SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="file-missing",
+            title="Missing",
+            mime_type="text/plain",
+            content_hash="hash",
+        )
+
+        call_command("graph_reindex_embeddings", all=True)
+
+        mock_delay.assert_called_once_with(current.pk, "hash")
+
+
 class VectorIndexSchemaTests(SimpleTestCase):
     def test_chunk_vector_index_statement_uses_configured_shape(self):
         statement = chunk_vector_index_statement(
@@ -153,6 +225,134 @@ class ChunkEmbeddingTests(SimpleTestCase):
         chunks = (ExtractedChunk(index=0, text="text"),)
 
         self.assertEqual(NoOpEmbeddingAdapter().embed_chunks(chunks), ())
+        self.assertEqual(NoOpEmbeddingAdapter().embed_query("question"), ())
+
+    @staticmethod
+    def _response(*vectors):
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(index=index, embedding=list(vector))
+                for index, vector in enumerate(vectors)
+            ]
+        )
+
+    def test_openrouter_adapter_batches_chunks_and_preserves_chunk_indices(self):
+        client = MagicMock()
+        client.embeddings.create.side_effect = [
+            self._response((0.1, 0.2), (0.3, 0.4)),
+            self._response((0.5, 0.6)),
+        ]
+        adapter = OpenRouterEmbeddingAdapter(
+            client=client,
+            model="openai/text-embedding-3-small",
+            dimensions=2,
+            batch_size=2,
+        )
+        chunks = tuple(ExtractedChunk(index=index + 4, text=f"text {index}") for index in range(3))
+
+        result = adapter.embed_chunks(chunks)
+
+        self.assertEqual([embedding.chunk_index for embedding in result], [4, 5, 6])
+        self.assertEqual(
+            [embedding.vector for embedding in result],
+            [(0.1, 0.2), (0.3, 0.4), (0.5, 0.6)],
+        )
+        self.assertEqual(client.embeddings.create.call_count, 2)
+        self.assertEqual(
+            client.embeddings.create.call_args_list[0].kwargs,
+            {
+                "model": "openai/text-embedding-3-small",
+                "input": ["text 0", "text 1"],
+                "dimensions": 2,
+                "encoding_format": "float",
+            },
+        )
+
+    def test_openrouter_query_embedding_uses_the_same_model_and_dimensions(self):
+        client = MagicMock()
+        client.embeddings.create.return_value = self._response((0.1, 0.2, 0.3))
+        adapter = OpenRouterEmbeddingAdapter(
+            client=client,
+            model="embedding-model",
+            dimensions=3,
+            batch_size=4,
+        )
+
+        self.assertEqual(adapter.embed_query("Who owns Atlas?"), (0.1, 0.2, 0.3))
+        self.assertEqual(client.embeddings.create.call_args.kwargs["input"], ["Who owns Atlas?"])
+
+    def test_openrouter_adapter_restores_provider_index_order(self):
+        client = MagicMock()
+        client.embeddings.create.return_value = SimpleNamespace(
+            data=[
+                SimpleNamespace(index=1, embedding=[0.3, 0.4]),
+                SimpleNamespace(index=0, embedding=[0.1, 0.2]),
+            ]
+        )
+        adapter = OpenRouterEmbeddingAdapter(
+            client=client,
+            model="embedding-model",
+            dimensions=2,
+            batch_size=2,
+        )
+
+        result = adapter.embed_chunks(
+            (ExtractedChunk(index=10, text="first"), ExtractedChunk(index=11, text="second"))
+        )
+
+        self.assertEqual([embedding.vector for embedding in result], [(0.1, 0.2), (0.3, 0.4)])
+
+    def test_openrouter_adapter_rejects_malformed_provider_vectors(self):
+        invalid_responses = (
+            SimpleNamespace(data=[]),
+            SimpleNamespace(data=[SimpleNamespace(index=1, embedding=[0.1, 0.2])]),
+            SimpleNamespace(data=[SimpleNamespace(index=0, embedding=[0.1])]),
+            SimpleNamespace(data=[SimpleNamespace(index=0, embedding=[0.1, float("nan")])]),
+        )
+        for response in invalid_responses:
+            with self.subTest(response=response):
+                client = MagicMock()
+                client.embeddings.create.return_value = response
+                adapter = OpenRouterEmbeddingAdapter(
+                    client=client,
+                    model="embedding-model",
+                    dimensions=2,
+                    batch_size=1,
+                )
+                with self.assertRaises(EmbeddingResponseError):
+                    adapter.embed_query("question")
+
+    @override_settings(GRAPH_EMBEDDING_PROVIDER="none")
+    def test_builder_returns_noop_when_embeddings_are_disabled(self):
+        self.assertIsInstance(build_embedding_adapter(), NoOpEmbeddingAdapter)
+
+    @override_settings(
+        GRAPH_EMBEDDING_PROVIDER="openrouter",
+        OPENROUTER_API_KEY="test-key",
+        OPENROUTER_BASE_URL="https://openrouter.ai/api/v1",
+        OPENROUTER_SITE_URL="https://knowledge.example.com",
+        OPENROUTER_APP_NAME="Knowledge Graph",
+        OPENROUTER_REQUEST_TIMEOUT_SECONDS=12.5,
+        OPENROUTER_EMBEDDING_MODEL="embedding-model",
+        GRAPH_CHUNK_EMBEDDING_DIMENSIONS=3,
+        GRAPH_EMBEDDING_BATCH_SIZE=8,
+    )
+    @patch("graph.embeddings.OpenAI")
+    def test_builder_configures_openrouter_without_making_a_request(self, mock_openai):
+        adapter = build_embedding_adapter()
+
+        self.assertIsInstance(adapter, OpenRouterEmbeddingAdapter)
+        mock_openai.assert_called_once_with(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api/v1",
+            timeout=12.5,
+            max_retries=0,
+            default_headers={
+                "X-OpenRouter-Title": "Knowledge Graph",
+                "HTTP-Referer": "https://knowledge.example.com",
+            },
+        )
+        mock_openai.return_value.embeddings.create.assert_not_called()
 
     def test_valid_embeddings_are_keyed_by_chunk_index(self):
         chunks = (
@@ -533,6 +733,13 @@ class ExtractionEngineSelectionTests(SimpleTestCase):
 
         self.assertIs(get_extraction_adapter(), sentinel)
 
+    @patch("graph.pipeline.build_embedding_adapter")
+    def test_embedding_engine_uses_the_shared_builder(self, mock_build):
+        sentinel = object()
+        mock_build.return_value = sentinel
+
+        self.assertIs(get_embedding_adapter(), sentinel)
+
 
 class ReplaceDocumentEntitiesTests(SimpleTestCase):
     def _session(self, anchored=1):
@@ -725,11 +932,42 @@ class ExtractionPipelineTests(TestCase):
         )
 
     def test_non_text_content_is_skipped(self):
-        self._store_content(b"%PDF-1.7 ...", exported_mime_type="application/pdf")
+        self._store_content(b"image bytes", exported_mime_type="image/png")
 
         result = extract_document_to_graph(self.document.pk)
 
         self.assertEqual(result["status"], "skipped_unsupported_mime_type")
+
+    @override_settings(GRAPH_EXTRACTION_ENGINE="paragraph")
+    @patch("graph.pipeline.write_transaction")
+    @patch("graph.pipeline.PdfReader")
+    def test_pdf_text_is_extracted_and_written(self, mock_reader, mock_transaction_ctx):
+        first_page = MagicMock()
+        first_page.extract_text.return_value = "First PDF paragraph."
+        second_page = MagicMock()
+        second_page.extract_text.return_value = "Second PDF paragraph."
+        mock_reader.return_value.pages = [first_page, second_page]
+        db_transaction = MagicMock()
+        mock_transaction_ctx.return_value.__enter__.return_value = db_transaction
+        self._store_content(b"%PDF-1.7 test", exported_mime_type="application/pdf")
+
+        result = extract_document_to_graph(self.document.pk)
+
+        self.assertEqual(result["status"], "extracted")
+        self.assertEqual(result["chunks"], 2)
+        mock_reader.assert_called_once()
+        self.assertFalse(mock_reader.call_args.kwargs["strict"])
+
+    @patch("graph.pipeline.PdfReader")
+    def test_pdf_without_extractable_text_is_skipped(self, mock_reader):
+        page = MagicMock()
+        page.extract_text.return_value = "  "
+        mock_reader.return_value.pages = [page]
+        self._store_content(b"%PDF-1.7 scan", exported_mime_type="application/pdf")
+
+        result = extract_document_to_graph(self.document.pk)
+
+        self.assertEqual(result["status"], "skipped_pdf_no_extractable_text")
 
     def test_undecodable_content_is_skipped_without_leaking_bytes(self):
         self._store_content(b"\xff\xfe\xfa broken")

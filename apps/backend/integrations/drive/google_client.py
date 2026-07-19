@@ -10,6 +10,8 @@ The Drive service object is injectable so tests never touch the network.
 from datetime import datetime
 from typing import Any
 
+from django.conf import settings
+
 from integrations.drive.client import (
     DriveFileMetadata,
     DrivePermissionAccessReport,
@@ -17,7 +19,9 @@ from integrations.drive.client import (
     DriveRootCandidate,
 )
 from integrations.drive.credentials import (
+    OAuthCredentialError,
     ServiceAccountKeyError,
+    load_oauth_credentials,
     load_service_account_credentials,
 )
 from integrations.models import DriveConnection
@@ -37,8 +41,11 @@ PERMISSION_FIELDS = (
     "allowFileDiscovery, deleted, pendingOwner, "
     "permissionDetails(inherited,inheritedFrom,permissionType,role))"
 )
-ROOT_FOLDER_QUERY = (
+SHARED_FOLDER_QUERY = (
     "sharedWithMe and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+)
+OAUTH_OWNED_FOLDER_QUERY = (
+    "'me' in owners and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
 )
 
 try:
@@ -103,13 +110,23 @@ def build_drive_service(connection: DriveConnection):
     # report "" and invalidate documents while the built service still delegated
     # to the env subject. Read only the connection field so the effective auth
     # identity always matches what the endpoint reports.
-    try:
-        credentials = load_service_account_credentials([DRIVE_READONLY_SCOPE])
-    except ServiceAccountKeyError as exc:
-        raise MissingServiceAccountKeyError(_KEY_ERROR_MESSAGES[exc.reason]) from exc
-    subject = connection.delegated_subject_email
-    if subject:
-        credentials = credentials.with_subject(subject)
+    if settings.GOOGLE_DRIVE_AUTH_MODE == "oauth_dev":
+        if connection is not None and connection.delegated_subject_email:
+            raise GoogleDriveApiError(
+                "Development OAuth mode cannot use a delegated Workspace subject."
+            )
+        try:
+            credentials = load_oauth_credentials([DRIVE_READONLY_SCOPE])
+        except OAuthCredentialError as exc:
+            raise GoogleDriveApiError(str(exc)) from exc
+    else:
+        try:
+            credentials = load_service_account_credentials([DRIVE_READONLY_SCOPE])
+        except ServiceAccountKeyError as exc:
+            raise MissingServiceAccountKeyError(_KEY_ERROR_MESSAGES[exc.reason]) from exc
+        subject = connection.delegated_subject_email
+        if subject:
+            credentials = credentials.with_subject(subject)
 
     # Imported lazily so tests that inject a fake service never need
     # Google credentials or the discovery cache.
@@ -152,10 +169,10 @@ class GoogleDriveMetadataClient:
     def list_root_candidates(self, connection: DriveConnection) -> list[DriveRootCandidate]:
         try:
             service = self._service or build_drive_service(connection)
-            candidates = [
-                *self._list_shared_folders(service),
-                *self._list_shared_drives(service),
-            ]
+            candidates = list(self._list_folders(service, query=SHARED_FOLDER_QUERY))
+            if settings.GOOGLE_DRIVE_AUTH_MODE == "oauth_dev":
+                candidates.extend(self._list_folders(service, query=OAUTH_OWNED_FOLDER_QUERY))
+            candidates.extend(self._list_shared_drives(service))
         except MissingServiceAccountKeyError:
             # Key-file problems keep their own error (409 at the API boundary);
             # only Drive/auth request failures collapse into the 502 below.
@@ -263,13 +280,13 @@ class GoogleDriveMetadataClient:
             if not page_token:
                 return
 
-    def _list_shared_folders(self, service):
+    def _list_folders(self, service, *, query: str):
         page_token = None
         while True:
             response = (
                 service.files()
                 .list(
-                    q=ROOT_FOLDER_QUERY,
+                    q=query,
                     fields=ROOT_FOLDER_LIST_FIELDS,
                     pageSize=PAGE_SIZE,
                     pageToken=page_token,

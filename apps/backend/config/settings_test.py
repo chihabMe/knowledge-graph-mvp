@@ -20,6 +20,11 @@ DATABASES = {
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
 
+# Unit tests select provider fakes explicitly. Never let a developer's local
+# .env make the test suite send document text, questions, or context off-host.
+GRAPH_EMBEDDING_PROVIDER = "none"
+QUERY_ANSWER_PROVIDER = "extractive"
+
 # In-process cache so throttle tests never need a Redis instance.
 CACHES = {
     "default": {

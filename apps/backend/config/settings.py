@@ -89,6 +89,7 @@ INSTALLED_APPS = [
     "integrations",
     "graph",
     "authorization",
+    "retrieval",
 ]
 
 MIDDLEWARE = [
@@ -181,6 +182,7 @@ REST_FRAMEWORK = {
         "drive-roots": env("DRIVE_ROOTS_THROTTLE_RATE", default="30/hour"),
         "drive-sync": env("DRIVE_SYNC_THROTTLE_RATE", default="10/hour"),
         "permission-sync": env("PERMISSION_SYNC_THROTTLE_RATE", default="10/hour"),
+        "query": env("QUERY_THROTTLE_RATE", default="60/hour"),
     },
 }
 
@@ -207,9 +209,20 @@ DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int("DRIVE_SYNC_STALE_RUN_TIMEOUT_MIN
 PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int(
     "PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120
 )
-# Group revocations are invisible to per-document ACL hashes, so this
-# interval bounds how long a revoked group member can retain access.
+# Group revocations are invisible to per-document ACL hashes, so this is the
+# healthy refresh cadence. Query-time evidence expiry below remains the hard
+# fail-closed bound if reconciliation repeatedly fails.
 PERMISSION_SYNC_INTERVAL_SECONDS = env.int("PERMISSION_SYNC_INTERVAL_SECONDS", default=900)
+PERMISSION_VERIFICATION_MAX_AGE_SECONDS = env.int(
+    "PERMISSION_VERIFICATION_MAX_AGE_SECONDS", default=1800
+)
+if PERMISSION_SYNC_INTERVAL_SECONDS < 1:
+    raise ImproperlyConfigured("PERMISSION_SYNC_INTERVAL_SECONDS must be positive.")
+if PERMISSION_VERIFICATION_MAX_AGE_SECONDS <= PERMISSION_SYNC_INTERVAL_SECONDS:
+    raise ImproperlyConfigured(
+        "PERMISSION_VERIFICATION_MAX_AGE_SECONDS must be greater than "
+        "PERMISSION_SYNC_INTERVAL_SECONDS."
+    )
 CELERY_BEAT_SCHEDULE = {
     "schedule-permission-syncs": {
         "task": "integrations.schedule_permission_syncs",
@@ -322,6 +335,60 @@ if GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS < 1:
     raise ImproperlyConfigured("GRAPH_EXTRACTION_MAX_CONCURRENT_LLM_CALLS must be positive.")
 OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", default="")
 OPENROUTER_BASE_URL = env("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
+OPENROUTER_SITE_URL = env("OPENROUTER_SITE_URL", default="")
+OPENROUTER_APP_NAME = env("OPENROUTER_APP_NAME", default="Client Knowledge Graph MVP")
+OPENROUTER_REQUEST_TIMEOUT_SECONDS = env.float("OPENROUTER_REQUEST_TIMEOUT_SECONDS", default=60.0)
+if OPENROUTER_REQUEST_TIMEOUT_SECONDS <= 0:
+    raise ImproperlyConfigured("OPENROUTER_REQUEST_TIMEOUT_SECONDS must be positive.")
+
+# Embeddings are opt-in so deployments can keep the deterministic Phase 3
+# baseline while credentials are being provisioned. The production Phase 5
+# path uses OpenRouter for both stored chunk and query embeddings.
+GRAPH_EMBEDDING_PROVIDER = env("GRAPH_EMBEDDING_PROVIDER", default="none")
+if GRAPH_EMBEDDING_PROVIDER not in {"none", "openrouter"}:
+    raise ImproperlyConfigured(
+        "GRAPH_EMBEDDING_PROVIDER must be 'none' or 'openrouter', "
+        f"got {GRAPH_EMBEDDING_PROVIDER!r}."
+    )
+OPENROUTER_EMBEDDING_MODEL = env("OPENROUTER_EMBEDDING_MODEL", default="")
+GRAPH_EMBEDDING_BATCH_SIZE = env.int("GRAPH_EMBEDDING_BATCH_SIZE", default=64)
+if not 1 <= GRAPH_EMBEDDING_BATCH_SIZE <= 256:
+    raise ImproperlyConfigured("GRAPH_EMBEDDING_BATCH_SIZE must be between 1 and 256.")
+if GRAPH_EMBEDDING_PROVIDER == "openrouter" and not (
+    OPENROUTER_API_KEY and OPENROUTER_EMBEDDING_MODEL
+):
+    raise ImproperlyConfigured(
+        "GRAPH_EMBEDDING_PROVIDER='openrouter' requires OPENROUTER_API_KEY "
+        "and OPENROUTER_EMBEDDING_MODEL to be set."
+    )
+
+# Answer synthesis is independently selectable so enabling graph extraction
+# or embeddings cannot silently start sending retrieval context to an LLM.
+QUERY_ANSWER_PROVIDER = env("QUERY_ANSWER_PROVIDER", default="extractive")
+if QUERY_ANSWER_PROVIDER not in {"extractive", "openrouter"}:
+    raise ImproperlyConfigured(
+        "QUERY_ANSWER_PROVIDER must be 'extractive' or 'openrouter', "
+        f"got {QUERY_ANSWER_PROVIDER!r}."
+    )
+OPENROUTER_MODEL = env("OPENROUTER_MODEL", default="")
+QUERY_CONTEXT_MAX_CHARS = env.int("QUERY_CONTEXT_MAX_CHARS", default=12_000)
+QUERY_ANSWER_MAX_TOKENS = env.int("QUERY_ANSWER_MAX_TOKENS", default=800)
+QUERY_RETRIEVAL_LIMIT = env.int("QUERY_RETRIEVAL_LIMIT", default=5)
+QUERY_VECTOR_MIN_SCORE = env.float("QUERY_VECTOR_MIN_SCORE", default=0.45)
+if QUERY_CONTEXT_MAX_CHARS < 1:
+    raise ImproperlyConfigured("QUERY_CONTEXT_MAX_CHARS must be positive.")
+if not 1 <= QUERY_ANSWER_MAX_TOKENS <= 4_000:
+    raise ImproperlyConfigured("QUERY_ANSWER_MAX_TOKENS must be between 1 and 4000.")
+if not 1 <= QUERY_RETRIEVAL_LIMIT <= 20:
+    raise ImproperlyConfigured("QUERY_RETRIEVAL_LIMIT must be between 1 and 20.")
+if not 0.0 <= QUERY_VECTOR_MIN_SCORE <= 1.0:
+    raise ImproperlyConfigured("QUERY_VECTOR_MIN_SCORE must be between 0 and 1.")
+if QUERY_ANSWER_PROVIDER == "openrouter" and not (OPENROUTER_API_KEY and OPENROUTER_MODEL):
+    raise ImproperlyConfigured(
+        "QUERY_ANSWER_PROVIDER='openrouter' requires OPENROUTER_API_KEY "
+        "and OPENROUTER_MODEL to be set."
+    )
+
 GRAPH_EXTRACTION_MODEL = env("GRAPH_EXTRACTION_MODEL", default="")
 if GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag" and not (
     OPENROUTER_API_KEY and GRAPH_EXTRACTION_MODEL
@@ -332,6 +399,15 @@ if GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag" and not (
     )
 
 GOOGLE_WORKSPACE_DOMAIN = env("GOOGLE_WORKSPACE_DOMAIN", default="")
+GOOGLE_DRIVE_AUTH_MODE = env("GOOGLE_DRIVE_AUTH_MODE", default="service_account")
+if GOOGLE_DRIVE_AUTH_MODE not in {"service_account", "oauth_dev"}:
+    raise ImproperlyConfigured("GOOGLE_DRIVE_AUTH_MODE must be 'service_account' or 'oauth_dev'.")
+if GOOGLE_DRIVE_AUTH_MODE == "oauth_dev" and not _development_context:
+    raise ImproperlyConfigured(
+        "GOOGLE_DRIVE_AUTH_MODE='oauth_dev' is permitted only in development/test context."
+    )
+GOOGLE_OAUTH_CLIENT_SECRET_FILE = env("GOOGLE_OAUTH_CLIENT_SECRET_FILE", default="")
+GOOGLE_OAUTH_TOKEN_FILE = env("GOOGLE_OAUTH_TOKEN_FILE", default="")
 GOOGLE_SERVICE_ACCOUNT_FILE = env("GOOGLE_SERVICE_ACCOUNT_FILE", default="")
 GOOGLE_DRIVE_DELEGATED_SUBJECT = env("GOOGLE_DRIVE_DELEGATED_SUBJECT", default="")
 GOOGLE_DRIVE_SCOPE_TYPE = env("GOOGLE_DRIVE_SCOPE_TYPE", default="folder")

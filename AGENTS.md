@@ -111,11 +111,15 @@ app, ontology, Neo4j setup, extraction adapter, document, chunk, entity, and
 relationship writers, provenance guard, vector-index setup, and extraction
 recovery hardening are in place.
 
+Phase 5 permission-safe retrieval is code complete and live validated. The
+authenticated query path performs SpiceDB authorization before embeddings or
+Neo4j, composes the allowlist and provenance guard into keyword/vector/one-hop
+retrieval, assembles bounded context, calls OpenRouter behind a service
+boundary, and keeps citations server-owned.
+
 The next implementation steps are:
 
-1. Start Phase 5: real retrieval queries must compose the provenance guard
-   and the SpiceDB allowed-source-document list (task moved from Phase 3
-   into the Phase 5 tracker, with leak tests).
+1. Start Phase 6 Open WebUI integration with trusted Google/OIDC identity.
 2. Keep `.env.example` and tracked docs OpenRouter-shaped.
 3. Preserve provenance on every graph write and keep retrieval fail-closed.
 4. Complete live delegated Workspace ACL and nested-group validation when

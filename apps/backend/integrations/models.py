@@ -1,6 +1,15 @@
+import datetime
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
+
+
+def permission_verification_cutoff():
+    """Oldest SpiceDB verification evidence retrieval may trust."""
+    return timezone.now() - datetime.timedelta(
+        seconds=settings.PERMISSION_VERIFICATION_MAX_AGE_SECONDS
+    )
 
 
 class DriveConnection(models.Model):
@@ -48,12 +57,13 @@ class SourceDocumentQuerySet(models.QuerySet):
 
         Retrieval filtering (lookup), the drive-sync preserve gate, and any
         future consumer must share this conjunction; see also
-        SourceDocument.is_permission_verified for the instance twin.
+        SourceDocument.is_permission_verified for the instance twin. Expired
+        evidence is denied even if a stale SpiceDB tuple still exists.
         """
         return self.filter(
             active_in_scope=True,
             retrieval_eligible=True,
-            spicedb_verified_at__isnull=False,
+            spicedb_verified_at__gte=permission_verification_cutoff(),
             spicedb_permissions_version=models.F("source_permissions_version"),
         )
 
@@ -171,6 +181,7 @@ class SourceDocument(models.Model):
             self.active_in_scope
             and self.retrieval_eligible
             and self.spicedb_verified_at
+            and self.spicedb_verified_at >= permission_verification_cutoff()
             and self.source_permissions_version == version
             and self.spicedb_permissions_version == version
         )

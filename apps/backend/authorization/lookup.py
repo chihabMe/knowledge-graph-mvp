@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 def allowed_source_document_ids(
     user_email: str, *, spicedb: SpiceDB | None = None
 ) -> tuple[int, ...]:
-    """Return the Phase 5 source allowlist, failing closed as one operation."""
+    """Return the fresh, verified Phase 5 allowlist; fail closed as one operation."""
     normalized_email = user_email.strip().lower()
     if not normalized_email:
         return ()
