@@ -567,6 +567,22 @@ FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS = env.int("FRESHNESS_HEARTBEAT_MAX_AGE_SECON
 # Dedicated bearer key so the monitoring service can poll the freshness
 # endpoint without a Django session. Empty is accepted only in development.
 FRESHNESS_MONITOR_BEARER_KEY = env("FRESHNESS_MONITOR_BEARER_KEY", default="")
+# Bounded sample of recent completed runs per target; the failure-streak
+# reading caps at this size, which still drives a warning at the cap.
+FRESHNESS_RUN_SAMPLE_LIMIT = env.int("FRESHNESS_RUN_SAMPLE_LIMIT", default=20)
+_freshness_sync_interval_seconds = (
+    GOOGLE_USER_VISIBILITY_SYNC_INTERVAL_SECONDS
+    if GOOGLE_PERMISSION_AUTHORITY == "per_user_oauth"
+    else PERMISSION_SYNC_INTERVAL_SECONDS
+)
+# A just-connected target that has never synced reports warn instead of
+# error for this long; retrieval denies it either way.
+FRESHNESS_NEVER_SYNCED_GRACE_SECONDS = env.int(
+    "FRESHNESS_NEVER_SYNCED_GRACE_SECONDS",
+    default=_freshness_sync_interval_seconds,
+)
+del _freshness_sync_interval_seconds
+SYNC_RUN_RETENTION_DAYS = env.int("SYNC_RUN_RETENTION_DAYS", default=14)
 _freshness_evidence_max_age_seconds = (
     GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS
     if GOOGLE_PERMISSION_AUTHORITY == "per_user_oauth"
@@ -579,6 +595,9 @@ validate_freshness_monitor_settings(
     evidence_max_age_seconds=_freshness_evidence_max_age_seconds,
     monitor_bearer_key=FRESHNESS_MONITOR_BEARER_KEY,
     development_context=_development_context,
+    run_sample_limit=FRESHNESS_RUN_SAMPLE_LIMIT,
+    never_synced_grace_seconds=FRESHNESS_NEVER_SYNCED_GRACE_SECONDS,
+    retention_days=SYNC_RUN_RETENTION_DAYS,
 )
 del _freshness_evidence_max_age_seconds
 CELERY_BEAT_SCHEDULE.update(
@@ -586,6 +605,10 @@ CELERY_BEAT_SCHEDULE.update(
         "monitor-freshness": {
             "task": "integrations.monitor_freshness",
             "schedule": float(FRESHNESS_MONITOR_INTERVAL_SECONDS),
+        },
+        "prune-completed-sync-runs": {
+            "task": "integrations.prune_completed_sync_runs",
+            "schedule": 86400.0,
         },
     }
 )

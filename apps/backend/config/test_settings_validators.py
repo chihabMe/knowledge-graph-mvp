@@ -333,6 +333,9 @@ class FreshnessMonitorSettingsValidationTests(SimpleTestCase):
         "evidence_max_age_seconds": 600,
         "monitor_bearer_key": "k" * 32,
         "development_context": False,
+        "run_sample_limit": 20,
+        "never_synced_grace_seconds": 120,
+        "retention_days": 14,
     }
 
     def validate(self, **overrides):
@@ -371,3 +374,21 @@ class FreshnessMonitorSettingsValidationTests(SimpleTestCase):
             with self.subTest(key=key):
                 with self.assertRaises(ImproperlyConfigured):
                     self.validate(monitor_bearer_key=key)
+
+    def test_run_sample_limit_must_stay_within_bounds(self):
+        for limit in (0, -1, 1001):
+            with self.subTest(limit=limit):
+                with self.assertRaises(ImproperlyConfigured):
+                    self.validate(run_sample_limit=limit)
+
+    def test_never_synced_grace_must_be_shorter_than_evidence_expiry(self):
+        for grace in (-1, 600, 601):
+            with self.subTest(grace=grace):
+                with self.assertRaises(ImproperlyConfigured):
+                    self.validate(never_synced_grace_seconds=grace)
+
+    def test_retention_must_be_at_least_one_day_and_exceed_evidence_expiry(self):
+        with self.assertRaises(ImproperlyConfigured):
+            self.validate(retention_days=0)
+        with self.assertRaises(ImproperlyConfigured):
+            self.validate(retention_days=1, evidence_max_age_seconds=172800)

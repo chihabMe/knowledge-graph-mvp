@@ -366,10 +366,27 @@ def validate_freshness_monitor_settings(
     evidence_max_age_seconds: int,
     monitor_bearer_key: str,
     development_context: bool,
+    run_sample_limit: int,
+    never_synced_grace_seconds: int,
+    retention_days: int,
 ) -> None:
     """Reject freshness-monitor thresholds that could silence alerting."""
     if not 1 <= interval_seconds <= 3600:
         raise ImproperlyConfigured("FRESHNESS_MONITOR_INTERVAL_SECONDS must be between 1 and 3600.")
+    if not 1 <= run_sample_limit <= 1000:
+        raise ImproperlyConfigured("FRESHNESS_RUN_SAMPLE_LIMIT must be between 1 and 1000.")
+    if not 0 <= never_synced_grace_seconds < evidence_max_age_seconds:
+        raise ImproperlyConfigured(
+            "FRESHNESS_NEVER_SYNCED_GRACE_SECONDS must be non-negative and shorter "
+            "than the evidence expiry window."
+        )
+    if retention_days < 1:
+        raise ImproperlyConfigured("SYNC_RUN_RETENTION_DAYS must be at least 1.")
+    if retention_days * 86400 <= evidence_max_age_seconds:
+        raise ImproperlyConfigured(
+            "SYNC_RUN_RETENTION_DAYS must exceed the evidence expiry window so "
+            "freshness aggregation never reads pruned history."
+        )
     if not 0.0 < warn_remaining_fraction < 1.0:
         raise ImproperlyConfigured(
             "FRESHNESS_WARN_REMAINING_FRACTION must be strictly between 0 and 1."
