@@ -388,7 +388,15 @@ class UserDriveOAuthTests(TestCase):
 
         payload = user_oauth.authorization_status(user_email=self.user_email).as_payload()
 
-        self.assertEqual(payload, {"configured": True, "connected": True, "status": "active"})
+        self.assertEqual(
+            payload,
+            {
+                "configured": True,
+                "connected": True,
+                "status": "active",
+                "state": "temporarily_unavailable",
+            },
+        )
         serialized = json.dumps(payload)
         self.assertNotIn(self.user_email, serialized)
         self.assertNotIn("scope", serialized)

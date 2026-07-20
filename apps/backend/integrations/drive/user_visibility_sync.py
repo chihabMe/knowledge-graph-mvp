@@ -12,7 +12,7 @@ from authorization.oauth_viewer import (
     OAuthViewerRelationshipError,
     reconcile_oauth_viewer_relationships,
 )
-from integrations.drive.user_oauth import REQUIRED_SCOPES
+from integrations.drive.user_oauth import REQUIRED_SCOPES, invalidate_refresh_authorization
 from integrations.drive.user_visibility_client import (
     IndexedDriveVisibilityClient,
     IndexedVisibilityBatch,
@@ -42,6 +42,7 @@ _CONTROLLED_ERROR_CODES = frozenset(
         "authorization_unavailable",
         "batch_scope_mismatch",
         "credential_refresh_failed",
+        "credential_invalid_grant",
         "credential_unavailable",
         "document_cap_exceeded",
         "oauth_client_unavailable",
@@ -324,6 +325,8 @@ def synchronize_user_visibility(
     except Exception as exc:
         code = _error_code(exc)
         _mark_failed(run.pk, code)
+        if code == "credential_invalid_grant":
+            invalidate_refresh_authorization(run.authorization_id)
         raise UserVisibilitySyncError(code) from exc
 
 

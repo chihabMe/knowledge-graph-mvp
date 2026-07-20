@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from cryptography.fernet import Fernet
 from django.test import TestCase, override_settings
+from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 from httplib2 import Response
 
@@ -278,3 +279,37 @@ class IndexedDriveVisibilityClientTests(TestCase):
         self.assertEqual(credential_class.call_args.kwargs["scopes"], sorted(REQUIRED_SCOPES))
         credentials.refresh.assert_called_once()
         build.assert_called_once_with("drive", "v3", credentials=credentials, cache_discovery=False)
+
+    def test_only_explicit_invalid_grant_is_classified_as_terminal(self):
+        client_file = Path(self.temporary_directory.name) / "client.json"
+        client_file.write_text(
+            json.dumps(
+                {
+                    "web": {
+                        "client_id": "test-client.apps.googleusercontent.com",
+                        "client_secret": "test-client-secret",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        with override_settings(
+            GOOGLE_USER_OAUTH_CLIENT_ID="test-client.apps.googleusercontent.com",
+            GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE=str(client_file),
+        ):
+            for provider_error, expected_code in (
+                ("invalid_grant", "credential_invalid_grant"),
+                ("temporarily_unavailable", "credential_refresh_failed"),
+            ):
+                with self.subTest(provider_error=provider_error):
+                    credentials = Mock()
+                    credentials.refresh.side_effect = RefreshError(
+                        "controlled refresh error",
+                        {"error": provider_error},
+                    )
+                    with patch(
+                        "integrations.drive.user_visibility_client.Credentials",
+                        return_value=credentials,
+                    ):
+                        with self.assertRaisesRegex(UserVisibilityCheckError, expected_code):
+                            _build_user_drive_service(self.authorization)

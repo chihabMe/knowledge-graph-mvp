@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from django.conf import settings
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -87,6 +88,11 @@ def _build_user_drive_service(authorization: GoogleDriveAuthorization):
     )
     try:
         credentials.refresh(GoogleAuthRequest())
+    except RefreshError as exc:
+        response_data = exc.args[1] if len(exc.args) > 1 else None
+        if isinstance(response_data, dict) and response_data.get("error") == "invalid_grant":
+            raise UserVisibilityCheckError("credential_invalid_grant") from exc
+        raise UserVisibilityCheckError("credential_refresh_failed") from exc
     except Exception as exc:
         raise UserVisibilityCheckError("credential_refresh_failed") from exc
     return build("drive", "v3", credentials=credentials, cache_discovery=False)

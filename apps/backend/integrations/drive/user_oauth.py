@@ -63,12 +63,14 @@ class OAuthStatus:
     configured: bool
     connected: bool
     status: str
+    state: str = "not_connected"
 
     def as_payload(self) -> dict[str, bool | str]:
         return {
             "configured": self.configured,
             "connected": self.connected,
             "status": self.status,
+            "state": self.state,
         }
 
 
@@ -394,31 +396,14 @@ def complete_authorization(
 
 
 def authorization_status(*, user_email: str) -> OAuthStatus:
-    try:
-        normalized_email = _normalize_user_email(user_email)
-        connection = _active_per_user_connection()
-    except UserDriveOAuthError:
-        return OAuthStatus(configured=False, connected=False, status="unavailable")
-    authorizations = list(
-        GoogleDriveAuthorization.objects.filter(
-            connection=connection,
-            normalized_email=normalized_email,
-            connection_generation=connection.authorization_generation,
-        ).order_by("pk")[:2]
-    )
-    if len(authorizations) != 1:
-        return OAuthStatus(configured=True, connected=False, status="disconnected")
-    authorization = authorizations[0]
-    connected = bool(
-        authorization.status == GoogleDriveAuthorization.Status.ACTIVE
-        and bytes(authorization.encrypted_refresh_credential)
-        and authorization.encryption_key_version
-        and REQUIRED_SCOPES.issubset(set(authorization.granted_scopes))
-    )
+    from integrations.drive.onboarding import connection_state
+
+    state = connection_state(user_email=user_email)
     return OAuthStatus(
-        configured=True,
-        connected=connected,
-        status=authorization.status if connected else "disconnected",
+        configured=state.configured,
+        connected=state.connected,
+        status=state.status,
+        state=state.state,
     )
 
 
@@ -483,3 +468,46 @@ def disconnect_authorization(*, user_email: str) -> None:
             # Local denial and credential deletion are authoritative. Provider
             # availability must not undo them or expose a remote response.
             continue
+
+
+def invalidate_refresh_authorization(authorization_id: int) -> None:
+    """Deny and wipe one credential after Google's explicit ``invalid_grant``."""
+    with transaction.atomic():
+        authorization = (
+            GoogleDriveAuthorization.objects.select_for_update()
+            .select_related("connection")
+            .get(pk=authorization_id)
+        )
+        connection = authorization.connection
+        normalized_email = authorization.normalized_email
+        UserDocumentVisibility.objects.filter(authorization=authorization).delete()
+        authorization.authorization_generation = uuid.uuid4()
+        authorization.status = GoogleDriveAuthorization.Status.REFRESH_FAILED
+        authorization.encrypted_refresh_credential = b""
+        authorization.encryption_key_version = ""
+        authorization.granted_scopes = []
+        authorization.last_successful_visibility_sync_at = None
+        authorization.save(
+            update_fields=[
+                "authorization_generation",
+                "status",
+                "encrypted_refresh_credential",
+                "encryption_key_version",
+                "granted_scopes",
+                "last_successful_visibility_sync_at",
+                "updated_at",
+            ]
+        )
+
+    try:
+        delete_oauth_viewer_relationships(
+            connection=connection,
+            user_email=normalized_email,
+        )
+    except Exception as exc:
+        # The wiped credential, rotated generation, and deleted PostgreSQL
+        # evidence deny immediately even if stale SpiceDB cleanup is delayed.
+        logger.warning(
+            "SpiceDB oauth_viewer cleanup failed after invalid_grant (%s).",
+            exc.__class__.__name__,
+        )

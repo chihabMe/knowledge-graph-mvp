@@ -11,6 +11,7 @@ from integrations.drive.user_oauth import REQUIRED_SCOPES
 from integrations.drive.user_visibility_client import (
     IndexedVisibilityBatch,
     IndexedVisibilityResult,
+    UserVisibilityCheckError,
 )
 from integrations.drive.user_visibility_sync import (
     UserVisibilitySyncError,
@@ -279,6 +280,41 @@ class UserVisibilitySynchronizationTests(TestCase):
 
         self.assertEqual(second.pk, first.pk)
         dispatch.assert_not_called()
+
+    def test_invalid_grant_wipes_credential_and_requires_reauthorization(self):
+        document = self.document("visible")
+        UserDocumentVisibility.objects.create(
+            authorization=self.authorization,
+            source_document=document,
+            connection_generation=self.connection.authorization_generation,
+            authorization_generation=self.authorization.authorization_generation,
+            state=UserDocumentVisibility.State.VERIFIED_VISIBLE,
+            spicedb_revision="old-revision",
+            spicedb_verified_at=timezone.now(),
+        )
+        old_generation = self.authorization.authorization_generation
+        client = Mock()
+        client.check_authorization.side_effect = UserVisibilityCheckError(
+            "credential_invalid_grant"
+        )
+
+        with patch("integrations.drive.user_oauth.delete_oauth_viewer_relationships") as cleanup:
+            with self.assertRaisesRegex(UserVisibilitySyncError, "credential_invalid_grant"):
+                synchronize_user_visibility(self.sync_run(), visibility_client=client)
+
+        self.authorization.refresh_from_db()
+        self.assertEqual(
+            self.authorization.status,
+            GoogleDriveAuthorization.Status.REFRESH_FAILED,
+        )
+        self.assertEqual(bytes(self.authorization.encrypted_refresh_credential), b"")
+        self.assertEqual(self.authorization.encryption_key_version, "")
+        self.assertNotEqual(self.authorization.authorization_generation, old_generation)
+        self.assertFalse(UserDocumentVisibility.objects.exists())
+        cleanup.assert_called_once_with(
+            connection=self.connection,
+            user_email="pilot@example.com",
+        )
 
 
 @override_settings(
