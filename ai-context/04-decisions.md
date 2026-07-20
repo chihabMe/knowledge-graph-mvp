@@ -56,7 +56,7 @@ Reason:
 
 - User prefers Traefik.
 - It handles Docker service routing well.
-- It can route Open WebUI, Django, Dozzle, and Uptime Kuma cleanly.
+- It can route Open WebUI, Django, and Dozzle cleanly.
 
 Status: Accepted.
 
@@ -650,6 +650,25 @@ Reason:
 
 Status: Accepted (2026-07-13). Live-validated on Neo4j 5.26 with the development
 OAuth Drive PDF and OpenRouter.
+
+## ADR-019: Remove Uptime Kuma From The Deployment
+
+Decision: Uptime Kuma is no longer part of the Compose stack or the project
+direction. Keep `GET /api/health/freshness/` and structured freshness logs as
+vendor-neutral monitoring boundaries, but do not ship or configure an embedded
+uptime dashboard. Select an external alert consumer separately before closing
+Phase 7 WP1 or enabling the 5-minute refresh/10-minute evidence-expiry target.
+
+Reason:
+
+- The operator explicitly chose not to use Uptime Kuma.
+- Permission-safe retrieval and fail-closed evidence expiry do not depend on a
+  specific monitoring product.
+- Removing an unused stateful dashboard reduces the deployment footprint while
+  preserving the authenticated health contract for a later monitoring choice.
+
+Status: Accepted (2026-07-20). The prior Uptime Kuma Compose service and monitor
+instructions are superseded. Live alert delivery remains an open Phase 7 gate.
 
 ## Open / Needs Explicit Confirmation
 

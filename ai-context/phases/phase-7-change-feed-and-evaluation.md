@@ -36,8 +36,9 @@ Keep graph data and permissions current, then prove answer quality and leak safe
 - [~] Monitor scheduler heartbeat, last-success age, run duration, backlog,
   errors, unknown results, and evidence approaching expiry; alert before the
   10-minute fail-closed deadline. Effort: High. (Code and offline failure
-  simulation complete on the WP1 branch; live Uptime Kuma alert delivery with
-  a deliberately stopped scheduler remains.)
+  simulation complete on the WP1 branch; Uptime Kuma was removed by operator
+  decision, so a replacement alert consumer and live stopped-scheduler delivery
+  check remain.)
 - [ ] Reconcile Shared Drive logs and inherited folder permission changes that
   do not map cleanly to one child change event. Effort: Extra High.
 - [ ] Create evaluation question set. Effort: Medium.

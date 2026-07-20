@@ -11,11 +11,11 @@ never identities, Drive IDs, tokens, question text, or document text.
 
 ## Preconditions
 
-- Full stack up (`make up`), Uptime Kuma running with **both** freshness
-  monitors from `infra/uptime-kuma/monitors.md` (status-code monitor and the
-  `"status":"error"` keyword paging monitor), each with a working
-  notification channel.
-- `FRESHNESS_MONITOR_BEARER_KEY` configured in Django and in both monitors.
+- Full stack up (`make up`) and a selected external monitoring service running
+  with **both** freshness checks from `infra/monitoring/freshness.md`
+  (status-code check and the `"status":"error"` paging check), each with a
+  working notification channel. Uptime Kuma is not part of the stack.
+- `FRESHNESS_MONITOR_BEARER_KEY` configured in Django and in both checks.
 - At least one connected pilot identity with verified-visible evidence and a
   question known to answer successfully in Open WebUI.
 - Note the active values of `FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS` (default
@@ -25,12 +25,12 @@ never identities, Drive IDs, tokens, question text, or document text.
 ## Drill
 
 1. **Baseline.** `GET /api/health/freshness/` with the bearer key returns 200
-   with `"status":"ok"`; both Kuma monitors green. Record the time.
+   with `"status":"ok"`; both external checks are green. Record the time.
 2. **Kill the scheduler.** `docker stop` the celery-beat container (leave the
    worker running — this simulates the silent failure mode). Record the time.
 3. **Heartbeat alert.** Within `FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS` plus one
    monitor interval, the endpoint must return 503 with `"status":"error"` and
-   a growing `heartbeat_age_seconds`, and **both** Kuma monitors must alert.
+   a growing `heartbeat_age_seconds`, and **both** external checks must alert.
    Record the alert arrival time. This must be well before the evidence max
    age elapses — that margin is the whole point.
 4. **Evidence expiry still denies.** Wait until the evidence max age has

@@ -7,7 +7,7 @@ This folder contains deployment and operations scaffolding.
 - `compose.infrastructure.yml`: Runnable infrastructure services that do not require application code.
 - `compose.app.yml`: Django and Celery application services.
 - `traefik/`: Traefik static and dynamic config.
-- `uptime-kuma/`: Notes for uptime monitor targets.
+- `monitoring/`: Vendor-neutral freshness monitoring contract.
 
 ## Current Status
 
@@ -44,11 +44,10 @@ Celery beat is behind the `scheduler` profile until scheduled jobs are needed:
 docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml --profile scheduler up -d
 ```
 
-Before using the Phase 7 production freshness target, configure the two
-authenticated Uptime Kuma monitors in `uptime-kuma/monitors.md`: the
-status-code monitor (softer warn channel) and the `"status":"error"` keyword
-monitor (paging channel). Both poll `/api/health/freshness/` independently of
-Celery and alert when scheduled permission evidence is approaching expiry or
-the scheduler heartbeat is stale. The live fail-closed drill in
-`docs/runbooks/freshness-drill.md` must pass before tightening any freshness
-interval.
+Before using the Phase 7 production freshness target, select an external alert
+consumer and configure the two authenticated checks in
+`monitoring/freshness.md`. Both must poll `/api/health/freshness/`
+independently of Celery and alert when scheduled permission evidence is
+approaching expiry or the scheduler heartbeat is stale. The live fail-closed
+drill in `docs/runbooks/freshness-drill.md` must pass before tightening any
+freshness interval.

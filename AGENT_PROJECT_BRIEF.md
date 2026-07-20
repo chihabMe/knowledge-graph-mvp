@@ -951,9 +951,12 @@ Status: WP4's content-currency retrieval gate is complete. WP1 freshness
 monitoring is code complete and offline-validated on its implementation branch:
 it records a scheduler/worker heartbeat, aggregates identity-free worst-case
 permission freshness and run health, exposes an authenticated non-200 alert
-endpoint, and documents Uptime Kuma polling. Live stopped-scheduler alert
-delivery remains required before WP1 closeout and before enabling the 5-minute
-refresh/10-minute evidence-expiry target.
+endpoint, and emits structured warning/error logs. The operator removed Uptime
+Kuma from the deployment direction on 2026-07-20; the endpoint remains the
+vendor-neutral monitoring boundary, but an external alert consumer has not yet
+been selected. Live stopped-scheduler alert delivery therefore remains required
+before WP1 closeout and before enabling the 5-minute refresh/10-minute
+evidence-expiry target.
 
 ### Phase 8: Deployment Handoff
 

@@ -147,7 +147,7 @@ class FreshnessEndpointTests(TestCase):
         self.assertEqual(self.client.get(reverse("health-freshness")).status_code, 403)
 
     @patch("health.views.build_freshness_report")
-    def test_warning_returns_non_200_for_uptime_monitor(self, build_report):
+    def test_warning_returns_non_200_for_external_monitor(self, build_report):
         build_report.return_value = self.report(STATUS_WARN)
 
         response = self.client.get(

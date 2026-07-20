@@ -18,7 +18,6 @@
 | Model gateway | OpenRouter | LLM access |
 | Reverse proxy | Traefik | Routing, TLS, service exposure |
 | Logs | Dozzle | Live Docker logs |
-| Uptime | Uptime Kuma | Health and uptime checks |
 
 ## Main Services
 
@@ -157,4 +156,3 @@ Use Docker Compose for the first customer deployment:
 - `spicedb`
 - `open-webui`
 - `dozzle`
-- `uptime-kuma`

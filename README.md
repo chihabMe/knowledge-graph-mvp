@@ -22,7 +22,6 @@ Users must not receive facts derived from Google Drive files they cannot access.
 - Authorization engine: SpiceDB
 - Reverse proxy: Traefik
 - Logs: Dozzle
-- Uptime checks: Uptime Kuma
 - User chat UI: Open WebUI
 - Model gateway: OpenRouter
 
@@ -121,7 +120,6 @@ and runs Django with autoreload:
 
 - Open WebUI
 - Dozzle
-- Uptime Kuma
 - Traefik
 - Celery beat
 

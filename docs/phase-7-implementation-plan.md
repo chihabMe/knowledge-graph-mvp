@@ -31,7 +31,7 @@ research pass. This is the working plan for
 | Freshness intervals as config | Done | `PERMISSION_SYNC_INTERVAL_SECONDS`, `GOOGLE_USER_VISIBILITY_SYNC_INTERVAL_SECONDS`, evidence max age; startup validator enforces expiry > interval |
 | Run/evidence bookkeeping for monitoring | Data exists, no alarms | `DriveSyncRun`, `PermissionSyncRun`, user visibility runs, `UserDocumentVisibility` timestamps |
 | Drive changes feed | **Missing** | No `changes.getStartPageToken` / `changes.list` / watch channels anywhere |
-| Pre-expiry alerting | **Missing** | Uptime-Kuma does HTTP health only; nothing computes last-success age or expiry proximity |
+| Pre-expiry alerting | **Missing** | No alert consumer computes or pages on last-success age or expiry proximity |
 | Content-currency gate at retrieval (issue #5) | **Missing** | `retrieval/services.py` never compares chunk provenance content version to `SourceDocument.content_hash` |
 | Evaluation dataset | Scaffold only | `data/eval/` has README + example YAMLs (`questions`, `refusals`, `users`); no real pilot questions, no runner |
 | Leak tests | Unit-level only | Extensive in-process tests; no black-box run against the live stack, nothing scheduled |
@@ -110,8 +110,8 @@ Design:
   run; error when expired or when the scheduler heartbeat itself is stale.
 - Expose two consumers:
   1. `GET /api/health/freshness/` (staff/monitoring authenticated, no
-     identities in the body — counts and worst-case ages only) so the
-     existing Uptime-Kuma service can poll and alert on non-200.
+     identities in the body — counts and worst-case ages only) so a selected
+     external monitoring service can poll and alert on non-200.
   2. Structured warning/error logs (class-name/count discipline as
      everywhere else).
 - Persist a small heartbeat row per scheduler tick so "beat is dead" is
@@ -125,7 +125,7 @@ Tasks:
 4. Beat wiring + stale-heartbeat coverage in the sweep tests.
 5. Deliberate-failure test: stop beat/worker in a live check, assert the
    endpoint degrades and retrieval still fails closed at expiry.
-6. Uptime-Kuma monitor configuration documented (infra README note).
+6. Vendor-neutral monitor contract documented (infra README note).
 
 Acceptance mapping: tracker "Monitor scheduler heartbeat ... alert before
 the 10-minute fail-closed deadline" and validation bullet "deliberately
@@ -296,7 +296,8 @@ enforced). Suggested branches: `codex/phase-7-wp1-freshness-monitoring`,
 ## 8. Out Of Scope (Phase 7)
 
 - Push notification channels (documented production option only).
-- Enterprise dashboards; the WP1 endpoint + Uptime-Kuma is the POC bar.
+- Enterprise dashboards; the WP1 endpoint plus external alert delivery is the
+  POC bar.
 - Usage/cost ledger (issue #2, later phase).
 - Multi-connection or shared-drive-scope generalization beyond keeping the
   cursor model per-connection.

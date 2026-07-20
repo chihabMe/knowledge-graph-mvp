@@ -61,7 +61,7 @@ else:
         "DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False
     )
 
-    # Traefik guards the ops UIs (Dozzle, Uptime Kuma) with this basicauth
+    # Traefik guards the Dozzle ops UI with this basicauth
     # credential. Django never uses it, but it is the one process guaranteed
     # to boot from the same .env, so it enforces what Traefik cannot check
     # itself: the documented local default (admin/password) must never reach

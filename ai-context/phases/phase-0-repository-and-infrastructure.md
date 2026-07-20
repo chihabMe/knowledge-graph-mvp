@@ -10,7 +10,7 @@ Create a clean repository baseline, persistent AI-agent documentation, and infra
 - GitHub repository.
 - AI-agent documentation.
 - Docker Compose infrastructure scaffold.
-- Traefik, Dozzle, Uptime Kuma, PostgreSQL, Redis, Neo4j, SpiceDB, and Open WebUI service definitions.
+- Traefik, Dozzle, PostgreSQL, Redis, Neo4j, SpiceDB, and Open WebUI service definitions.
 
 ## Out Of Scope
 
@@ -40,4 +40,3 @@ Create a clean repository baseline, persistent AI-agent documentation, and infra
 ## Completion Status
 
 Complete.
-
