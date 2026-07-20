@@ -16,6 +16,8 @@ deployment has evidence that the simpler POC design is insufficient.
 - Reconcile Shared Drive change logs and inherited-folder change fan-out.
 - Add scheduled and/or persisted evaluation only if recurring assurance is an
   operational requirement.
+- Do not add an embedded monitoring container; external alert delivery remains
+  optional and vendor-neutral.
 
 ## Tasks
 

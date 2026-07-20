@@ -41,6 +41,18 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
 - [ ] Write demo script. Effort: Medium.
 - [ ] Add troubleshooting guide. Effort: Medium.
 - [ ] Verify clean-server setup path. Effort: High.
+- [ ] Run `run_evaluation` against operator-owned real client questions and
+  allowed/denied leak cases. Keep fixtures ignored and do not persist output.
+  Effort: High.
+- [ ] Run a live document-edit drill: confirm the changed document is refused
+  while re-extraction is pending, then is available again only after success.
+  Effort: High.
+- [ ] Run a controlled Celery-worker crash/recovery drill for a running graph
+  extraction and confirm stale-run recovery cannot leave it stuck. Effort: High.
+- [ ] Run a several-hour scheduled-sync soak test and record queue, retry,
+  freshness, and resource observations. Effort: Medium.
+- [ ] Produce a concise Phase 7 evidence report covering tests, live timings,
+  known limits, and the four assurance checks above. Effort: Medium.
 
 ## Validation
 
@@ -54,6 +66,8 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
 - [ ] Demo script shows permission-safe retrieval behavior.
 - [ ] Clean-server startup rejects delegated ACL configuration and exposes only
   per-user OAuth onboarding/visibility workflows.
+- [ ] The client handoff includes the Phase 7 evidence report and the results
+  of the real-fixture, edit, worker-recovery, and soak checks.
 
 ## Completion Status
 
