@@ -516,6 +516,7 @@ class OpenWebUIAdapterLeakTests(TestCase):
         self.connection = DriveConnection.objects.create(
             workspace_domain="example.com",
             root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
 
     def create_document(self, drive_file_id, **overrides):

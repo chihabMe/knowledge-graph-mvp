@@ -99,7 +99,9 @@ class IdentifierTests(TestCase):
 class VerifiedPredicateTests(TestCase):
     def test_queryset_and_instance_predicates_agree(self):
         connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
         document = SourceDocument.objects.create(
             connection=connection,
@@ -124,7 +126,9 @@ class VerifiedPredicateTests(TestCase):
     @override_settings(PERMISSION_VERIFICATION_MAX_AGE_SECONDS=1800)
     def test_queryset_and_instance_deny_expired_verification(self):
         connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
         document = SourceDocument.objects.create(
             connection=connection,
@@ -209,7 +213,9 @@ class ManagedTupleReadTests(TestCase):
 class PermissionSyncTests(TestCase):
     def setUp(self):
         self.connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
         self.document = SourceDocument.objects.create(
             connection=self.connection,
@@ -565,7 +571,9 @@ class PermissionSyncTests(TestCase):
 class AllowedDocumentLookupTests(TestCase):
     def setUp(self):
         self.connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
         version = source_permissions_version([user_permission()])
         self.document = SourceDocument.objects.create(
@@ -625,7 +633,9 @@ class AllowedDocumentLookupTests(TestCase):
 class NormalDriveSyncPermissionTests(TestCase):
     def test_unchanged_acl_preserves_verification_and_changed_acl_invalidates_without_export(self):
         connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
         initial = [user_permission()]
         version = source_permissions_version(initial)
@@ -683,7 +693,9 @@ class NormalDriveSyncPermissionTests(TestCase):
 class PermissionApiTests(TestCase):
     def setUp(self):
         self.connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
         self.admin = get_user_model().objects.create_user(
             username="admin", email="admin@example.com", is_staff=True
@@ -731,7 +743,9 @@ class PermissionApiTests(TestCase):
 class PermissionTaskTests(TestCase):
     def setUp(self):
         self.connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
 
     @patch("integrations.tasks.synchronize_permissions")

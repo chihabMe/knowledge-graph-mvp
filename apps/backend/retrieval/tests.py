@@ -359,7 +359,9 @@ class StubAnswerGenerator:
 class QueryServiceSecurityTests(TestCase):
     def setUp(self):
         self.connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
 
     def create_document(self, drive_file_id, **overrides):
@@ -868,7 +870,9 @@ class QueryApiSecurityTests(TestCase):
         self, allowed_lookup, retriever_class
     ):
         connection = DriveConnection.objects.create(
-            workspace_domain="example.com", root_folder_id="root"
+            workspace_domain="example.com",
+            root_folder_id="root",
+            permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
         document = SourceDocument.objects.create(
             connection=connection,
