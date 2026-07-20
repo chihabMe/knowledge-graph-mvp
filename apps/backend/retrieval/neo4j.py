@@ -313,6 +313,7 @@ class Neo4jPermissionSafeRetriever:
             if key in seen:
                 continue
             seen.add(key)
+            content_version = document.get("content_hash")
             chunks.append(
                 RetrievedChunk(
                     source_document_id=source_document_id,
@@ -320,6 +321,7 @@ class Neo4jPermissionSafeRetriever:
                     text=text,
                     relevance=float(raw_relevance),
                     retrieval_modes=(mode,),
+                    content_version=content_version if isinstance(content_version, str) else "",
                 )
             )
         return tuple(chunks)
@@ -361,6 +363,7 @@ class Neo4jPermissionSafeRetriever:
             if key in seen:
                 continue
             seen.add(key)
+            content_version = document.get("content_hash")
             facts.append(
                 RetrievedFact(
                     source_document_id=source_document_id,
@@ -371,6 +374,7 @@ class Neo4jPermissionSafeRetriever:
                     text=text,
                     relevance=float(data.get("relevance", 0.0)),
                     retrieval_modes=("graph",),
+                    content_version=content_version if isinstance(content_version, str) else "",
                 )
             )
         return tuple(facts)

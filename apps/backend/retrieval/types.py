@@ -8,6 +8,9 @@ class RetrievedChunk:
     text: str
     relevance: float = 0.0
     retrieval_modes: tuple[str, ...] = field(default_factory=tuple)
+    # Content hash of the graph document version this chunk was extracted
+    # from. Empty means unknown, which retrieval must treat as stale.
+    content_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -20,6 +23,9 @@ class RetrievedFact:
     text: str
     relevance: float = 0.0
     retrieval_modes: tuple[str, ...] = field(default_factory=tuple)
+    # Content hash of the graph document version this fact was extracted
+    # from. Empty means unknown, which retrieval must treat as stale.
+    content_version: str = ""
 
 
 @dataclass(frozen=True)
