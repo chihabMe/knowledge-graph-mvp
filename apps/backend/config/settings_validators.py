@@ -322,3 +322,46 @@ def validate_google_user_oauth_settings(
         raise ImproperlyConfigured(
             "Google user token encryption keys must not reuse application secrets."
         )
+
+
+def validate_freshness_monitor_settings(
+    *,
+    interval_seconds: int,
+    warn_remaining_fraction: float,
+    heartbeat_max_age_seconds: int,
+    evidence_max_age_seconds: int,
+    monitor_bearer_key: str,
+    development_context: bool,
+) -> None:
+    """Reject freshness-monitor thresholds that could silence alerting."""
+    if not 1 <= interval_seconds <= 3600:
+        raise ImproperlyConfigured("FRESHNESS_MONITOR_INTERVAL_SECONDS must be between 1 and 3600.")
+    if not 0.0 < warn_remaining_fraction < 1.0:
+        raise ImproperlyConfigured(
+            "FRESHNESS_WARN_REMAINING_FRACTION must be strictly between 0 and 1."
+        )
+    if warn_remaining_fraction * evidence_max_age_seconds <= interval_seconds:
+        raise ImproperlyConfigured(
+            "FRESHNESS_WARN_REMAINING_FRACTION must provide more than one monitor "
+            "interval of warning before evidence expires."
+        )
+    if heartbeat_max_age_seconds <= interval_seconds:
+        raise ImproperlyConfigured(
+            "FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS must be greater than "
+            "FRESHNESS_MONITOR_INTERVAL_SECONDS so one late tick is not an outage."
+        )
+    if heartbeat_max_age_seconds + interval_seconds >= evidence_max_age_seconds:
+        raise ImproperlyConfigured(
+            "FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS must leave at least one monitor "
+            "interval before permission evidence expires."
+        )
+    if not development_context and (
+        len(monitor_bearer_key) < 32
+        or monitor_bearer_key != monitor_bearer_key.strip()
+        or monitor_bearer_key.startswith(INSECURE_SECRET_PREFIXES)
+        or not BEARER_TOKEN_PATTERN.fullmatch(monitor_bearer_key)
+    ):
+        raise ImproperlyConfigured(
+            "FRESHNESS_MONITOR_BEARER_KEY must be a non-default bearer token with at "
+            "least 32 characters outside development."
+        )

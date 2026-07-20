@@ -9,6 +9,7 @@ import environ
 from django.core.exceptions import ImproperlyConfigured
 
 from config.settings_validators import (
+    validate_freshness_monitor_settings,
     validate_google_session_oauth_settings,
     validate_google_user_oauth_settings,
     validate_open_webui_compatible_settings,
@@ -551,6 +552,35 @@ CELERY_BEAT_SCHEDULE.update(
     }
 )
 del _google_user_oauth_independent_secrets
+# Phase 7 WP1: freshness monitoring and pre-expiry alerting.
+FRESHNESS_MONITOR_INTERVAL_SECONDS = env.int("FRESHNESS_MONITOR_INTERVAL_SECONDS", default=60)
+FRESHNESS_WARN_REMAINING_FRACTION = env.float("FRESHNESS_WARN_REMAINING_FRACTION", default=0.4)
+FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS = env.int("FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS", default=180)
+# Dedicated bearer key so the monitoring service can poll the freshness
+# endpoint without a Django session. Empty is accepted only in development.
+FRESHNESS_MONITOR_BEARER_KEY = env("FRESHNESS_MONITOR_BEARER_KEY", default="")
+_freshness_evidence_max_age_seconds = (
+    GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS
+    if GOOGLE_PERMISSION_AUTHORITY == "per_user_oauth"
+    else PERMISSION_VERIFICATION_MAX_AGE_SECONDS
+)
+validate_freshness_monitor_settings(
+    interval_seconds=FRESHNESS_MONITOR_INTERVAL_SECONDS,
+    warn_remaining_fraction=FRESHNESS_WARN_REMAINING_FRACTION,
+    heartbeat_max_age_seconds=FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS,
+    evidence_max_age_seconds=_freshness_evidence_max_age_seconds,
+    monitor_bearer_key=FRESHNESS_MONITOR_BEARER_KEY,
+    development_context=_development_context,
+)
+del _freshness_evidence_max_age_seconds
+CELERY_BEAT_SCHEDULE.update(
+    {
+        "monitor-freshness": {
+            "task": "integrations.monitor_freshness",
+            "schedule": float(FRESHNESS_MONITOR_INTERVAL_SECONDS),
+        },
+    }
+)
 GOOGLE_DRIVE_SCOPE_TYPE = env("GOOGLE_DRIVE_SCOPE_TYPE", default="folder")
 # Must stay in sync with integrations.models.DriveConnection.ScopeType (models
 # can't be imported here). Fail at startup, not at the first model save.

@@ -8,6 +8,7 @@ from django.test import SimpleTestCase
 
 from config.settings_validators import (
     load_google_user_token_keyring,
+    validate_freshness_monitor_settings,
     validate_google_session_oauth_settings,
     validate_google_user_oauth_settings,
     validate_open_webui_compatible_settings,
@@ -265,3 +266,51 @@ class GoogleUserOAuthSettingsValidationTests(SimpleTestCase):
         )
         with self.assertRaises(ImproperlyConfigured):
             load_google_user_token_keyring(str(self.keyring_file))
+
+
+class FreshnessMonitorSettingsValidationTests(SimpleTestCase):
+    valid_values = {
+        "interval_seconds": 60,
+        "warn_remaining_fraction": 0.4,
+        "heartbeat_max_age_seconds": 180,
+        "evidence_max_age_seconds": 600,
+        "monitor_bearer_key": "k" * 32,
+        "development_context": False,
+    }
+
+    def validate(self, **overrides):
+        return validate_freshness_monitor_settings(**{**self.valid_values, **overrides})
+
+    def test_valid_settings_pass(self):
+        self.assertIsNone(self.validate())
+        self.assertIsNone(self.validate(monitor_bearer_key="", development_context=True))
+
+    def test_interval_must_stay_within_bounds(self):
+        for interval in (0, -1, 3601):
+            with self.subTest(interval=interval):
+                with self.assertRaises(ImproperlyConfigured):
+                    self.validate(interval_seconds=interval)
+
+    def test_warn_fraction_must_be_strictly_between_zero_and_one(self):
+        for fraction in (0.0, 1.0, -0.1, 1.5):
+            with self.subTest(fraction=fraction):
+                with self.assertRaises(ImproperlyConfigured):
+                    self.validate(warn_remaining_fraction=fraction)
+
+    def test_heartbeat_max_age_must_exceed_interval(self):
+        with self.assertRaises(ImproperlyConfigured):
+            self.validate(heartbeat_max_age_seconds=60)
+
+    def test_warning_window_must_exceed_monitor_interval(self):
+        with self.assertRaises(ImproperlyConfigured):
+            self.validate(warn_remaining_fraction=0.1)
+
+    def test_heartbeat_alert_must_precede_evidence_expiry(self):
+        with self.assertRaises(ImproperlyConfigured):
+            self.validate(heartbeat_max_age_seconds=540)
+
+    def test_production_bearer_key_is_required_and_strict(self):
+        for key in ("", "short", "change-this-monitor-key" + "x" * 16, "x" * 31 + " "):
+            with self.subTest(key=key):
+                with self.assertRaises(ImproperlyConfigured):
+                    self.validate(monitor_bearer_key=key)
