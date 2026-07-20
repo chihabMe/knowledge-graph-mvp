@@ -130,5 +130,6 @@ The next implementation steps are:
    demo, and client handoff documentation.
 2. Keep `.env.example` and tracked docs OpenRouter-shaped.
 3. Preserve provenance on every graph write and keep retrieval fail-closed.
-4. Keep delegated ACL/group sync only as an explicit optional mode; never union
+4. Treat delegated ACL/group sync as dormant implementation only: do not expose,
+   document, deploy, or test it as a POC completion requirement, and never union
    it with ADR-015 per-user relationships or fall back to it automatically.

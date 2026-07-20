@@ -593,9 +593,10 @@ Live completion requires:
 - fresh successful per-user visibility synchronization for the live documents;
 - OpenRouter configuration already proven in Phase 5.
 
-Domain-wide-delegated ACL and Directory group validation is no longer a POC
-completion dependency. It remains an optional legacy/future mode and must not
-be automatically combined with per-user relationships.
+Domain-wide-delegated ACL and Directory group validation is not a POC
+completion dependency. ADR-021 leaves that implementation dormant and
+unsupported; it must not be exposed, scheduled, automatically selected, or
+combined with per-user relationships.
 
 ## Phase 6 Definition Of Done
 

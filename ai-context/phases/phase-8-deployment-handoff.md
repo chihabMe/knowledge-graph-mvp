@@ -23,6 +23,9 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
 ## Tasks
 
 - [ ] Write deployment guide. Effort: Medium.
+- [ ] Document only the supported POC onboarding: the administrator selects the
+  company root, then every pilot user connects Google once. Do not include
+  delegated ACL/domain-wide delegation as an operator option. Effort: Low.
 - [ ] Write backup guide. Effort: High.
 - [ ] Write restore guide. Effort: High.
 - [ ] Write maintenance checklist. Effort: Medium.
@@ -49,6 +52,8 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
 - [ ] The approved chat-history retention period and deletion responsibilities
   are configured, tested, and included in client handoff.
 - [ ] Demo script shows permission-safe retrieval behavior.
+- [ ] Clean-server startup rejects delegated ACL configuration and exposes only
+  per-user OAuth onboarding/visibility workflows.
 
 ## Completion Status
 

@@ -151,8 +151,9 @@ python manage.py check --deploy
   and an attached service account on Google Compute Engine. Do not weaken an
   organization policy merely to create a long-lived service-account key.
 - Employee visibility uses admin-approved per-user OAuth under ADR-015.
-  Domain-wide delegation is an optional legacy/future mode, not an automatic
-  fallback.
+  This is the only supported POC mode. Domain-wide delegated ACL code is
+  dormant, is not exposed or scheduled in normal deployments, and must never
+  become an automatic fallback.
 - Manual Drive root IDs in `.env` are a bootstrap/developer fallback. The
   client-facing path must persist the selected root in `DriveConnection`.
 - Store Drive metadata needed for provenance and sync:

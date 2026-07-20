@@ -120,8 +120,8 @@ change detection, Celery sync task with post-commit extraction queueing
 (Phase 3 stub), admin root list/select endpoints, and the admin-only,
 rate-limited, audited `POST /api/ingest/drive/sync/` endpoint are implemented
 with offline tests (fake Drive service — no network). The admin connection flow
-also includes controlled domain-wide delegated-subject configuration for the
-optional legacy permission mode. After ADR-015's Phase 6 cutover, unreadable
+also retains dormant domain-wide delegated-subject code, but supported POC
+deployments do not expose it. After ADR-015's Phase 6 cutover, unreadable
 service-account ACLs will no longer block the POC content path; Phase 6 will
 verify employee visibility with per-user OAuth over the already-indexed IDs.
 Until that mode-aware implementation lands, the existing code still follows

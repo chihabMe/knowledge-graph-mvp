@@ -12,6 +12,8 @@ The system should ingest an organization's Google Drive documents, structure the
 
 - Connect to a customer's Google Workspace / Google Drive.
 - Let an admin choose the Drive root folder or shared drive to ingest.
+- Let each employee connect Google once so the system can verify which indexed
+  documents that employee may access.
 - Read supported files from the selected Drive folder or shared drive.
 - Extract document text, chunks, entities, relationships, and metadata.
 - Store graph facts and source provenance in Neo4j.

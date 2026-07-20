@@ -36,9 +36,10 @@ This backlog is ordered by dependency and risk.
 - Add `retrieval_eligible = False` default on source document records.
 - Store selected-root membership, folder ancestry, owner metadata where
   available, and the provenance generation required by the active permission
-  authority. Full ACL payloads remain optional legacy-mode metadata.
+  authority. Full ACL payloads belong only to dormant delegated code and are
+  not POC work.
 - Store controlled exclusion reasons for unsupported/out-of-scope content.
-  Shared-link/public ACL classification applies only to delegated ACL mode;
+  Shared-link/public ACL classification exists only in dormant delegated code;
   per-user OAuth grants only when Google confirms the actual user's access.
 - Queue extraction jobs.
 - Track content hashes and modified times.

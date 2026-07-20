@@ -72,8 +72,8 @@ Google Drive
 
 ### Milestone 4: SpiceDB Permission Sync
 
-- Model users and indexed documents; retain group/folder ACL modeling as an
-  optional legacy mode.
+- Model users and indexed documents. Keep the old group/folder ACL code dormant
+  until a separate cleanup; it is not a supported POC mode.
 - Verify already-indexed IDs with each connected employee's OAuth credential.
 - Sync direct user/document visibility with freshness evidence.
 - Build allowed-document checks.
@@ -99,7 +99,7 @@ Google Drive
 4–6 week target. The build milestones above map to the 7 work packages defined in the developer scope doc (`output/pdf/organizational-knowledge-graph-developer-scope-v6.pdf`, WP1–WP7). Tracking against work packages directly, not a flattened set of phases, because collapsing them hides real prerequisites (WP6 must be decided before WP1 extraction is finalized) and distinct concerns (WP5 and WP7 are different problems that happen to land in the same week).
 
 - **Week 1 — Foundation + WP6 start (Ontology):** Finalize scope, stand up the backend/Docker foundation, confirm the Google Drive access approach, prepare data models. Begin WP6 — decide entity/relationship types and the provenance visibility rule (any-source-visible vs. all-sources-visible) before extraction is finalized. (Milestone 1, start of Milestone 2)
-- **Week 2 — WP1 (Document Intake & Graph Building), Drive connector half:** Google Drive ingestion — Docs, Sheets, PDFs, selected-root/provenance metadata, and sync tracking. Full copied ACL metadata is optional legacy-mode work. (Milestone 2 content foundation)
+- **Week 2 — WP1 (Document Intake & Graph Building), Drive connector half:** Google Drive ingestion — Docs, Sheets, PDFs, selected-root/provenance metadata, and sync tracking. Full copied ACL metadata belongs only to dormant delegated code and is not POC work. (Milestone 2 content foundation)
 - **Week 3 — WP1 continued + WP6 finalized:** Neo4j graph/provenance layer; evaluate the best extraction approach (neo4j-graphrag vs. Graphify/Graphiti); provenance tagging on every node/relationship. Ontology (WP6) locked before this closes. (Milestone 3)
 - **Week 4 — WP4 (Identity & Permissions):** Open WebUI Google login, separate admin-approved Django Drive consent, indexed-ID visibility checks, and direct per-user SpiceDB relationships with fresh evidence. Start of the permission pre-filter that WP2 depends on. (Milestone 4, start of Milestone 5)
 - **Week 5 — WP2 (Retrieval Middleware) + WP3 (Hybrid Retrieval + Embeddings):** Open WebUI/OpenRouter integration, permission pre-filter wired into retrieval, embeddings + vector index alongside graph traversal, citations, chat flow testing. (Milestone 5 complete)

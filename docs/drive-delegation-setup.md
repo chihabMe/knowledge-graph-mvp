@@ -1,9 +1,11 @@
 # Enabling Drive Permission Sync
 
-> **Legacy optional mode:** ADR-015 replaces domain-wide delegation as the
-> default POC permission authority. Use this guide only when a client explicitly
-> selects delegated ACL/group synchronization. The active Phase 6 path is
-> `docs/phase-6-pre-authorized-oauth-completion-plan.md`.
+> **Dormant historical implementation — unsupported:** ADR-021 makes per-user
+> OAuth the only documented and supported POC authority. Production startup
+> rejects delegated mode, and its endpoints and scheduled jobs are not
+> registered. Do not use this guide for client onboarding. It remains only as
+> cleanup/rollback context until the dormant code is removed separately. The
+> supported path is `docs/phase-6-pre-authorized-oauth-completion-plan.md`.
 
 The knowledge layer only answers from documents a user is allowed to see. To
 know who is allowed, it must read each file's sharing list ("who has access")

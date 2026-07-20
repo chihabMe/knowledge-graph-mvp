@@ -144,9 +144,9 @@ Phases 1 and 2 are code complete for service-account content ingestion from a
 selected root; employee visibility now follows ADR-015's per-user OAuth plan
 rather than waiting on delegation. Phase 3, Neo4j graph and
 provenance, is code complete and merged into `main`; its guard-wiring seam
-moved to the Phase 5 tracker. Phase 4's delegated ACL/group sync is code
-complete but retained only as an optional legacy mode; direct per-user
-SpiceDB visibility is Phase 6 completion work. Phase 5 permission-safe
+moved to the Phase 5 tracker. Phase 4's delegated ACL/group sync code is
+dormant and unavailable in supported POC deployments; the live-validated
+per-user OAuth path is the sole supported permission authority. Phase 5 permission-safe
 retrieval is code complete and live validated: the authenticated query
 contract, SpiceDB pre-filter, fresh evidence gate, guarded hybrid
 keyword/vector/one-hop graph retrieval, bounded context, server-owned

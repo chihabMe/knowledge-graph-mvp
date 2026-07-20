@@ -700,6 +700,34 @@ Reason:
 Status: Accepted and implemented (2026-07-20). Live content reconciliation and
 the manual fail-closed/recovery drill passed; Phase 7 is complete.
 
+## ADR-021: Per-User OAuth Is The Only Supported POC Permission Mode
+
+Decision: Admin-approved per-user Drive OAuth is the sole documented,
+onboarded, and supported POC permission authority. The administrator selects
+the company folder or Shared Drive, and each user connects Google once so the
+system can verify which indexed documents that user may access.
+
+Keep the existing delegated ACL/group implementation dormant temporarily to
+avoid a risky deletion during POC acceptance. Normal deployments default to
+`per_user_oauth`, reject `delegated_acl` at startup, do not register delegated
+operator endpoints, and do not schedule delegated reconciliation jobs.
+Isolated development tests may still exercise the dormant code. Delegated
+Google validation and maintenance are not POC completion requirements; delete
+the implementation later as a separate cleanup decision.
+
+Reason:
+
+- The client explicitly rejected domain-wide delegation because many target
+  companies do not have the IT capacity to configure and maintain it.
+- Per-user OAuth already passed the real two-user authorization matrix and
+  preserves Google as the visibility authority without administrator
+  impersonation.
+- Hiding dormant routes and schedules prevents an unsupported mode from being
+  selected accidentally while retaining a low-risk rollback reference until
+  the POC is accepted.
+
+Status: Accepted and implemented (2026-07-20).
+
 ## Open / Needs Explicit Confirmation
 
 Not yet decisions — flagged so they don't get silently locked in by omission:

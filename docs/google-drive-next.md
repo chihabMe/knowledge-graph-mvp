@@ -2,8 +2,8 @@
 
 > **Status update (2026-07-14):** The service-account selected-root content
 > path in this document remains current. ADR-015 supersedes its ACL/group
-> permission-authority sections: the POC will use admin-approved per-user Drive
-> OAuth and the active completion plan in
+> permission-authority sections, and ADR-021 makes the delegated implementation
+> dormant and unsupported. The POC uses admin-approved per-user Drive OAuth and the active completion plan in
 > `docs/phase-6-pre-authorized-oauth-completion-plan.md`.
 
 Phase 2 starts the real client-data path. The goal is not answer generation yet.
@@ -17,8 +17,8 @@ The first pilot uses a per-client Google service account and share-to-connect
 setup for content only: the client shares the intended folder or Shared Drive,
 then an admin selects that root. Each employee separately grants the approved
 Django Drive OAuth client metadata access so Google can verify that employee's
-visibility over the already-indexed IDs. Domain-wide delegation is optional,
-not the POC default or an automatic fallback.
+visibility over the already-indexed IDs. Domain-wide delegation is not a
+supported POC option or an automatic fallback.
 
 ## Phase 2 Flow
 
@@ -35,8 +35,8 @@ not the POC default or an automatic fallback.
 7. Start a Drive sync run from the Django backend.
 8. Celery lists files in the selected scope.
 9. For each file, store metadata in PostgreSQL before content extraction.
-10. Capture selected-root and provenance metadata; full ACL capture is required
-    only by the optional legacy delegated mode.
+10. Capture selected-root and provenance metadata; full ACL capture is not
+    required by the supported per-user OAuth path.
 11. Export or download supported content types.
 12. Compute a SHA-256 content hash and compare modified time/checksum.
 13. Queue extraction/indexing work only when content changed.
@@ -187,10 +187,7 @@ objects.
 ```http
 GET /api/ingest/drive/roots/
 POST /api/ingest/drive/connection/root/
-POST /api/ingest/drive/connection/delegated-subject/
-GET /api/ingest/drive/permissions/check/
 POST /api/ingest/drive/sync/
-POST /api/permissions/sync/
 GET /api/health/
 ```
 
@@ -202,21 +199,6 @@ from that visible list, then persists the selected ingestion scope in
 `DriveConnection`. When the selected root changes, existing documents for that
 connection are marked non-retrievable until the new scope is synced; the
 response includes `rescoped_document_count` for operator visibility.
-
-`POST /api/ingest/drive/connection/delegated-subject/` accepts a single
-`delegated_subject_email` value. A valid email configures the Workspace user
-used for domain-wide delegation; an empty string clears it. When the value
-changes, retrievable documents for that connection are marked non-retrievable
-until permissions are refreshed under the new identity. The endpoint is
-admin-only, rate limited, and ignores any Drive root/scope fields in the
-request body.
-
-`GET /api/ingest/drive/permissions/check/` samples files under the selected
-root and returns only counts/status for Drive ACL readability and folder-listing
-failures. It is an operator diagnostic for validating whether the configured
-service account or delegated subject can call `permissions.list()` before
-content ingestion is trusted. It must not return raw permission entries,
-filenames, folder names, or document contents.
 
 `POST /api/ingest/drive/sync/` starts or resumes Drive ingestion for the
 configured pilot scope. The Drive scope, folder ID, or shared drive ID must be

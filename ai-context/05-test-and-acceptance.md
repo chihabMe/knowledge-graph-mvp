@@ -41,14 +41,16 @@
   user's Drive or downloads content.
 - User with access retrieves answer.
 - User without access does not retrieve answer.
-- Group-based access works.
-- Folder-inherited access works.
+- Group-based and folder-inherited access work when Google confirms the
+  connected user's visibility to the indexed file.
 - Permission-only change updates SpiceDB without re-embedding.
 - Expired permission-verification evidence denies access even when a stale
   SpiceDB grant remains.
 - OAuth disconnect, token revocation/refresh failure, account/root/mode change,
   and per-user evidence expiry deny even when a stale SpiceDB tuple remains.
 - One user's visibility refresh cannot touch another user's evidence or tuples.
+- Dormant delegated ACL tests are regression coverage only; live delegated
+  validation is not a POC acceptance or completion requirement.
 
 ### Retrieval Tests
 

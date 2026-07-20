@@ -71,12 +71,13 @@ Phase 3 is code complete and merged into `main`: the graph app, ontology,
 Neo4j setup, extraction adapter, document/chunk/entity/relationship writers,
 source provenance guard, Chunk vector-index setup, and extraction-recovery
 hardening are implemented and covered by tests. Phase 4's delegated ACL/group
-synchronization path is code complete, but ADR-015 supersedes it as the default
-POC permission authority. Phase 6 now has live-validated per-user OAuth
+synchronization code is retained only as a dormant implementation; ADR-021
+makes it unsupported and unreachable in normal POC deployments. Phase 6 has
+live-validated per-user OAuth
 visibility snapshots, direct SpiceDB document grants, per-user freshness
 evidence, and mode-aware retrieval;
-domain-wide delegation remains an optional future mode rather than a POC
-blocker. The next product-risk
+domain-wide delegation is neither an onboarding option nor a completion
+requirement. The next product-risk
 dependency, Phase 5 retrieval, is code complete: the authenticated
 `/api/query/` contract, SpiceDB pre-filter, fresh PostgreSQL evidence gate,
 provenance-constrained Neo4j keyword/vector/one-hop fact retrieval, bounded
@@ -300,12 +301,14 @@ regardless of file type.
 
 Use SpiceDB. Do not invent a custom permission system.
 
-Phase 4's existing delegated mode uses checked-in Authzed schema definitions
+Phase 4's dormant delegated code uses checked-in Authzed schema definitions
 prefixed with `kgm/` and models Drive roles, folder inheritance, and recursive
-Google Groups. ADR-015 retains that implementation only as an optional legacy
-mode. The POC default adds a distinct direct relation from an opaque user
-subject to an indexed document after Google confirms visibility using that
-user's OAuth credential. The relation must not pretend to be a Drive ACL role.
+Google Groups. ADR-021 keeps it available only for isolated development tests;
+production startup rejects that authority and its API routes and Beat jobs are
+not registered. The sole supported POC path adds a distinct direct relation
+from an opaque user subject to an indexed document after Google confirms
+visibility using that user's OAuth credential. The relation must not pretend
+to be a Drive ACL role.
 Raw Drive IDs and email addresses never appear in SpiceDB object IDs, logs, or
 API responses.
 
@@ -564,34 +567,9 @@ Drive connection.
 Persists the admin-selected Drive ingestion root after matching it against
 the visible candidate list.
 
-### `POST /ingest/drive/connection/delegated-subject` (legacy optional mode)
-
-Sets or clears the optional delegated Workspace user used for domain-wide
-delegation.
-
-Expected behavior:
-
-- Admin-only.
-- Accepts only `delegated_subject_email`; an empty string clears the override.
-- Validates non-empty values as email addresses.
-- Does not accept Drive root or scope changes.
-- When the value changes, marks retrievable documents for that connection
-  non-retrievable until permissions are refreshed under the new identity.
-
-### `GET /ingest/drive/permissions/check` (legacy optional mode)
-
-Samples files under the selected Drive root and reports whether the configured
-connection can read Drive permission metadata for them.
-
-Expected behavior:
-
-- Admin-only.
-- Reads the selected root from server-side `DriveConnection` state.
-- Returns counts of sampled files with readable/unreadable ACL metadata and
-  folder-listing failures.
-- Does not return raw permission payloads or document content.
-- Used to validate service-account vs. domain-wide delegation readiness before
-  relying on content ingestion.
+The old delegated-subject, ACL-readiness, and delegated permission-sync
+endpoints are dormant implementation details. They are not registered in a
+supported POC deployment and must not appear in onboarding or operator guides.
 
 ### `GET /api/session/google/start` and `GET /api/session/google/callback`
 
@@ -644,10 +622,11 @@ Expected behavior:
 - Update Neo4j.
 - Return counts for scanned, ingested, skipped, failed.
 
-### `POST /permissions/sync` (legacy optional mode)
+### Dormant delegated permission-sync interface
 
-Creates an admin-only, rate-limited permission-sync audit run and queues it.
-The request cannot supply or widen Drive scope.
+The old `POST /permissions/sync` and companion detail route remain in source
+only for isolated legacy tests. Supported POC deployments do not register them
+or schedule delegated reconciliation.
 
 Expected behavior:
 
@@ -799,8 +778,8 @@ strict rule requiring all source documents for a graph element to be visible.
 ### Phase 4: SpiceDB Permissions
 
 Status: delegated ACL/group implementation code complete (2026-07-11) but
-superseded as the default POC authority by ADR-015. The direct per-user
-visibility path is planned as Phase 6 completion work.
+dormant and unsupported under ADR-021. The direct per-user visibility path was
+completed and live validated in Phase 6 and is the only POC authority.
 
 Purpose: model Google Drive visibility in SpiceDB and expose allowed-document
 lookup for retrieval. Do not replace this with ad hoc PostgreSQL permission
