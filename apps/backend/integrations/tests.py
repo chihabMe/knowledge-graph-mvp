@@ -42,6 +42,7 @@ from integrations.tasks import (
     prune_completed_sync_runs,
     queue_document_extraction,
     run_drive_sync,
+    schedule_drive_syncs,
     sweep_stale_drive_sync_runs,
     sweep_stale_graph_extractions,
 )
@@ -332,6 +333,7 @@ class FakePermissionsResource:
         self._service = service
 
     def list(self, *, fileId, pageToken=None, **_kwargs):
+        self._service.permission_calls.append(fileId)
         if fileId in self._service.permission_errors:
             return FakeApiCall(self._service.permission_errors[fileId])
         pages = self._service.permission_pages.get(fileId, [[]])
@@ -393,6 +395,7 @@ class FakeGoogleDriveService:
         self.media_data = media_data or {}
         self.export_calls = []
         self.media_calls = []
+        self.permission_calls = []
 
     def files(self):
         return FakeFilesResource(self)
@@ -523,6 +526,25 @@ class GoogleDriveMetadataClientTests(TestCase):
             [permission["id"] for permission in by_id["file-1"].permissions],
             ["perm-1", "perm-2"],
         )
+
+    @override_settings(GOOGLE_PERMISSION_AUTHORITY="per_user_oauth")
+    def test_per_user_content_walk_does_not_request_non_authoritative_acls(self):
+        connection = self._folder_connection()
+        connection.permission_authority = DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        connection.save(update_fields=["permission_authority"])
+        service = FakeGoogleDriveService(
+            folder_names={"folder-root": "Pilot"},
+            children_pages={
+                "folder-root": [[_file_entry("file-1", "A.pdf", parents=["folder-root"])]],
+            },
+            permission_errors={"file-1": AssertionError("permissions.list must not run")},
+        )
+
+        files = GoogleDriveMetadataClient(service=service).list_files(connection)
+
+        self.assertEqual(service.permission_calls, [])
+        self.assertEqual(files[0].permissions, [])
+        self.assertFalse(files[0].permissions_fetch_failed)
 
     def test_permission_fetch_failure_is_isolated_to_that_file(self):
         # Reproduces a real Drive response: a file listable via files.list()
@@ -1198,6 +1220,69 @@ class DriveContentSyncTests(TestCase):
 
         self.assertEqual(exporter.calls, ["drive-file-1"])
         self.assertEqual(len(queued), 1)
+
+    @override_settings(GOOGLE_PERMISSION_AUTHORITY="per_user_oauth")
+    def test_per_user_unchanged_content_preserves_coarse_retrieval_gate(self):
+        self.connection.permission_authority = DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        self.connection.save(update_fields=["permission_authority"])
+        modified_time = datetime(2026, 7, 2, tzinfo=UTC)
+        exporter = FakeContentExporter()
+        client = FakeDriveMetadataClient([self._doc_metadata(modified_time)])
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=lambda _document_id, _content_hash: None,
+        )
+        document = SourceDocument.objects.get(drive_file_id="drive-file-1")
+        SourceDocument.objects.filter(pk=document.pk).update(
+            retrieval_eligible=True,
+            graph_extraction_status=SourceDocument.GraphExtractionStatus.SUCCEEDED,
+        )
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=lambda _document_id, _content_hash: None,
+        )
+
+        document.refresh_from_db()
+        self.assertTrue(document.retrieval_eligible)
+        self.assertEqual(exporter.calls, ["drive-file-1"])
+
+    @override_settings(GOOGLE_PERMISSION_AUTHORITY="per_user_oauth")
+    def test_per_user_changed_content_closes_coarse_retrieval_gate(self):
+        self.connection.permission_authority = DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        self.connection.save(update_fields=["permission_authority"])
+        first = FakeDriveMetadataClient([self._doc_metadata(datetime(2026, 7, 2, tzinfo=UTC))])
+        exporter = FakeContentExporter(payload=b"first")
+        sync_drive_metadata(
+            connection=self.connection,
+            client=first,
+            content_exporter=exporter,
+            queue_extraction=lambda _document_id, _content_hash: None,
+        )
+        document = SourceDocument.objects.get(drive_file_id="drive-file-1")
+        SourceDocument.objects.filter(pk=document.pk).update(
+            retrieval_eligible=True,
+            graph_extraction_status=SourceDocument.GraphExtractionStatus.SUCCEEDED,
+        )
+        exporter.payload = b"second"
+
+        sync_drive_metadata(
+            connection=self.connection,
+            client=FakeDriveMetadataClient([self._doc_metadata(datetime(2026, 7, 3, tzinfo=UTC))]),
+            content_exporter=exporter,
+            queue_extraction=lambda _document_id, _content_hash: None,
+        )
+
+        document.refresh_from_db()
+        self.assertFalse(document.retrieval_eligible)
+        self.assertEqual(
+            document.graph_extraction_status,
+            SourceDocument.GraphExtractionStatus.PENDING,
+        )
 
     def test_sync_requeues_failed_extraction_without_reexporting_content(self):
         modified_time = datetime(2026, 7, 2, tzinfo=UTC)
@@ -2241,6 +2326,18 @@ class RunDriveSyncTaskTests(TestCase):
         self.assertEqual(self.run.error_summary, "builtins.RuntimeError")
         self.assertIsNotNone(self.run.finished_at)
 
+    @patch("integrations.tasks.build_drive_service", side_effect=OSError("private"))
+    def test_transient_drive_failure_returns_run_to_queue_before_retry(self, _mock_build):
+        with patch.object(run_drive_sync, "retry", side_effect=RuntimeError("retry")):
+            with self.assertRaisesRegex(RuntimeError, "retry"):
+                run_drive_sync.run(self.run.pk)
+
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.status, DriveSyncRun.Status.QUEUED)
+        self.assertEqual(self.run.error_summary, "")
+        self.assertIsNone(self.run.started_at)
+        self.assertIsNone(self.run.finished_at)
+
     @patch("integrations.tasks.build_drive_service")
     def test_finished_runs_are_never_reexecuted(self, mock_build):
         self.run.status = DriveSyncRun.Status.SUCCEEDED
@@ -2262,6 +2359,55 @@ class RunDriveSyncTaskTests(TestCase):
 
         mock_build.assert_not_called()
         self.assertEqual(result["status"], DriveSyncRun.Status.RUNNING)
+
+
+class ScheduleDriveSyncsTaskTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="folder-root",
+        )
+
+    @patch("integrations.tasks.run_drive_sync.delay")
+    def test_scheduler_creates_and_dispatches_one_run(self, delay):
+        result = schedule_drive_syncs()
+
+        run = DriveSyncRun.objects.get(connection=self.connection)
+        self.assertEqual(run.status, DriveSyncRun.Status.QUEUED)
+        delay.assert_called_once_with(run.pk)
+        self.assertEqual(result, {"scheduled": 1, "redispatched": 0})
+
+    @patch("integrations.tasks.run_drive_sync.delay")
+    def test_scheduler_redispatches_queued_run_without_creating_another(self, delay):
+        run = DriveSyncRun.create_for_connection(self.connection)
+
+        result = schedule_drive_syncs()
+
+        self.assertEqual(DriveSyncRun.objects.count(), 1)
+        delay.assert_called_once_with(run.pk)
+        self.assertEqual(result, {"scheduled": 0, "redispatched": 1})
+
+    @patch("integrations.tasks.run_drive_sync.delay")
+    def test_scheduler_skips_running_disabled_and_unconfigured_connections(self, delay):
+        run = DriveSyncRun.create_for_connection(self.connection)
+        run.status = DriveSyncRun.Status.RUNNING
+        run.save(update_fields=["status"])
+        DriveConnection.objects.create(
+            workspace_domain="disabled.example.com",
+            root_folder_id="disabled-root",
+            enabled=False,
+        )
+        DriveConnection.objects.create(workspace_domain="unconfigured.example.com")
+
+        result = schedule_drive_syncs()
+
+        delay.assert_not_called()
+        self.assertEqual(DriveSyncRun.objects.count(), 1)
+        self.assertEqual(result, {"scheduled": 0, "redispatched": 0})
+
+    def test_scheduler_is_registered_with_celery_beat(self):
+        tasks = {entry["task"] for entry in settings.CELERY_BEAT_SCHEDULE.values()}
+        self.assertIn("integrations.schedule_drive_syncs", tasks)
 
 
 class QueueDocumentExtractionTaskTests(TestCase):

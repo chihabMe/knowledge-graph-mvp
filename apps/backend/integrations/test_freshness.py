@@ -16,6 +16,7 @@ from integrations.freshness import (
 )
 from integrations.models import (
     DriveConnection,
+    DriveSyncRun,
     GoogleDriveAuthorization,
     PermissionSyncRun,
     SchedulerHeartbeat,
@@ -60,6 +61,12 @@ class PerUserFreshnessTests(TestCase):
             name=FRESHNESS_HEARTBEAT_NAME,
             defaults={"last_tick_at": self.now - datetime.timedelta(seconds=10)},
         )
+        content_run = DriveSyncRun.create_for_connection(self.connection)
+        DriveSyncRun.objects.filter(pk=content_run.pk).update(
+            status=DriveSyncRun.Status.SUCCEEDED,
+            started_at=self.now - datetime.timedelta(seconds=35),
+            finished_at=self.now - datetime.timedelta(seconds=30),
+        )
 
     def test_healthy_authorization_reports_identity_free_worst_case_ages(self):
         report = build_freshness_report(now=self.now)
@@ -95,6 +102,40 @@ class PerUserFreshnessTests(TestCase):
         self.assertEqual(expired.status, STATUS_ERROR)
         self.assertEqual(expired.targets_expired, 1)
         self.assertEqual(expired.worst_remaining_evidence_seconds, 0)
+
+    @override_settings(DRIVE_CONTENT_SYNC_MAX_AGE_SECONDS=1800)
+    def test_content_sync_age_warns_then_errors_without_exposing_connection_data(self):
+        DriveSyncRun.objects.filter(connection=self.connection).update(
+            finished_at=self.now - datetime.timedelta(seconds=1200)
+        )
+        warning = build_freshness_report(now=self.now)
+        self.assertEqual(warning.status, STATUS_WARN)
+        self.assertEqual(warning.content_sync_expiring_soon, 1)
+        self.assertEqual(warning.worst_content_sync_age_seconds, 1200)
+
+        DriveSyncRun.objects.filter(connection=self.connection).update(
+            finished_at=self.now - datetime.timedelta(seconds=1801)
+        )
+        expired = build_freshness_report(now=self.now)
+        self.assertEqual(expired.status, STATUS_ERROR)
+        self.assertEqual(expired.content_sync_overdue, 1)
+        self.assertNotIn("example.com", str(expired.as_payload()).lower())
+
+    def test_never_successful_content_sync_uses_connection_grace_then_errors(self):
+        DriveSyncRun.objects.all().delete()
+        DriveConnection.objects.filter(pk=self.connection.pk).update(
+            created_at=self.now - datetime.timedelta(seconds=60)
+        )
+        warning = build_freshness_report(now=self.now)
+        self.assertEqual(warning.status, STATUS_WARN)
+        self.assertEqual(warning.content_sync_never_succeeded, 1)
+
+        DriveConnection.objects.filter(pk=self.connection.pk).update(
+            created_at=self.now - datetime.timedelta(seconds=121)
+        )
+        expired = build_freshness_report(now=self.now)
+        self.assertEqual(expired.status, STATUS_ERROR)
+        self.assertEqual(expired.content_sync_overdue, 1)
 
     def test_never_successful_target_and_stale_heartbeat_are_errors(self):
         self.authorization.last_successful_visibility_sync_at = None
@@ -352,6 +393,12 @@ class DelegatedFreshnessTests(TestCase):
             status=PermissionSyncRun.Status.SUCCEEDED,
             started_at=self.now - datetime.timedelta(seconds=130),
             finished_at=self.now - datetime.timedelta(seconds=100),
+        )
+        content_run = DriveSyncRun.create_for_connection(self.connection)
+        DriveSyncRun.objects.filter(pk=content_run.pk).update(
+            status=DriveSyncRun.Status.SUCCEEDED,
+            started_at=self.now - datetime.timedelta(seconds=35),
+            finished_at=self.now - datetime.timedelta(seconds=30),
         )
         self.document = SourceDocument.objects.create(
             connection=self.connection,
