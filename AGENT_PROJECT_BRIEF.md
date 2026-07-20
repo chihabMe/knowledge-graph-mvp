@@ -916,6 +916,14 @@ prove safety with repeatable answer-quality and leak tests, implement the
 5-minute refresh/10-minute evidence-expiry production target, and monitor
 failed or delayed synchronization before enabling those tighter limits.
 
+Status: WP4's content-currency retrieval gate is complete. WP1 freshness
+monitoring is code complete and offline-validated on its implementation branch:
+it records a scheduler/worker heartbeat, aggregates identity-free worst-case
+permission freshness and run health, exposes an authenticated non-200 alert
+endpoint, and documents Uptime Kuma polling. Live stopped-scheduler alert
+delivery remains required before WP1 closeout and before enabling the 5-minute
+refresh/10-minute evidence-expiry target.
+
 ### Phase 8: Deployment Handoff
 
 Purpose: make the POC understandable, maintainable, recoverable, and reusable

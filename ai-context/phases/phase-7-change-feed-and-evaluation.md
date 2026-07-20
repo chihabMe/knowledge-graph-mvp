@@ -33,9 +33,11 @@ Keep graph data and permissions current, then prove answer quality and leak safe
   users every 5 minutes and expire positive evidence after 10 minutes. Keep the
   current 15-minute/30-minute POC values until monitoring is ready. Effort:
   High.
-- [ ] Monitor scheduler heartbeat, last-success age, run duration, backlog,
+- [~] Monitor scheduler heartbeat, last-success age, run duration, backlog,
   errors, unknown results, and evidence approaching expiry; alert before the
-  10-minute fail-closed deadline. Effort: High.
+  10-minute fail-closed deadline. Effort: High. (Code and offline failure
+  simulation complete on the WP1 branch; live Uptime Kuma alert delivery with
+  a deliberately stopped scheduler remains.)
 - [ ] Reconcile Shared Drive logs and inherited folder permission changes that
   do not map cleanly to one child change event. Effort: Extra High.
 - [ ] Create evaluation question set. Effort: Medium.
@@ -51,8 +53,9 @@ Keep graph data and permissions current, then prove answer quality and leak safe
   5 minutes under the configured pilot caps.
 - [ ] Stale positive evidence is unusable after 10 minutes, including during
   scheduler, Drive API, or worker failure.
-- [ ] A deliberately failed or delayed refresh raises an alert before evidence
-  expires.
+- [~] A deliberately failed or delayed refresh raises an alert before evidence
+  expires. (Offline stale-heartbeat/expired-evidence coverage passes; live
+  alert delivery remains.)
 - [ ] Push/change-triggered synchronization reduces normal propagation time,
   and periodic reconciliation repairs missed or expired notifications.
 - [ ] Restricted answers fail leak tests.
@@ -60,4 +63,7 @@ Keep graph data and permissions current, then prove answer quality and leak safe
 
 ## Completion Status
 
-Not started.
+In progress. WP4's content-currency gate is complete. WP1 freshness-monitoring
+code and offline tests are complete; live alert delivery remains before WP1
+closeout. The 5-minute refresh/10-minute evidence-expiry target has not been
+enabled.

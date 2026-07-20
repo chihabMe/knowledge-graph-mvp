@@ -43,3 +43,9 @@ Celery beat is behind the `scheduler` profile until scheduled jobs are needed:
 ```bash
 docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml --profile scheduler up -d
 ```
+
+Before using the Phase 7 production freshness target, configure the
+authenticated Uptime Kuma monitor in `uptime-kuma/monitors.md`. It polls
+`/api/health/freshness/` independently of Celery and alerts when scheduled
+permission evidence is approaching expiry or the scheduler heartbeat is
+stale.
