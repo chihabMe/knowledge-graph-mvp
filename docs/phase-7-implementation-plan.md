@@ -5,6 +5,46 @@ research pass. This is the working plan for
 `ai-context/phases/phase-7-change-feed-and-evaluation.md`; the tracker states
 *what* must be true, this document states *how* to build it and in what order.
 
+## POC Scope Decision — 2026-07-20 (Authoritative)
+
+The operator chose the smallest safe POC scope after a second necessity scan.
+This decision supersedes the original WP2/WP3/WP5 production design below:
+
+1. Keep the existing 15-minute permission sweep and 30-minute fail-closed
+   evidence lifetime.
+2. Add a safe 15-minute full Drive content reconciliation. Preserve unchanged,
+   successfully extracted content eligibility; changed content closes the
+   coarse gate until extraction succeeds.
+3. Extend the existing authenticated freshness report with identity-free
+   content-sync age/failure fields. Keep structured logs, but require neither
+   Uptime Kuma nor another alert consumer for POC closeout.
+4. Add only an operator-run, non-persistent evaluation management command over
+   ignored private YAML fixtures. Do not add an API, database models, Celery
+   scheduling, or result persistence.
+5. Deploy and run the live fail-closed drill, then close Phase 7 and proceed to
+   Phase 8.
+
+Drive change feeds, push channels, 5/10 timing, external alert delivery, and
+scheduled evaluation move to Phase 9 and should be implemented only when a
+measured production requirement justifies them. The remainder of this document
+is retained as historical production design, not active Phase 7 scope.
+
+### Closeout — 2026-07-20
+
+Phase 7 is complete. The deployed Beat schedule ran a full three-document
+content reconciliation; all documents were unchanged, remained eligible, and
+queued no extraction. Freshness returned 200/`ok` with the new content-sync
+fields. In the controlled Beat outage, the endpoint changed to error after 192
+seconds, while evidence remained valid for roughly another 26 minutes. At
+expiry the query service returned the controlled refusal with zero citations.
+After Beat restart, scheduled content and visibility refreshes completed,
+health recovered in about 26 seconds, and cited retrieval recovered in about
+44 seconds without database or cache intervention.
+
+The operator evaluation command is installed and its privacy-safe output and
+scoring are covered by synthetic tests. Real client YAML fixtures were not
+present and remain an ignored operator-owned handoff input.
+
 ## 1. Entry State
 
 - Phase 5 is merged to `main` as squash commit `366109f` (PR #4).

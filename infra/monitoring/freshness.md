@@ -1,9 +1,10 @@
 # Permission Freshness Monitoring Contract
 
-Uptime Kuma is not part of this deployment. Before enabling the Phase 7
+Uptime Kuma is not part of this deployment. The POC uses this endpoint and
+structured logs for manual operations. Before enabling the optional Phase 9
 5-minute refresh/10-minute evidence-expiry target, select an external monitoring
-service that can poll the private Compose network or the protected Django
-route and deliver notifications independently of Celery.
+service that can poll the private Compose network or the protected Django route
+and deliver notifications independently of Celery.
 
 Configure two 60-second HTTP checks against:
 
@@ -33,8 +34,8 @@ Inspect the compact JSON response body and page when it contains exactly:
 ```
 
 Warning responses contain `"status":"warn"` and must not trigger this paging
-check. Error responses cover expired targets or evidence, stale scheduler or
-worker heartbeat, and aggregation failures.
+check. Error responses cover expired targets or evidence, overdue content
+synchronization, stale scheduler or worker heartbeat, and aggregation failures.
 
 The response contains aggregate counts and worst-case ages only; it never
 contains user or Drive identities. Keep the default 60-second check interval,
