@@ -1,70 +1,76 @@
-# Phase 7: Change Feed And Evaluation
+# Phase 7: POC Freshness And Evaluation
 
 ## Purpose
 
-Keep graph data and permissions current, then prove answer quality and leak safety with repeatable tests.
+Keep the bounded POC corpus current with simple periodic reconciliation, make
+staleness visible, and provide repeatable operator-run leak evaluation without
+adding production-only infrastructure.
 
 ## Scope
 
-- Google Drive change feed.
-- Incremental content re-indexing.
-- Permission-only sync.
-- Production permission-freshness controls.
-- Failed and delayed synchronization monitoring.
-- Evaluation dataset.
-- Leak tests.
-- Scheduled evaluation jobs.
+- Periodic full Drive content reconciliation every 15 minutes.
+- Existing periodic per-user permission reconciliation every 15 minutes with
+  30-minute fail-closed positive-evidence expiry.
+- Incremental re-indexing inside each sweep and a retrieval content-currency
+  gate while extraction is pending or failed.
+- Authenticated identity-free freshness health plus structured logs.
+- Operator-run evaluation from ignored private YAML fixtures.
+- One live fail-closed drill before closeout.
 
 ## Out Of Scope
 
-- Enterprise monitoring dashboards.
-- Multi-customer shared deployment.
+- Uptime Kuma or another embedded monitoring container.
+- External alert delivery; select and validate this before production.
+- Drive change-feed polling, push/webhook channels, and event coalescing.
+- The 5-minute refresh/10-minute evidence-expiry production target.
+- Scheduled evaluation, evaluation APIs, and persisted evaluation records.
+- Shared Drive change-log fan-out. Periodic per-user checks remain authoritative.
+
+The deferred production items are tracked in
+`phase-9-production-hardening.md`; they are not Phase 7 blockers.
 
 ## Tasks
 
-- [ ] Implement Drive change feed polling. Effort: High.
-- [ ] Add change-triggered synchronization using Drive change-feed and push
-  signals where possible, while retaining periodic reconciliation. Effort:
-  Extra High.
-- [ ] Separate content changes from permission-only changes. Effort: Extra High.
-- [ ] Re-index changed content. Effort: High.
-- [ ] Refresh permissions without re-embedding. Effort: Extra High.
-- [ ] Configure and load-test the bounded production target: refresh connected
-  users every 5 minutes and expire positive evidence after 10 minutes. Keep the
-  current 15-minute/30-minute POC values until monitoring is ready. Effort:
+- [x] Re-index changed content and skip unchanged content during a full Drive
+  sweep. Effort: High.
+- [x] Refresh permissions without re-embedding. Effort: Extra High.
+- [x] Gate retrieval on the current extracted content version. Effort: Extra
   High.
-- [~] Monitor scheduler heartbeat, last-success age, run duration, backlog,
-  errors, unknown results, and evidence approaching expiry; alert before the
-  10-minute fail-closed deadline. Effort: High. (Code and offline failure
-  simulation complete on the WP1 branch; Uptime Kuma was removed by operator
-  decision, so a replacement alert consumer and live stopped-scheduler delivery
-  check remain.)
-- [ ] Reconcile Shared Drive logs and inherited folder permission changes that
-  do not map cleanly to one child change event. Effort: Extra High.
-- [ ] Create evaluation question set. Effort: Medium.
-- [ ] Add answer quality tests. Effort: High.
-- [ ] Add mandatory leak tests. Effort: Extra High.
-- [ ] Add scheduled evaluation task. Effort: High.
+- [x] Schedule safe Drive content reconciliation every 15 minutes, with a
+  per-connection lock, durable run reuse, retry handling, and stale-run
+  recovery. Effort: High. (Live Beat dispatch and a three-document sweep
+  passed.)
+- [x] Preserve the per-user coarse content gate for unchanged, successfully
+  extracted content while closing it for changed or indeterminate content.
+  Effort: Extra High. (All three unchanged extracted documents remained
+  eligible and no extraction job was queued in the live sweep.)
+- [x] Skip non-authoritative `permissions.list` calls during per-user content
+  ingestion. Effort: High. (Implemented, tested, and used by the live sweep.)
+- [x] Report content-sync age, failures, and overdue state through the existing
+  identity-free freshness endpoint and structured logs. Effort: High.
+  (Live stale-to-healthy and outage/recovery transitions passed.)
+- [x] Add a strict operator-run evaluation command for ignored private YAML
+  fixtures, with positive-answer/citation checks and mandatory allowed/denied
+  leak cases. Effort: High. (Installed in the live container and covered by
+  synthetic privacy/output tests; real client fixtures remain operator-owned.)
 
 ## Validation
 
-- [ ] Edited files update graph content.
-- [ ] Permission changes update SpiceDB.
-- [ ] Permission additions/removals normally affect new chat retrieval within
-  5 minutes under the configured pilot caps.
-- [ ] Stale positive evidence is unusable after 10 minutes, including during
-  scheduler, Drive API, or worker failure.
-- [~] A deliberately failed or delayed refresh raises an alert before evidence
-  expires. (Offline stale-heartbeat/expired-evidence coverage passes; live
-  alert delivery remains.)
-- [ ] Push/change-triggered synchronization reduces normal propagation time,
-  and periodic reconciliation repairs missed or expired notifications.
-- [ ] Restricted answers fail leak tests.
-- [ ] Evaluation runner produces useful pass/fail output.
+- [x] Django, Celery worker, and Celery Beat are healthy after deployment.
+- [x] `/api/health/freshness/` returns 200/`status: ok` with the content-sync
+  fields present.
+- [x] A scheduled content sweep completes and unchanged live content remains
+  retrievable without unnecessary extraction.
+- [x] The manual fail-closed drill passes and records timings; no external
+  alert receiver is required for this POC drill.
+- [x] The operator evaluation command produces useful privacy-safe pass/fail
+  output against synthetic fixtures; the ignored private client fixture was
+  not present and is an operator handoff input, not a code blocker.
 
 ## Completion Status
 
-In progress. WP4's content-currency gate is complete. WP1 freshness-monitoring
-code and offline tests are complete; live alert delivery remains before WP1
-closeout. The 5-minute refresh/10-minute evidence-expiry target has not been
-enabled.
+Complete (2026-07-20). The live three-document content sweep succeeded without
+unnecessary extraction. During the Beat outage, freshness changed to error 192
+seconds after shutdown, evidence expired fail-closed, retrieval returned a
+controlled refusal with zero citations, and Beat restart restored health and
+retrieval automatically. Production-only optimizations remain deferred.

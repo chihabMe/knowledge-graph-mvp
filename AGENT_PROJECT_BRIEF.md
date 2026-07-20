@@ -92,8 +92,9 @@ and SpiceDB outage matrix has passed. A post-consent callback also queued and
 completed a user-specific refresh without waiting for the periodic scheduler.
 The operator reviewed the Phase 6 reports and approved formal closeout on
 2026-07-19; the observed citation over-inclusion was ruled a non-blocking
-relevance-quality follow-up tracked in issue #6. Phase 7, change feed and
-evaluation, is the active phase.
+relevance-quality follow-up tracked in issue #6. Phase 7, POC freshness and
+operator-run evaluation, completed live validation on 2026-07-20. Phase 8,
+deployment handoff, is active.
 
 Do not reintroduce the old FastAPI/local-file prototype architecture. Django +
 DRF + Celery is the canonical backend direction.
@@ -110,8 +111,8 @@ Use these technologies unless the user explicitly changes the direction:
 | User login | Google OAuth/OIDC in Open WebUI | User identity must match Google Drive identity |
 | Model gateway | OpenRouter | Hosted LLM access and model flexibility |
 | Backend | Django + Django REST Framework | Ingestion, retrieval, permission filtering, health endpoints, admin, metadata |
-| Background jobs | Celery + Redis | Drive sync, extraction, permission sync, evaluation jobs |
-| App metadata | PostgreSQL | Django models, job state, integration records, evaluation records |
+| Background jobs | Celery + Redis | Drive sync, extraction, permission sync, freshness |
+| App metadata | PostgreSQL | Django models, job state, integration records, configuration |
 | Graph store | Neo4j | Graph nodes, relationships, chunks, vector indexes |
 | Extraction/indexing | neo4j-graphrag first | Text extraction, chunking, embeddings, graph extraction |
 | Alternative extraction/helper | Graphify / Graphiti | Evaluate behind an adapter; do not make either the core architecture by default |
@@ -464,11 +465,12 @@ Important:
   and leaves a safe manual return path.
 - Local password login should be disabled or hidden for production pilots.
 
-## 13. Change-Driven Re-Indexing
+## 13. Content And Permission Freshness
 
-Do not rely on nightly full rescans as the main update strategy.
-
-Use Google Drive's change feed.
+The bounded POC uses 15-minute periodic reconciliation as its authoritative
+update strategy. Each content sweep compares stored metadata and content hashes
+so unchanged files are not re-exported or re-embedded. Per-user permission
+checks remain separate and never cause content extraction.
 
 Required behavior:
 
@@ -481,10 +483,12 @@ Required behavior:
 
 Avoid expensive re-embedding for permission-only updates.
 
-Production permission-freshness target:
+Keep the current 15-minute permission refresh and 30-minute evidence lifetime
+for the POC. The authenticated freshness endpoint and structured logs make
+failures visible; external alert delivery is not a POC closeout dependency.
 
-- Keep the current 15-minute refresh and 30-minute evidence lifetime for the
-  POC until delayed/failed-run monitoring is operational.
+Production hardening, deferred to Phase 9:
+
 - For the bounded single-client production pilot, refresh connected users at
   least every 5 minutes and expire positive visibility evidence after 10
   minutes. This creates a normal 0-5 minute propagation window and a hard
@@ -529,15 +533,11 @@ document. The user can see a related public document but not the restricted
 source. The system must refuse or say it lacks access/context.
 ```
 
-The evaluation runner should report:
-
-- Question
-- Test user
-- Expected behavior
-- Actual answer
-- Sources returned
-- Pass/fail
-- Leak risk notes
+The POC evaluation runner is an operator-only management command over ignored
+private YAML fixtures. It reports case IDs, pass/fail reason codes, counts, and
+timings only. It must not print or persist questions, answers, user identities,
+source titles, or document content. Scheduled/persisted evaluation is deferred
+to Phase 9 unless recurring production assurance requires it.
 
 ## 15. Public Backend Interfaces
 
@@ -737,9 +737,10 @@ The first slice may be non-streaming. It must translate the existing answer,
 controlled refusal, and server-owned permitted citations without sending chat
 history or any unrestricted context directly to OpenRouter.
 
-### `POST /eval/run`
+### `python manage.py run_evaluation --dataset-dir <private-dir>`
 
-Runs the fixed pilot evaluation set and leak tests.
+Runs the fixed private pilot evaluation set and leak tests through the real
+permission-safe query path. This is an operator interface, not a public API.
 
 ## 16. Implementation Phases
 
@@ -940,23 +941,21 @@ query service. After formal report review, the operator ruled the citation
 over-inclusion a non-blocking relevance-quality follow-up (tracked in issue
 #6) and approved Phase 6 closeout on 2026-07-19.
 
-### Phase 7: Change Feed And Evaluation
+### Phase 7: POC Freshness And Evaluation
 
-Purpose: keep graph data and permissions current through the Drive change feed,
-prove safety with repeatable answer-quality and leak tests, implement the
-5-minute refresh/10-minute evidence-expiry production target, and monitor
-failed or delayed synchronization before enabling those tighter limits.
+Purpose: keep the bounded corpus current with 15-minute content and permission
+reconciliation, expose identity-free freshness state, preserve fail-closed
+content currency, and run private evaluation fixtures on operator demand.
 
-Status: WP4's content-currency retrieval gate is complete. WP1 freshness
-monitoring is code complete and offline-validated on its implementation branch:
-it records a scheduler/worker heartbeat, aggregates identity-free worst-case
-permission freshness and run health, exposes an authenticated non-200 alert
-endpoint, and emits structured warning/error logs. The operator removed Uptime
-Kuma from the deployment direction on 2026-07-20; the endpoint remains the
-vendor-neutral monitoring boundary, but an external alert consumer has not yet
-been selected. Live stopped-scheduler alert delivery therefore remains required
-before WP1 closeout and before enabling the 5-minute refresh/10-minute
-evidence-expiry target.
+Status: complete (2026-07-20). Safe periodic content reconciliation,
+content-sync freshness fields, and the non-persistent operator evaluation
+command are implemented and tested. Live deployment passed: the scheduled
+content sweep refreshed three unchanged documents without re-extraction, the
+freshness endpoint recovered to 200/`ok`, and the Beat outage drill exposed a
+stale heartbeat after 192 seconds. Retrieval refused with zero citations when
+evidence expired, then health and retrieval recovered automatically after Beat
+restart. Uptime Kuma, external alert delivery, Drive change feeds, the 5/10
+timing target, and scheduled evaluation remain optional Phase 9 work.
 
 ### Phase 8: Deployment Handoff
 
@@ -964,6 +963,14 @@ Purpose: make the POC understandable, maintainable, recoverable, and reusable
 for future client implementations. Handoff includes the permission-freshness
 SLA, synchronization monitoring/runbook, and a client-approved chat-history
 deletion and retention policy.
+
+Status: active.
+
+### Phase 9: Optional Production Hardening
+
+Purpose: add an external alert destination, tighter evidence timing, Drive
+change-feed acceleration/push, Shared Drive change-log fan-out, or scheduled
+evaluation only when production measurements justify their operational cost.
 
 ## 17. Pricing And Scope Notes
 

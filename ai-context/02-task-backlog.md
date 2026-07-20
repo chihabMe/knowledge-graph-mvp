@@ -100,18 +100,19 @@ This backlog is ordered by dependency and risk.
   failure, and evidence expiry.
 - Test allowed and restricted users through the real chat interface.
 
-## Phase 7: Change Feed And Evaluation
+## Phase 7: POC Freshness And Evaluation
 
-- Add Google Drive change feed handling.
-- Add change-triggered synchronization where possible while retaining a
-  periodic reconciliation sweep.
-- Separate content updates from permission-only updates.
-- Validate and enable a 5-minute visibility refresh with 10-minute evidence
-  expiry under the bounded pilot caps; keep 15/30 until monitoring is ready.
-- Monitor failed/delayed synchronization and alert before evidence expiry.
-- Add evaluation question set.
-- Add leak tests.
-- Add scheduled evaluation job.
+- Schedule 15-minute Drive content reconciliation with locking, retry, and
+  stale-run recovery.
+- Preserve unchanged extracted content eligibility and close it for changed or
+  indeterminate content.
+- Keep the existing 15-minute permission refresh and 30-minute fail-closed
+  evidence lifetime.
+- Surface identity-free permission and content-sync freshness through the
+  authenticated health endpoint and structured logs.
+- Run private evaluation fixtures through an operator management command; keep
+  real client fixtures ignored and do not persist results.
+- Run the live fail-closed drill before closeout.
 
 ## Phase 8: Deployment Handoff
 
@@ -122,3 +123,14 @@ This backlog is ordered by dependency and risk.
 - Define, approve, configure, and test a chat-history deletion/retention policy.
 - Add environment setup docs.
 - Add demo script.
+
+## Phase 9: Optional Production Hardening
+
+- Select and validate an external alert destination if production operations
+  require delivery guarantees.
+- Load-test the 5-minute refresh/10-minute evidence-expiry target before use.
+- Add Drive change-feed polling and optional push only when measured latency
+  requirements justify the extra state and failure modes.
+- Add Shared Drive change-log fan-out where the deployed corpus needs it.
+- Add scheduled/persisted evaluation only when operator-run assurance is no
+  longer sufficient.

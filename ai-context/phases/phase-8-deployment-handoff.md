@@ -26,10 +26,10 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
 - [ ] Write backup guide. Effort: High.
 - [ ] Write restore guide. Effort: High.
 - [ ] Write maintenance checklist. Effort: Medium.
-- [ ] Document and demonstrate the 5-minute refresh/10-minute evidence-expiry
-  SLA, monitoring thresholds, incident response, and safe rollback to a longer
-  refresh interval without extending stale-evidence authorization. Effort:
-  High.
+- [ ] Document and demonstrate the deployed 15-minute refresh/30-minute
+  evidence-expiry POC behavior, freshness inspection, incident response, and
+  safe recovery. Keep 5/10 timing and external alert delivery in Phase 9.
+  Effort: High.
 - [ ] Agree and document a client-approved chat-history deletion/retention
   policy, including user/admin deletion, account removal, backups, and the fact
   that Drive revocation blocks future retrieval but does not retract previously
@@ -44,8 +44,8 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
 - [ ] A fresh VM can follow the docs.
 - [ ] Backups include PostgreSQL, Neo4j, SpiceDB datastore, Open WebUI config, and environment config guidance.
 - [ ] Restore path is documented.
-- [ ] Operators can detect and respond to a failed or delayed permission sync
-  before the 10-minute evidence-expiry boundary.
+- [ ] Operators can inspect a failed or delayed permission/content sync and
+  follow the documented recovery procedure.
 - [ ] The approved chat-history retention period and deletion responsibilities
   are configured, tested, and included in client handoff.
 - [ ] Demo script shows permission-safe retrieval behavior.

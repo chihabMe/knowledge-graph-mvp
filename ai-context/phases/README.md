@@ -36,4 +36,4 @@ Model effort values:
 - `phase-6-open-webui-integration.md`
 - `phase-7-change-feed-and-evaluation.md`
 - `phase-8-deployment-handoff.md`
-
+- `phase-9-production-hardening.md`

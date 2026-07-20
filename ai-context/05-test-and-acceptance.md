@@ -63,6 +63,11 @@
 - Restricted graph-path answer is refused.
 - Citation list never includes inaccessible files.
 - LLM prompt payload never includes inaccessible chunks.
+- `run_evaluation --dataset-dir <private-dir>` checks positive answers and
+  citations plus both the allowed and denied sides of every leak case.
+- Evaluation output contains case IDs, pass/fail reason codes, counts, and
+  timings only; it never prints or persists client questions, answers,
+  identities, or source content.
 
 ### Operations Tests
 
@@ -73,3 +78,5 @@
 - PostgreSQL is reachable.
 - Neo4j is reachable.
 - SpiceDB is reachable.
+- Scheduled Drive content reconciliation completes at the configured interval.
+- Freshness health reports content-sync age/failure without identifiers.

@@ -8,9 +8,9 @@
 | Deployment | Docker Compose | Repeatable per-customer service stack |
 | Chat UI | Open WebUI | User-facing chat interface |
 | Backend | Django + Django REST Framework | API, admin, metadata, orchestration |
-| Background jobs | Celery + Celery Beat | Ingestion, permission sync, indexing, evaluation |
+| Background jobs | Celery + Celery Beat | Ingestion, permission sync, indexing, freshness |
 | Queue/cache | Redis | Celery broker, locks, short-lived cache |
-| App database | PostgreSQL | Django models, job state, config, evaluation records |
+| App database | PostgreSQL | Django models, job state, and integration config |
 | Knowledge graph | Neo4j | Graph entities, relationships, chunks, vector index |
 | Authorization | SpiceDB | Relationship-based permission engine |
 | SpiceDB datastore | PostgreSQL | Persistent SpiceDB datastore |
@@ -29,7 +29,8 @@ Responsibilities:
 - Admin configuration.
 - Google Drive connection records.
 - Ingestion job records.
-- Evaluation questions/results.
+- Operator-run evaluation command over ignored private fixtures; no persisted
+  evaluation content or results in the POC.
 - Health checks.
 - Query orchestration.
 
@@ -43,8 +44,7 @@ Responsibilities:
 - Entity/relationship extraction.
 - Neo4j writes.
 - SpiceDB relationship writes.
-- Change-feed processing.
-- Evaluation runs.
+- Freshness monitoring and stale-run recovery.
 
 ### Redis
 
@@ -63,7 +63,6 @@ Responsibilities:
 
 - Django app metadata.
 - Job status.
-- Evaluation data.
 - Customer configuration.
 - Optional separate database/schema for SpiceDB datastore.
 

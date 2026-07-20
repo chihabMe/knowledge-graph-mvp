@@ -65,7 +65,8 @@ daily report holds the narrative.
 - Use PostgreSQL for application metadata and job state.
 - Use Neo4j for graph data, graph traversal, and vector retrieval.
 - Use Django + Django REST Framework for the main backend.
-- Use Celery workers for ingestion, sync, extraction, indexing, and evaluation jobs.
+- Use Celery workers for ingestion, sync, extraction, and indexing. The POC
+  evaluation runner is an operator command; scheduled evaluation is deferred.
 - Keep Docker Compose as the first deployment target.
 - Keep Open WebUI as the user-facing chat interface unless the user explicitly changes that direction.
 
@@ -123,11 +124,10 @@ WebUI route and the operator approved formal closeout on 2026-07-19.
 
 The next implementation steps are:
 
-1. Execute Phase 7 from `docs/phase-7-implementation-plan.md`: freshness
-   monitoring and pre-expiry alerting, Drive change-feed polling strictly as
-   an accelerator over the periodic sweeps, the 5-minute refresh/10-minute
-   evidence-expiry production target, the content-currency retrieval gate
-   (issue #5), and the scheduled evaluation runner.
+1. Execute Phase 8 from
+   `ai-context/phases/phase-8-deployment-handoff.md`: deployment, backup,
+   restore, maintenance, retention, troubleshooting, clean-server validation,
+   demo, and client handoff documentation.
 2. Keep `.env.example` and tracked docs OpenRouter-shaped.
 3. Preserve provenance on every graph write and keep retrieval fail-closed.
 4. Keep delegated ACL/group sync only as an explicit optional mode; never union

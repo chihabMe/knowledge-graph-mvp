@@ -155,9 +155,11 @@ complete: the thin Django OpenAI-compatible adapter, real Google/OIDC login,
 separate admin-approved Django Drive consent, fresh per-user visibility
 synchronization, and the allowed-versus-restricted two-user Workspace
 acceptance matrix all passed through the actual Open WebUI, and the operator
-approved formal closeout on 2026-07-19. Phase 7, change feed and evaluation,
-is the active phase; see `docs/phase-7-implementation-plan.md` and
-`ai-context/phases/phase-7-change-feed-and-evaluation.md`.
+approved formal closeout on 2026-07-19. Phase 7, lean POC freshness and
+operator-run evaluation, completed live validation on 2026-07-20; production
+change feeds, tighter timing, external alert delivery, and scheduled evaluation
+remain deferred. Phase 8 deployment handoff is active; see
+`ai-context/phases/phase-8-deployment-handoff.md`.
 
 Read:
 

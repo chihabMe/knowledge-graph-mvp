@@ -6,7 +6,8 @@ Decision: Use Django + Django REST Framework for the target backend.
 
 Reason:
 
-- The project needs admin screens, app metadata, job records, evaluation records, and user/config management.
+- The project needs admin screens, app metadata, job records, and user/config
+  management. POC evaluation remains non-persistent.
 - Django gives a stronger foundation for a business application than a minimal API-only framework.
 - Celery and PostgreSQL integration patterns are mature.
 
@@ -656,8 +657,8 @@ OAuth Drive PDF and OpenRouter.
 Decision: Uptime Kuma is no longer part of the Compose stack or the project
 direction. Keep `GET /api/health/freshness/` and structured freshness logs as
 vendor-neutral monitoring boundaries, but do not ship or configure an embedded
-uptime dashboard. Select an external alert consumer separately before closing
-Phase 7 WP1 or enabling the 5-minute refresh/10-minute evidence-expiry target.
+uptime dashboard. Select an external alert consumer before enabling the
+deferred 5-minute refresh/10-minute evidence-expiry production target.
 
 Reason:
 
@@ -668,7 +669,36 @@ Reason:
   preserving the authenticated health contract for a later monitoring choice.
 
 Status: Accepted (2026-07-20). The prior Uptime Kuma Compose service and monitor
-instructions are superseded. Live alert delivery remains an open Phase 7 gate.
+instructions are superseded. ADR-020 subsequently deferred live external alert
+delivery to Phase 9.
+
+## ADR-020: Keep Phase 7 To Necessary POC Freshness And Evaluation
+
+Decision: Close Phase 7 with periodic 15-minute content reconciliation, the
+existing 15-minute permission reconciliation and 30-minute positive-evidence
+expiry, identity-free freshness health/logs, the content-currency gate, a live
+manual fail-closed drill, and an operator-run evaluation command over ignored
+private fixtures. The evaluation command stores nothing and outputs only case
+IDs, outcomes, reason codes, counts, and timings.
+
+Do not add Uptime Kuma, a replacement monitoring container, Drive change-feed
+state, push channels, 5-minute/10-minute timing, evaluation APIs/models, or
+scheduled evaluation to the POC. Track those independently in Phase 9 and add
+them only when production evidence shows they are needed.
+
+Reason:
+
+- Periodic reconciliation is already the permission authority and is adequate
+  for the bounded POC corpus.
+- Change-feed and push infrastructure improve latency but do not replace the
+  reconciliation sweep or strengthen authorization.
+- The existing freshness endpoint preserves a clean future alerting boundary
+  without consuming deployment memory for an unused dashboard.
+- Manual evaluation proves the current release without adding persistence,
+  scheduling, or retention risk around sensitive fixtures.
+
+Status: Accepted and implemented (2026-07-20). Live content reconciliation and
+the manual fail-closed/recovery drill passed; Phase 7 is complete.
 
 ## Open / Needs Explicit Confirmation
 
