@@ -26,6 +26,21 @@ expired evidence, or a stale Celery scheduler/worker heartbeat. The response
 contains aggregate counts and worst-case ages only; it never contains user or
 Drive identities.
 
+This status-code monitor cannot tell warn from error — both are 503. Treat it
+as the softer channel (notify, do not page) and add a second monitor for
+paging:
+
+#### Permission freshness — error paging
+
+Create an additional monitor of type "HTTP(s) - Keyword" on the same URL with
+the same bearer header and 60-second interval. Set the keyword to exactly
+`"status":"error"` (DRF renders the JSON body without spaces) and configure
+"monitor goes down when the keyword **is** found". Route this monitor to the
+paging notification channel: it fires only on expired targets or evidence, a
+stale scheduler heartbeat, or an aggregation failure (whose fail-closed body
+also renders as `"status":"error"`). Warn states render as `"status":"warn"`
+and never contain the keyword, so only the softer monitor reacts to them.
+
 For the future 5-minute refresh/10-minute evidence-expiry target, keep the
 default 60-second monitor interval, 40% remaining-evidence warning threshold,
 and 180-second heartbeat maximum. Do not tighten the evidence lifetime until a

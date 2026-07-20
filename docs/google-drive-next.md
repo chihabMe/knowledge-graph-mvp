@@ -63,6 +63,20 @@ Phase 2 creates and preserves this coarse global deny field. In per-user mode,
 it never grants access; Phase 6 additionally requires the direct SpiceDB
 relationship and fresh per-user evidence.
 
+### Expected behavior after editing a Drive file
+
+When a pilot user edits an indexed Drive document, the change is detected on
+the next content sweep, the file is re-exported, and graph re-extraction is
+queued. Until re-extraction succeeds, chat questions that would draw on that
+document **refuse rather than answer from the superseded version** — the
+retrieval content-currency gate only serves chunks whose extracted content
+version matches the document's current content hash. This is expected
+behavior, not an outage; the window normally lasts about one sweep interval
+plus extraction time. Operators can see the window in the freshness report's
+`content_refresh_pending_documents` count; a persistent
+`content_extraction_failed_documents` count means re-extraction is failing
+and needs attention.
+
 ## Metadata To Store
 
 Required file metadata:
