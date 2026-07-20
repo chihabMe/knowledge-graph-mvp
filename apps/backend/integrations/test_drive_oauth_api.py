@@ -71,14 +71,24 @@ class DriveOAuthApiTests(TestCase):
         self.client.force_login(self.user)
         with patch(
             "integrations.drive_oauth_views.authorization_status",
-            return_value=OAuthStatus(configured=True, connected=False, status="disconnected"),
+            return_value=OAuthStatus(
+                configured=True,
+                connected=False,
+                status="disconnected",
+                state="not_connected",
+            ),
         ):
             response = self.client.get(reverse("drive-oauth-status"))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json(),
-            {"configured": True, "connected": False, "status": "disconnected"},
+            {
+                "configured": True,
+                "connected": False,
+                "status": "disconnected",
+                "state": "not_connected",
+            },
         )
         self.assertEqual(response["Cache-Control"], "no-store")
 
@@ -119,6 +129,8 @@ class DriveOAuthApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Google Drive connected")
         self.assertContains(response, "Your document permissions are synchronizing now.")
+        self.assertContains(response, "window.setTimeout(poll, 2000)")
+        self.assertContains(response, 'payload.state === "ready"')
         self.assertEqual(response["Cache-Control"], "no-store")
         self.assertEqual(response["Referrer-Policy"], "no-referrer")
         complete.assert_called_once()

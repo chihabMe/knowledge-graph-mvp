@@ -77,6 +77,7 @@ class OpenRouterAnswerGeneratorTests(SimpleTestCase):
         self.assertEqual(request["messages"][0], {"role": "system", "content": SYSTEM_PROMPT})
         self.assertIn("Allowed only", request["messages"][1]["content"])
         self.assertNotIn("Restricted", request["messages"][1]["content"])
+        client.chat.completions.create.assert_called_once()
 
     def test_empty_context_never_calls_openrouter(self):
         client = MagicMock()
@@ -118,6 +119,36 @@ class OpenRouterAnswerGeneratorTests(SimpleTestCase):
                 )
                 with self.assertRaises(AnswerResponseError):
                     generator.generate("question", AssembledContext(text="safe context"))
+                self.assertEqual(client.chat.completions.create.call_count, 2)
+
+    def test_contract_failure_retries_once_with_the_same_safe_request(self):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = [
+            SimpleNamespace(choices=[]),
+            answer_response({"answer": "Recovered answer.", "supported": True}),
+        ]
+        generator = OpenRouterAnswerGenerator(client=client, model="answer-model", max_tokens=300)
+        context = AssembledContext(text='{"source":"S1","content":"Allowed only"}')
+
+        with self.assertLogs("retrieval.answers", level="WARNING") as logs:
+            result = generator.generate("question", context)
+
+        self.assertEqual(result.answer, "Recovered answer.")
+        self.assertEqual(client.chat.completions.create.call_count, 2)
+        first_request, second_request = client.chat.completions.create.call_args_list
+        self.assertEqual(first_request.kwargs, second_request.kwargs)
+        self.assertEqual(len(logs.output), 1)
+        self.assertNotIn("Allowed only", logs.output[0])
+
+    def test_non_contract_provider_failure_is_not_retried(self):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = TimeoutError("provider timeout payload")
+        generator = OpenRouterAnswerGenerator(client=client, model="answer-model", max_tokens=300)
+
+        with self.assertRaises(TimeoutError):
+            generator.generate("question", AssembledContext(text="safe context"))
+
+        client.chat.completions.create.assert_called_once()
 
     @override_settings(QUERY_ANSWER_PROVIDER="extractive")
     def test_builder_returns_extractive_generator_when_remote_answers_are_disabled(self):

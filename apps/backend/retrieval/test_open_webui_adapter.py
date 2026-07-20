@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.test import APIClient
 from rest_framework.throttling import ScopedRateThrottle
 
+from integrations.drive.onboarding import DriveConnectionState
 from integrations.models import DriveConnection, SourceDocument
 from retrieval.open_webui import (
     build_buffered_chat_completion_events,
@@ -406,6 +407,95 @@ class OpenWebUIApiContractTests(SimpleTestCase):
             self.assertEqual(view.throttle_classes, [ScopedRateThrottle])
             self.assertEqual(view.throttle_scope, scope)
             self.assertNotIn(SessionAuthentication, view.authentication_classes)
+
+
+@override_settings(
+    OPEN_WEBUI_COMPATIBLE_API_ENABLED=True,
+    OPEN_WEBUI_BACKEND_API_KEY=TEST_SERVICE_KEY,
+    OPEN_WEBUI_IDENTITY_JWT_SECRET=TEST_IDENTITY_KEY,
+    OPEN_WEBUI_IDENTITY_JWT_HEADER="X-OpenWebUI-User-Jwt",
+    OPEN_WEBUI_IDENTITY_JWT_ISSUER="open-webui",
+    OPEN_WEBUI_IDENTITY_JWT_MAX_LIFETIME_SECONDS=300,
+    OPEN_WEBUI_IDENTITY_JWT_CLOCK_SKEW_SECONDS=10,
+    OPEN_WEBUI_MODEL_ID="client-knowledge-graph",
+    GOOGLE_PERMISSION_AUTHORITY=DriveConnection.PermissionAuthority.PER_USER_OAUTH,
+)
+class OpenWebUIOnboardingGateTests(SimpleTestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.headers = {
+            "HTTP_AUTHORIZATION": f"Bearer {TEST_SERVICE_KEY}",
+            "HTTP_X_OPENWEBUI_USER_JWT": identity_token(),
+        }
+
+    def post(self, *, stream=False):
+        return self.client.post(
+            "/v1/chat/completions",
+            {
+                "model": "client-knowledge-graph",
+                "messages": [{"role": "user", "content": "Question"}],
+                "stream": stream,
+            },
+            format="json",
+            **self.headers,
+        )
+
+    @patch(
+        "retrieval.open_webui_views.session_onboarding_url",
+        return_value="https://api.example.com/api/session/google/start",
+    )
+    @patch("retrieval.open_webui_views.answer_query")
+    @patch("retrieval.open_webui_views.connection_state")
+    def test_non_ready_states_return_controlled_guidance_before_query(
+        self, connection_state_mock, answer_query_mock, _url_mock
+    ):
+        cases = (
+            ("not_connected", "Connect Google Drive", "drive_authorization_required"),
+            (
+                "reauthorization_required",
+                "Reconnect Google Drive",
+                "drive_reauthorization_required",
+            ),
+            ("syncing", "synchronizing", "drive_visibility_sync_pending"),
+            (
+                "temporarily_unavailable",
+                "temporarily unavailable",
+                "drive_temporarily_unavailable",
+            ),
+        )
+        for state, expected_text, _reason in cases:
+            with self.subTest(state=state):
+                connection_state_mock.return_value = DriveConnectionState(
+                    configured=True,
+                    connected=state in {"syncing", "temporarily_unavailable"},
+                    status="active",
+                    state=state,
+                )
+                response = self.post()
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                content = response.data["choices"][0]["message"]["content"]
+                self.assertIn(expected_text, content)
+                self.assertNotIn("reader@example.com", content)
+        answer_query_mock.assert_not_called()
+
+    @patch("retrieval.open_webui_views.answer_query")
+    @patch("retrieval.open_webui_views.connection_state")
+    def test_ready_state_reaches_query_and_syncing_stream_stays_compatible(
+        self, connection_state_mock, answer_query_mock
+    ):
+        connection_state_mock.return_value = DriveConnectionState(True, True, "active", "ready")
+        answer_query_mock.return_value = QueryResult("Ready answer", (), False, None)
+        response = self.post()
+        self.assertIn("Ready answer", response.data["choices"][0]["message"]["content"])
+        answer_query_mock.assert_called_once_with("Question", "reader@example.com")
+
+        answer_query_mock.reset_mock()
+        connection_state_mock.return_value = DriveConnectionState(True, True, "active", "syncing")
+        response = self.post(stream=True)
+        body = b"".join(response.streaming_content).decode()
+        self.assertIn("synchronizing", body)
+        self.assertTrue(body.endswith("data: [DONE]\n\n"))
+        answer_query_mock.assert_not_called()
 
 
 @override_settings(

@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from integrations.drive.onboarding import webui_return_url
 from integrations.drive.user_oauth import (
     UserDriveOAuthError,
     authorization_status,
@@ -98,7 +99,7 @@ class DriveOAuthCallbackView(APIView):
             response = render(
                 request,
                 "integrations/drive_oauth_result.html",
-                {"connected": False},
+                {"connected": False, "webui_return_url": webui_return_url()},
                 status=_status_for_error(exc),
             )
         else:
@@ -120,7 +121,11 @@ class DriveOAuthCallbackView(APIView):
             response = render(
                 request,
                 "integrations/drive_oauth_result.html",
-                {"connected": True, "sync_queued": sync_queued},
+                {
+                    "connected": True,
+                    "sync_queued": sync_queued,
+                    "webui_return_url": webui_return_url(),
+                },
             )
         response["Cache-Control"] = "no-store"
         response["Referrer-Policy"] = "no-referrer"

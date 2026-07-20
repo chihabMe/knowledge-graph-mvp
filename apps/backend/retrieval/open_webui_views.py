@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping
 
 from django.conf import settings
@@ -8,6 +9,14 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from integrations.drive.onboarding import (
+    NOT_CONNECTED,
+    READY,
+    REAUTHORIZATION_REQUIRED,
+    SYNCING,
+    connection_state,
+    session_onboarding_url,
+)
 from retrieval.open_webui import (
     build_buffered_chat_completion_events,
     build_chat_completion_payload,
@@ -21,7 +30,56 @@ from retrieval.serializers import (
     OpenWebUIChatCompletionRequestSerializer,
     OpenWebUIModelListSerializer,
 )
-from retrieval.services import answer_query
+from retrieval.services import QueryResult, answer_query
+
+logger = logging.getLogger(__name__)
+
+
+def _onboarding_result(user_email: str) -> QueryResult | None:
+    if settings.GOOGLE_PERMISSION_AUTHORITY != "per_user_oauth":
+        return None
+    try:
+        state = connection_state(user_email=user_email).state
+    except Exception as exc:
+        logger.warning(
+            "Drive onboarding state lookup failed closed (%s.%s).",
+            type(exc).__module__,
+            type(exc).__name__,
+        )
+        state = "temporarily_unavailable"
+    if state == READY:
+        return None
+    if state == NOT_CONNECTED:
+        answer = (
+            "Connect Google Drive before asking questions about your documents: "
+            f"[Connect Google Drive](<{session_onboarding_url()}>)"
+        )
+        reason = "drive_authorization_required"
+    elif state == REAUTHORIZATION_REQUIRED:
+        answer = (
+            "Your Google Drive connection needs to be renewed: "
+            f"[Reconnect Google Drive](<{session_onboarding_url()}>)"
+        )
+        reason = "drive_reauthorization_required"
+    elif state == SYNCING:
+        answer = "Your Google Drive permissions are synchronizing. Please try again shortly."
+        reason = "drive_visibility_sync_pending"
+    else:
+        answer = "Google Drive is temporarily unavailable. Please try again shortly."
+        reason = "drive_temporarily_unavailable"
+    return QueryResult(answer=answer, citations=(), refused=True, reason=reason)
+
+
+def _completion_response(result: QueryResult, *, model: str, stream: bool):
+    if stream:
+        response = StreamingHttpResponse(
+            iter(build_buffered_chat_completion_events(result, model)),
+            content_type="text/event-stream",
+        )
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
+    return Response(build_chat_completion_payload(result, model))
 
 
 class OpenWebUIModelsView(APIView):
@@ -78,23 +136,11 @@ class OpenWebUIChatCompletionsView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
                 headers={"Cache-Control": "no-store"},
             )
-        result = answer_query(serializer.validated_data["question"], request.user.email)
-        if serializer.validated_data["stream"]:
-            response = StreamingHttpResponse(
-                iter(
-                    build_buffered_chat_completion_events(
-                        result,
-                        serializer.validated_data["model"],
-                    )
-                ),
-                content_type="text/event-stream",
-            )
-            response["Cache-Control"] = "no-cache"
-            response["X-Accel-Buffering"] = "no"
-            return response
-        return Response(
-            build_chat_completion_payload(
-                result,
-                serializer.validated_data["model"],
-            )
+        result = _onboarding_result(request.user.email) or answer_query(
+            serializer.validated_data["question"], request.user.email
+        )
+        return _completion_response(
+            result,
+            model=serializer.validated_data["model"],
+            stream=serializer.validated_data["stream"],
         )

@@ -213,7 +213,15 @@ fi
 
 section "Docker Compose Validation"
 if echo "$STAGED_FILES" | grep -qP 'compose.*\.yml$' 2>/dev/null; then
-  if docker compose -f infra/compose.infrastructure.yml -f infra/compose.app.yml config > /dev/null 2>&1; then
+  CONFIG_ENV_FILE="$REPO_ROOT/.env"
+  if [ ! -f "$CONFIG_ENV_FILE" ]; then
+    CONFIG_ENV_FILE="$REPO_ROOT/.env.example"
+  fi
+  if APP_ENV_FILE="$CONFIG_ENV_FILE" docker compose \
+    --env-file "$CONFIG_ENV_FILE" \
+    -f infra/compose.infrastructure.yml \
+    -f infra/compose.app.yml \
+    config > /dev/null 2>&1; then
     add_good "Combined Compose config is valid"
   else
     add_critical "Docker Compose config invalid — run: make config"

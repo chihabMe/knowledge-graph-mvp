@@ -15,10 +15,48 @@
         {% else %}
           <p>Your document permissions will synchronize automatically.</p>
         {% endif %}
-        <p>You can close this page and return to chat.</p>
+        <p id="sync-status">You will return to chat when synchronization completes.</p>
+        <p><a href="{{ webui_return_url }}">Return to chat</a></p>
+        {{ webui_return_url|json_script:"webui-return-url" }}
+        <script>
+          (() => {
+            "use strict";
+            const returnUrl = JSON.parse(document.getElementById("webui-return-url").textContent);
+            const statusElement = document.getElementById("sync-status");
+            const deadline = Date.now() + 120000;
+            const poll = async () => {
+              if (Date.now() >= deadline) {
+                statusElement.textContent = "Synchronization is taking longer than expected. Return to chat and try again shortly.";
+                return;
+              }
+              try {
+                const response = await fetch("{% url 'drive-oauth-status' %}", {
+                  credentials: "same-origin",
+                  headers: {"Accept": "application/json"},
+                  cache: "no-store",
+                });
+                if (response.ok) {
+                  const payload = await response.json();
+                  if (payload.state === "ready") {
+                    window.location.replace(returnUrl);
+                    return;
+                  }
+                  if (payload.state === "reauthorization_required") {
+                    statusElement.textContent = "Google Drive needs to be reconnected. Return to chat and try again.";
+                    return;
+                  }
+                }
+              } catch (_error) {
+                // A transient browser or network failure is safe to retry.
+              }
+              window.setTimeout(poll, 2000);
+            };
+            window.setTimeout(poll, 2000);
+          })();
+        </script>
       {% else %}
         <h1>Google Drive was not connected</h1>
-        <p>Return to chat and try again, or contact an administrator.</p>
+        <p><a href="{{ webui_return_url }}">Return to chat</a> and try again, or contact an administrator.</p>
       {% endif %}
     </main>
   </body>
