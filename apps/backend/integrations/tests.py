@@ -34,10 +34,12 @@ from integrations.models import (
     DriveConnection,
     DrivePermissionSnapshot,
     DriveSyncRun,
+    PermissionSyncRun,
     SourceDocument,
     SourceDocumentContent,
 )
 from integrations.tasks import (
+    prune_completed_sync_runs,
     queue_document_extraction,
     run_drive_sync,
     sweep_stale_drive_sync_runs,
@@ -2539,3 +2541,84 @@ class SweepStaleGraphExtractionsTaskTests(TestCase):
         self.assertEqual(
             succeeded.graph_extraction_status, SourceDocument.GraphExtractionStatus.SUCCEEDED
         )
+
+
+@override_settings(SYNC_RUN_RETENTION_DAYS=14)
+class PruneCompletedSyncRunsTests(TestCase):
+    def setUp(self):
+        self.connection = DriveConnection.objects.create(
+            workspace_domain="example.com",
+            root_folder_id="root",
+        )
+        self.old = timezone.now() - timedelta(days=15)
+        self.recent = timezone.now() - timedelta(days=1)
+
+    def _permission_run(self, status, finished_at):
+        return PermissionSyncRun.objects.create(
+            connection=self.connection,
+            status=status,
+            finished_at=finished_at,
+        )
+
+    def test_old_completed_runs_are_deleted_and_recent_ones_kept(self):
+        old_failed = self._permission_run(PermissionSyncRun.Status.FAILED, self.old)
+        recent_failed = self._permission_run(PermissionSyncRun.Status.FAILED, self.recent)
+
+        result = prune_completed_sync_runs()
+
+        self.assertEqual(result["permission_runs"], 1)
+        remaining = set(PermissionSyncRun.objects.values_list("pk", flat=True))
+        self.assertNotIn(old_failed.pk, remaining)
+        self.assertIn(recent_failed.pk, remaining)
+
+    def test_latest_successful_run_per_connection_survives_retention(self):
+        first_success = self._permission_run(PermissionSyncRun.Status.SUCCEEDED, self.old)
+        latest_success = self._permission_run(PermissionSyncRun.Status.PARTIAL, self.old)
+
+        result = prune_completed_sync_runs()
+
+        remaining = set(PermissionSyncRun.objects.values_list("pk", flat=True))
+        # The newest success is kept even though it is past the cutoff;
+        # delegated last-success is derived from it.
+        self.assertIn(latest_success.pk, remaining)
+        self.assertNotIn(first_success.pk, remaining)
+        self.assertEqual(result["permission_runs"], 1)
+
+    def test_queued_and_running_runs_are_never_deleted(self):
+        queued = self._permission_run(PermissionSyncRun.Status.QUEUED, None)
+        running = self._permission_run(PermissionSyncRun.Status.RUNNING, None)
+        PermissionSyncRun.objects.filter(pk__in=[queued.pk, running.pk]).update(created_at=self.old)
+
+        result = prune_completed_sync_runs()
+
+        self.assertEqual(result["permission_runs"], 0)
+        self.assertEqual(PermissionSyncRun.objects.count(), 2)
+
+    def test_completed_run_without_finished_at_uses_created_at(self):
+        orphaned = self._permission_run(PermissionSyncRun.Status.FAILED, None)
+        PermissionSyncRun.objects.filter(pk=orphaned.pk).update(created_at=self.old)
+
+        result = prune_completed_sync_runs()
+
+        self.assertEqual(result["permission_runs"], 1)
+
+    def test_drive_runs_prune_and_keep_latest_success(self):
+        old_success = DriveSyncRun.create_for_connection(self.connection)
+        DriveSyncRun.objects.filter(pk=old_success.pk).update(
+            status=DriveSyncRun.Status.SUCCEEDED, finished_at=self.old
+        )
+        old_failed = DriveSyncRun.create_for_connection(self.connection)
+        DriveSyncRun.objects.filter(pk=old_failed.pk).update(
+            status=DriveSyncRun.Status.FAILED, finished_at=self.old
+        )
+
+        result = prune_completed_sync_runs()
+
+        remaining = set(DriveSyncRun.objects.values_list("pk", flat=True))
+        self.assertIn(old_success.pk, remaining)
+        self.assertNotIn(old_failed.pk, remaining)
+        self.assertEqual(result["drive_runs"], 1)
+
+    def test_prune_task_is_registered_with_celery_beat(self):
+        tasks = {entry["task"] for entry in settings.CELERY_BEAT_SCHEDULE.values()}
+        self.assertIn("integrations.prune_completed_sync_runs", tasks)

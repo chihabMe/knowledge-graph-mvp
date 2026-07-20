@@ -32,6 +32,8 @@ from integrations.tasks import monitor_freshness
     GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS=600,
     FRESHNESS_WARN_REMAINING_FRACTION=0.4,
     FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS=180,
+    FRESHNESS_NEVER_SYNCED_GRACE_SECONDS=120,
+    FRESHNESS_RUN_SAMPLE_LIMIT=20,
 )
 class PerUserFreshnessTests(TestCase):
     def setUp(self):
@@ -54,9 +56,9 @@ class PerUserFreshnessTests(TestCase):
             status=GoogleDriveAuthorization.Status.ACTIVE,
             last_successful_visibility_sync_at=self.now - datetime.timedelta(seconds=100),
         )
-        SchedulerHeartbeat.objects.create(
+        SchedulerHeartbeat.objects.update_or_create(
             name=FRESHNESS_HEARTBEAT_NAME,
-            last_tick_at=self.now - datetime.timedelta(seconds=10),
+            defaults={"last_tick_at": self.now - datetime.timedelta(seconds=10)},
         )
 
     def test_healthy_authorization_reports_identity_free_worst_case_ages(self):
@@ -97,6 +99,9 @@ class PerUserFreshnessTests(TestCase):
     def test_never_successful_target_and_stale_heartbeat_are_errors(self):
         self.authorization.last_successful_visibility_sync_at = None
         self.authorization.save(update_fields=["last_successful_visibility_sync_at"])
+        GoogleDriveAuthorization.objects.filter(pk=self.authorization.pk).update(
+            created_at=self.now - datetime.timedelta(seconds=121)
+        )
         report = build_freshness_report(now=self.now)
         self.assertEqual(report.status, STATUS_ERROR)
         self.assertEqual(report.targets_never_succeeded, 1)
@@ -107,6 +112,86 @@ class PerUserFreshnessTests(TestCase):
         report = build_freshness_report(now=self.now)
         self.assertEqual(report.status, STATUS_ERROR)
         self.assertEqual(report.heartbeat_age_seconds, 181)
+
+    def test_never_synced_target_within_grace_warns_instead_of_paging(self):
+        self.authorization.last_successful_visibility_sync_at = None
+        self.authorization.save(update_fields=["last_successful_visibility_sync_at"])
+        GoogleDriveAuthorization.objects.filter(pk=self.authorization.pk).update(
+            created_at=self.now - datetime.timedelta(seconds=60)
+        )
+
+        report = build_freshness_report(now=self.now)
+
+        self.assertEqual(report.status, STATUS_WARN)
+        self.assertEqual(report.targets_never_succeeded, 1)
+        self.assertEqual(report.targets_expiring_soon, 1)
+        self.assertEqual(report.targets_expired, 0)
+
+    @override_settings(FRESHNESS_RUN_SAMPLE_LIMIT=3)
+    def test_failure_streak_reading_caps_at_the_run_sample_limit(self):
+        for _ in range(5):
+            failed = UserVisibilitySyncRun.create_for_authorization(self.authorization)
+            failed.status = UserVisibilitySyncRun.Status.FAILED
+            failed.save(update_fields=["status"])
+
+        report = build_freshness_report(now=self.now)
+
+        self.assertEqual(report.status, STATUS_WARN)
+        self.assertEqual(report.max_consecutive_failures, 3)
+
+    @override_settings(FRESHNESS_RUN_SAMPLE_LIMIT=2)
+    def test_backlog_is_counted_beyond_the_recent_run_sample(self):
+        queued = UserVisibilitySyncRun.create_for_authorization(self.authorization)
+        UserVisibilitySyncRun.objects.filter(pk=queued.pk).update(
+            created_at=self.now - datetime.timedelta(seconds=300)
+        )
+        for _ in range(3):
+            done = UserVisibilitySyncRun.create_for_authorization(self.authorization)
+            done.status = UserVisibilitySyncRun.Status.SUCCEEDED
+            done.save(update_fields=["status"])
+
+        report = build_freshness_report(now=self.now)
+
+        self.assertEqual(report.queued_runs, 1)
+        self.assertEqual(report.oldest_queued_run_age_seconds, 300)
+
+    def test_failed_extraction_warns_while_pending_extraction_stays_informational(self):
+        SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="file-pending",
+            title="Pending title",
+            mime_type="text/plain",
+            active_in_scope=True,
+            retrieval_eligible=True,
+        )
+        report = build_freshness_report(now=self.now)
+        self.assertEqual(report.status, STATUS_OK)
+        self.assertEqual(report.content_refresh_pending_documents, 1)
+        self.assertEqual(report.content_extraction_failed_documents, 0)
+
+        SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="file-failed",
+            title="Failed title",
+            mime_type="text/plain",
+            active_in_scope=True,
+            retrieval_eligible=True,
+            graph_extraction_status=SourceDocument.GraphExtractionStatus.FAILED,
+        )
+        SourceDocument.objects.create(
+            connection=self.connection,
+            drive_file_id="file-ineligible",
+            title="Ineligible title",
+            mime_type="text/plain",
+            retrieval_eligible=False,
+            graph_extraction_status=SourceDocument.GraphExtractionStatus.FAILED,
+        )
+
+        report = build_freshness_report(now=self.now)
+
+        self.assertEqual(report.status, STATUS_WARN)
+        self.assertEqual(report.content_refresh_pending_documents, 1)
+        self.assertEqual(report.content_extraction_failed_documents, 1)
 
     def test_delayed_scheduler_alerts_while_expired_evidence_still_denies(self):
         SchedulerHeartbeat.objects.update(last_tick_at=self.now - datetime.timedelta(seconds=181))
@@ -258,9 +343,9 @@ class DelegatedFreshnessTests(TestCase):
             root_folder_id="root",
             permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
         )
-        SchedulerHeartbeat.objects.create(
+        SchedulerHeartbeat.objects.update_or_create(
             name=FRESHNESS_HEARTBEAT_NAME,
-            last_tick_at=self.now,
+            defaults={"last_tick_at": self.now},
         )
         self.run = PermissionSyncRun.objects.create(
             connection=self.connection,
