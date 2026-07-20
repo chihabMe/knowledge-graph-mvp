@@ -27,7 +27,6 @@ neo4j-data/
 open-webui-data/
 postgres-data/
 redis-data/
-uptime-kuma-data/
 
 # Local Claude Code settings (permission allowlists, absolute paths) and their
 # crash/interrupt temp files — must never be committed
