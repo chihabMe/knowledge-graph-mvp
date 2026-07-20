@@ -4,7 +4,7 @@ import logging
 from celery import shared_task
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import F
+from django.db.models import F, Max, Q
 from django.utils import timezone
 
 from authorization.client import SPICEDB_TRANSIENT_ERRORS
@@ -511,12 +511,74 @@ def monitor_freshness() -> dict[str, int | str | None]:
         )
     elif report.status == STATUS_WARN:
         logger.warning(
-            "freshness warn: expiring_soon=%d unknown_documents=%d consecutive_failures=%d",
+            "freshness warn: expiring_soon=%d unknown_documents=%d "
+            "consecutive_failures=%d extraction_failed=%d",
             report.targets_expiring_soon,
             report.unknown_documents,
             report.max_consecutive_failures,
+            report.content_extraction_failed_documents,
         )
     return report.as_payload()
+
+
+def _prune_completed_runs(model, *, group_field, success_statuses, cutoff) -> int:
+    """Delete completed runs past the cutoff, keeping the latest success per target."""
+    keep = (
+        model.objects.filter(status__in=success_statuses)
+        .values(group_field)
+        .annotate(latest=Max("pk"))
+        .values_list("latest", flat=True)
+    )
+    deleted, _ = (
+        model.objects.exclude(
+            status__in=[model.Status.QUEUED, model.Status.RUNNING],
+        )
+        .exclude(pk__in=keep)
+        .filter(
+            Q(finished_at__lt=cutoff) | Q(finished_at__isnull=True, created_at__lt=cutoff),
+        )
+        .delete()
+    )
+    return deleted
+
+
+@shared_task(name="integrations.prune_completed_sync_runs")
+def prune_completed_sync_runs() -> dict[str, int]:
+    """Delete completed sync-run rows past the retention window.
+
+    Freshness aggregation reads these tables on every monitor tick, so they
+    must not grow without bound. The most recent successful run per target is
+    always kept: delegated last-success is derived from run rows, and pruning
+    it would make a healthy connection look like it never synced. Queued and
+    running rows are never touched.
+    """
+    cutoff = timezone.now() - datetime.timedelta(days=settings.SYNC_RUN_RETENTION_DAYS)
+    return {
+        "user_visibility_runs": _prune_completed_runs(
+            UserVisibilitySyncRun,
+            group_field="authorization",
+            success_statuses=[
+                UserVisibilitySyncRun.Status.SUCCEEDED,
+                UserVisibilitySyncRun.Status.PARTIAL,
+            ],
+            cutoff=cutoff,
+        ),
+        "permission_runs": _prune_completed_runs(
+            PermissionSyncRun,
+            group_field="connection",
+            success_statuses=[
+                PermissionSyncRun.Status.SUCCEEDED,
+                PermissionSyncRun.Status.PARTIAL,
+            ],
+            cutoff=cutoff,
+        ),
+        "drive_runs": _prune_completed_runs(
+            DriveSyncRun,
+            group_field="connection",
+            success_statuses=[DriveSyncRun.Status.SUCCEEDED],
+            cutoff=cutoff,
+        ),
+    }
 
 
 @shared_task(

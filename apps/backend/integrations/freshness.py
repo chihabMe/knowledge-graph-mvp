@@ -3,12 +3,18 @@
 The report is operational evidence only; it never grants access. Every field
 is a status label, count, duration, or worst-case age. Identities, Drive IDs,
 document titles, provider payloads, and secrets never leave this module.
+
+Aggregation runs on every monitor tick, so per-row work must stay bounded:
+backlog and evidence statistics are database aggregates, and only a small
+recent sample of completed runs is ever loaded.
 """
 
 import datetime
 from dataclasses import asdict, dataclass
 
 from django.conf import settings
+from django.db.models import Count, Min, Q
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from integrations.models import (
@@ -53,6 +59,8 @@ class FreshnessReport:
     unknown_documents: int
     latest_error_runs: int
     expired_evidence_documents: int
+    content_refresh_pending_documents: int
+    content_extraction_failed_documents: int
 
     def as_payload(self) -> dict:
         return asdict(self)
@@ -76,6 +84,8 @@ class _Aggregation:
     unknown_documents: int = 0
     latest_error_runs: int = 0
     expired_evidence_documents: int = 0
+    content_refresh_pending_documents: int = 0
+    content_extraction_failed_documents: int = 0
 
 
 def _age_seconds(now: datetime.datetime, value: datetime.datetime | None) -> int | None:
@@ -101,14 +111,23 @@ def _record_target_freshness(
     *,
     now: datetime.datetime,
     last_success: datetime.datetime | None,
+    first_seen_at: datetime.datetime | None,
     max_age_seconds: int,
     warn_fraction: float,
+    grace_seconds: int,
 ) -> None:
     aggregate.sync_targets += 1
     age = _age_seconds(now, last_success)
     if age is None:
         aggregate.targets_never_succeeded += 1
-        aggregate.targets_expired += 1
+        # Retrieval denies a never-synced target either way; the grace window
+        # only keeps a just-connected target at warn instead of paging it as
+        # an outage. An unknown first-seen time gets no grace.
+        first_seen_age = _age_seconds(now, first_seen_at)
+        if first_seen_age is not None and first_seen_age <= grace_seconds:
+            aggregate.targets_expiring_soon += 1
+        else:
+            aggregate.targets_expired += 1
         remaining = 0
     else:
         aggregate.worst_last_success_age_seconds = _maximum(
@@ -126,26 +145,42 @@ def _record_target_freshness(
     )
 
 
-def _record_run_ages(aggregate: _Aggregation, *, now: datetime.datetime, runs) -> None:
-    for run in runs:
-        if run.status == run.Status.QUEUED:
-            aggregate.queued_runs += 1
-            aggregate.oldest_queued_run_age_seconds = _maximum(
-                aggregate.oldest_queued_run_age_seconds,
-                _age_seconds(now, run.created_at),
-            )
-        elif run.status == run.Status.RUNNING:
-            aggregate.running_runs += 1
-            aggregate.longest_running_run_age_seconds = _maximum(
-                aggregate.longest_running_run_age_seconds,
-                _age_seconds(now, run.started_at or run.created_at),
-            )
+def _record_run_backlog(aggregate: _Aggregation, *, now: datetime.datetime, runs) -> None:
+    """Backlog counts and worst ages via DB aggregates; loads no run rows."""
+    model = runs.model
+    stats = runs.aggregate(
+        queued=Count("pk", filter=Q(status=model.Status.QUEUED)),
+        oldest_queued_at=Min("created_at", filter=Q(status=model.Status.QUEUED)),
+        running=Count("pk", filter=Q(status=model.Status.RUNNING)),
+        oldest_running_at=Min(
+            Coalesce("started_at", "created_at"),
+            filter=Q(status=model.Status.RUNNING),
+        ),
+    )
+    aggregate.queued_runs += stats["queued"]
+    aggregate.oldest_queued_run_age_seconds = _maximum(
+        aggregate.oldest_queued_run_age_seconds,
+        _age_seconds(now, stats["oldest_queued_at"]),
+    )
+    aggregate.running_runs += stats["running"]
+    aggregate.longest_running_run_age_seconds = _maximum(
+        aggregate.longest_running_run_age_seconds,
+        _age_seconds(now, stats["oldest_running_at"]),
+    )
 
 
-def _record_latest_run(aggregate: _Aggregation, runs) -> None:
-    completed_runs = [
-        run for run in runs if run.status not in {run.Status.QUEUED, run.Status.RUNNING}
-    ]
+def _record_recent_runs(aggregate: _Aggregation, runs, *, sample_limit: int) -> None:
+    """Latest-result and failure-streak stats over a bounded recent sample.
+
+    The streak reading caps at sample_limit; a streak at or beyond the cap
+    already drives a warning, which is all the status logic needs.
+    """
+    model = runs.model
+    completed_runs = list(
+        runs.exclude(status__in=[model.Status.QUEUED, model.Status.RUNNING]).order_by("-pk")[
+            :sample_limit
+        ]
+    )
     if not completed_runs:
         return
     latest = completed_runs[0]
@@ -169,21 +204,39 @@ def _record_latest_run(aggregate: _Aggregation, runs) -> None:
     )
 
 
-def _record_evidence_remaining(
+def _record_evidence_expiry(
     aggregate: _Aggregation,
     *,
     now: datetime.datetime,
-    verified_at: datetime.datetime | None,
+    evidence,
     max_age_seconds: int,
 ) -> None:
-    age = _age_seconds(now, verified_at)
-    remaining = 0 if age is None else max(0, max_age_seconds - age)
+    """Expired count and worst remaining lifetime via DB aggregates.
+
+    Works over any queryset carrying spicedb_verified_at; a null timestamp
+    counts as already expired (fail closed). Loads no evidence rows.
+    """
+    cutoff = now - datetime.timedelta(seconds=max_age_seconds)
+    stats = evidence.aggregate(
+        total=Count("pk"),
+        expired=Count(
+            "pk",
+            filter=Q(spicedb_verified_at=None) | Q(spicedb_verified_at__lte=cutoff),
+        ),
+        oldest_verified_at=Min("spicedb_verified_at"),
+    )
+    aggregate.expired_evidence_documents += stats["expired"]
+    if not stats["total"]:
+        return
+    if stats["expired"]:
+        remaining = 0
+    else:
+        age = _age_seconds(now, stats["oldest_verified_at"])
+        remaining = 0 if age is None else max(0, max_age_seconds - age)
     aggregate.worst_remaining_evidence_seconds = _minimum(
         aggregate.worst_remaining_evidence_seconds,
         remaining,
     )
-    if remaining <= 0:
-        aggregate.expired_evidence_documents += 1
 
 
 def _active_connections(authority: str) -> list[DriveConnection]:
@@ -221,18 +274,18 @@ def _aggregate_per_user(
             aggregate,
             now=now,
             last_success=authorization.last_successful_visibility_sync_at,
+            first_seen_at=authorization.created_at,
             max_age_seconds=settings.GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS,
             warn_fraction=settings.FRESHNESS_WARN_REMAINING_FRACTION,
+            grace_seconds=settings.FRESHNESS_NEVER_SYNCED_GRACE_SECONDS,
         )
-        runs = list(
-            UserVisibilitySyncRun.objects.filter(
-                authorization=authorization,
-                connection_generation=authorization.connection_generation,
-                authorization_generation=authorization.authorization_generation,
-            ).order_by("-pk")
+        runs = UserVisibilitySyncRun.objects.filter(
+            authorization=authorization,
+            connection_generation=authorization.connection_generation,
+            authorization_generation=authorization.authorization_generation,
         )
-        _record_run_ages(aggregate, now=now, runs=runs)
-        _record_latest_run(aggregate, runs)
+        _record_run_backlog(aggregate, now=now, runs=runs)
+        _record_recent_runs(aggregate, runs, sample_limit=settings.FRESHNESS_RUN_SAMPLE_LIMIT)
         current_evidence = UserDocumentVisibility.objects.filter(
             authorization=authorization,
             connection_generation=authorization.connection_generation,
@@ -241,15 +294,14 @@ def _aggregate_per_user(
         aggregate.unknown_documents += current_evidence.filter(
             state=UserDocumentVisibility.State.UNKNOWN,
         ).count()
-        for verified_at in current_evidence.filter(
-            state=UserDocumentVisibility.State.VERIFIED_VISIBLE,
-        ).values_list("spicedb_verified_at", flat=True):
-            _record_evidence_remaining(
-                aggregate,
-                now=now,
-                verified_at=verified_at,
-                max_age_seconds=settings.GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS,
-            )
+        _record_evidence_expiry(
+            aggregate,
+            now=now,
+            evidence=current_evidence.filter(
+                state=UserDocumentVisibility.State.VERIFIED_VISIBLE,
+            ),
+            max_age_seconds=settings.GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS,
+        )
     return len(authorizations)
 
 
@@ -260,37 +312,67 @@ def _aggregate_delegated(
     now: datetime.datetime,
 ) -> None:
     for connection in connections:
-        runs = list(PermissionSyncRun.objects.filter(connection=connection).order_by("-pk"))
-        last_success = next(
-            (
-                run.finished_at
-                for run in runs
-                if run.status in {run.Status.SUCCEEDED, run.Status.PARTIAL}
-                and run.finished_at is not None
-            ),
-            None,
+        runs = PermissionSyncRun.objects.filter(connection=connection)
+        last_success = (
+            runs.filter(
+                status__in=[
+                    PermissionSyncRun.Status.SUCCEEDED,
+                    PermissionSyncRun.Status.PARTIAL,
+                ],
+                finished_at__isnull=False,
+            )
+            .order_by("-pk")
+            .values_list("finished_at", flat=True)
+            .first()
         )
         _record_target_freshness(
             aggregate,
             now=now,
             last_success=last_success,
+            first_seen_at=connection.created_at,
             max_age_seconds=settings.PERMISSION_VERIFICATION_MAX_AGE_SECONDS,
             warn_fraction=settings.FRESHNESS_WARN_REMAINING_FRACTION,
+            grace_seconds=settings.FRESHNESS_NEVER_SYNCED_GRACE_SECONDS,
         )
-        _record_run_ages(aggregate, now=now, runs=runs)
-        _record_latest_run(aggregate, runs)
-        documents = SourceDocument.objects.filter(
-            connection=connection,
-            active_in_scope=True,
-            retrieval_eligible=True,
+        _record_run_backlog(aggregate, now=now, runs=runs)
+        _record_recent_runs(aggregate, runs, sample_limit=settings.FRESHNESS_RUN_SAMPLE_LIMIT)
+        _record_evidence_expiry(
+            aggregate,
+            now=now,
+            evidence=SourceDocument.objects.filter(
+                connection=connection,
+                active_in_scope=True,
+                retrieval_eligible=True,
+            ),
+            max_age_seconds=settings.PERMISSION_VERIFICATION_MAX_AGE_SECONDS,
         )
-        for verified_at in documents.values_list("spicedb_verified_at", flat=True):
-            _record_evidence_remaining(
-                aggregate,
-                now=now,
-                verified_at=verified_at,
-                max_age_seconds=settings.PERMISSION_VERIFICATION_MAX_AGE_SECONDS,
-            )
+
+
+def _record_content_currency(
+    aggregate: _Aggregation,
+    *,
+    connections: list[DriveConnection],
+) -> None:
+    """Count retrieval-eligible documents whose graph content lags PostgreSQL.
+
+    While extraction is pending or failed the retrieval content-currency gate
+    refuses those documents, so the counts explain refusal windows: pending
+    is informational, failed drives a warning.
+    """
+    documents = SourceDocument.objects.filter(
+        connection__in=connections,
+        active_in_scope=True,
+        retrieval_eligible=True,
+    )
+    aggregate.content_refresh_pending_documents = documents.filter(
+        graph_extraction_status__in=[
+            SourceDocument.GraphExtractionStatus.PENDING,
+            SourceDocument.GraphExtractionStatus.RUNNING,
+        ],
+    ).count()
+    aggregate.content_extraction_failed_documents = documents.filter(
+        graph_extraction_status=SourceDocument.GraphExtractionStatus.FAILED,
+    ).count()
 
 
 def build_freshness_report(*, now: datetime.datetime | None = None) -> FreshnessReport:
@@ -309,6 +391,7 @@ def build_freshness_report(*, now: datetime.datetime | None = None) -> Freshness
         )
     elif authority == DriveConnection.PermissionAuthority.DELEGATED_ACL:
         _aggregate_delegated(aggregate, connections=connections, now=now)
+    _record_content_currency(aggregate, connections=connections)
 
     heartbeat_stale = (
         heartbeat_age is None or heartbeat_age > settings.FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS
@@ -320,6 +403,7 @@ def build_freshness_report(*, now: datetime.datetime | None = None) -> Freshness
         or aggregate.unknown_documents
         or aggregate.max_consecutive_failures
         or aggregate.latest_error_runs
+        or aggregate.content_extraction_failed_documents
     ):
         status = STATUS_WARN
     else:
