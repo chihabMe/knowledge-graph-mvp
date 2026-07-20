@@ -9,6 +9,7 @@ import environ
 from django.core.exceptions import ImproperlyConfigured
 
 from config.settings_validators import (
+    validate_drive_onboarding_urls,
     validate_freshness_monitor_settings,
     validate_google_session_oauth_settings,
     validate_google_user_oauth_settings,
@@ -231,6 +232,7 @@ OPEN_WEBUI_IDENTITY_JWT_CLOCK_SKEW_SECONDS = env.int(
     "OPEN_WEBUI_IDENTITY_JWT_CLOCK_SKEW_SECONDS", default=10
 )
 OPEN_WEBUI_MODEL_ID = env("OPEN_WEBUI_MODEL_ID", default="client-knowledge-graph")
+WEBUI_URL = env("WEBUI_URL", default="")
 _open_webui_secret_key = env("WEBUI_SECRET_KEY", default="")
 validate_open_webui_compatible_settings(
     enabled=OPEN_WEBUI_COMPATIBLE_API_ENABLED,
@@ -538,6 +540,12 @@ validate_google_user_oauth_settings(
         GOOGLE_OAUTH_CLIENT_SECRET_FILE,
         GOOGLE_OAUTH_TOKEN_FILE,
     ),
+)
+validate_drive_onboarding_urls(
+    enabled=(OPEN_WEBUI_COMPATIBLE_API_ENABLED and GOOGLE_PERMISSION_AUTHORITY == "per_user_oauth"),
+    session_oauth_enabled=GOOGLE_SESSION_OAUTH_ENABLED,
+    webui_url=WEBUI_URL,
+    development_context=_development_context,
 )
 CELERY_BEAT_SCHEDULE.update(
     {

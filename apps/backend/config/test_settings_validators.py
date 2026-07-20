@@ -8,11 +8,68 @@ from django.test import SimpleTestCase
 
 from config.settings_validators import (
     load_google_user_token_keyring,
+    validate_drive_onboarding_urls,
     validate_freshness_monitor_settings,
     validate_google_session_oauth_settings,
     validate_google_user_oauth_settings,
     validate_open_webui_compatible_settings,
 )
+
+
+class DriveOnboardingUrlValidationTests(SimpleTestCase):
+    def test_accepts_https_origin_and_local_development_http(self):
+        self.assertIsNone(
+            validate_drive_onboarding_urls(
+                enabled=True,
+                session_oauth_enabled=True,
+                webui_url="https://ai.example.com",
+                development_context=False,
+            )
+        )
+        self.assertIsNone(
+            validate_drive_onboarding_urls(
+                enabled=True,
+                session_oauth_enabled=True,
+                webui_url="http://localhost:3000/",
+                development_context=True,
+            )
+        )
+
+    def test_rejects_untrusted_return_targets(self):
+        for value in (
+            "",
+            "http://ai.example.com",
+            "https://user@ai.example.com",
+            "https://ai.example.com/chat",
+            "https://ai.example.com?next=https://attacker.example",
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(ImproperlyConfigured):
+                    validate_drive_onboarding_urls(
+                        enabled=True,
+                        session_oauth_enabled=True,
+                        webui_url=value,
+                        development_context=False,
+                    )
+
+    def test_disabled_onboarding_does_not_require_url(self):
+        self.assertIsNone(
+            validate_drive_onboarding_urls(
+                enabled=False,
+                session_oauth_enabled=False,
+                webui_url="",
+                development_context=False,
+            )
+        )
+
+    def test_enabled_onboarding_requires_session_bootstrap(self):
+        with self.assertRaises(ImproperlyConfigured):
+            validate_drive_onboarding_urls(
+                enabled=True,
+                session_oauth_enabled=False,
+                webui_url="https://ai.example.com",
+                development_context=False,
+            )
 
 
 class GoogleSessionOAuthSettingsValidationTests(SimpleTestCase):

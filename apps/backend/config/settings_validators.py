@@ -24,6 +24,40 @@ GOOGLE_SESSION_OAUTH_CALLBACK_PATH = "/api/session/google/callback"
 GOOGLE_USER_TOKEN_KEYRING_MAX_BYTES = 16_384
 
 
+def validate_drive_onboarding_urls(
+    *,
+    enabled: bool,
+    session_oauth_enabled: bool,
+    webui_url: str,
+    development_context: bool,
+) -> None:
+    """Require a browser-safe Open WebUI return origin for guided onboarding."""
+    if not enabled:
+        return
+    if not session_oauth_enabled:
+        raise ImproperlyConfigured(
+            "GOOGLE_SESSION_OAUTH_ENABLED must be true when guided Drive onboarding is enabled."
+        )
+    parsed = urlsplit(webui_url)
+    local_http_allowed = (
+        development_context
+        and parsed.scheme == "http"
+        and parsed.hostname in {"localhost", "127.0.0.1"}
+    )
+    if (
+        (parsed.scheme != "https" and not local_http_allowed)
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ImproperlyConfigured(
+            "WEBUI_URL must be an exact HTTPS origin when guided Drive onboarding is enabled."
+        )
+
+
 def validate_open_webui_compatible_settings(
     *,
     enabled: bool,
