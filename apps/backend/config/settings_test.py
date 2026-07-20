@@ -29,6 +29,21 @@ QUERY_ANSWER_PROVIDER = "extractive"
 # .env. Per-user authorization tests opt in explicitly with override_settings.
 GOOGLE_PERMISSION_AUTHORITY = "delegated_acl"
 
+# The production settings remove dormant delegated reconciliation from Beat.
+# Restore it only in the isolated test configuration that opts into that mode.
+CELERY_BEAT_SCHEDULE.update(  # noqa: F405
+    {
+        "schedule-permission-syncs": {
+            "task": "integrations.schedule_permission_syncs",
+            "schedule": float(PERMISSION_SYNC_INTERVAL_SECONDS),  # noqa: F405
+        },
+        "sweep-stale-permission-sync-runs": {
+            "task": "integrations.sweep_stale_permission_sync_runs",
+            "schedule": 900.0,
+        },
+    }
+)
+
 # In-process cache so throttle tests never need a Redis instance.
 CACHES = {
     "default": {

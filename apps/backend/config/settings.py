@@ -490,7 +490,10 @@ GOOGLE_OAUTH_CLIENT_SECRET_FILE = env("GOOGLE_OAUTH_CLIENT_SECRET_FILE", default
 GOOGLE_OAUTH_TOKEN_FILE = env("GOOGLE_OAUTH_TOKEN_FILE", default="")
 GOOGLE_SERVICE_ACCOUNT_FILE = env("GOOGLE_SERVICE_ACCOUNT_FILE", default="")
 GOOGLE_DRIVE_DELEGATED_SUBJECT = env("GOOGLE_DRIVE_DELEGATED_SUBJECT", default="")
-GOOGLE_PERMISSION_AUTHORITY = env("GOOGLE_PERMISSION_AUTHORITY", default="delegated_acl")
+GOOGLE_PERMISSION_AUTHORITY = env(
+    "GOOGLE_PERMISSION_AUTHORITY",
+    default="per_user_oauth",
+)
 GOOGLE_SESSION_OAUTH_ENABLED = env.bool("GOOGLE_SESSION_OAUTH_ENABLED", default=False)
 GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID", default="")
 GOOGLE_CLIENT_SECRET = env("GOOGLE_CLIENT_SECRET", default="")
@@ -552,6 +555,11 @@ validate_google_user_oauth_settings(
         GOOGLE_OAUTH_TOKEN_FILE,
     ),
 )
+if GOOGLE_PERMISSION_AUTHORITY != "delegated_acl":
+    # Legacy implementation stays available to isolated tests, but normal POC
+    # workers do not schedule or expose its reconciliation workflow.
+    CELERY_BEAT_SCHEDULE.pop("schedule-permission-syncs", None)
+    CELERY_BEAT_SCHEDULE.pop("sweep-stale-permission-sync-runs", None)
 validate_drive_onboarding_urls(
     enabled=(OPEN_WEBUI_COMPATIBLE_API_ENABLED and GOOGLE_PERMISSION_AUTHORITY == "per_user_oauth"),
     session_oauth_enabled=GOOGLE_SESSION_OAUTH_ENABLED,

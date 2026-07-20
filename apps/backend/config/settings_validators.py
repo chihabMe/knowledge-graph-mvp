@@ -301,6 +301,10 @@ def validate_google_user_oauth_settings(
             "GOOGLE_USER_OAUTH_STATE_MAX_AGE_SECONDS must be between 60 and 900."
         )
 
+    if permission_authority == "delegated_acl" and not development_context:
+        raise ImproperlyConfigured(
+            "GOOGLE_PERMISSION_AUTHORITY must be 'per_user_oauth' for POC deployments."
+        )
     if permission_authority != "per_user_oauth":
         return
 

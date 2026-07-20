@@ -251,7 +251,7 @@ class GoogleUserOAuthSettingsValidationTests(SimpleTestCase):
     def test_valid_per_user_settings_are_accepted(self):
         self.assertIsNone(self.validate())
 
-    def test_delegated_mode_does_not_require_oauth_secrets(self):
+    def test_dormant_delegated_mode_is_available_only_to_development_tests(self):
         self.assertIsNone(
             self.validate(
                 permission_authority="delegated_acl",
@@ -260,8 +260,11 @@ class GoogleUserOAuthSettingsValidationTests(SimpleTestCase):
                 redirect_uri="",
                 allowed_domain="",
                 token_encryption_key_file="",
+                development_context=True,
             )
         )
+        with self.assertRaisesRegex(ImproperlyConfigured, "per_user_oauth"):
+            self.validate(permission_authority="delegated_acl")
 
     def test_authority_and_limits_fail_closed(self):
         invalid_values = (
