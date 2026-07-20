@@ -430,6 +430,61 @@ class PermissionSyncTests(TestCase):
         self.assertNotIn(stale, spicedb.current)
         self.assertIn(stale, spicedb.write_calls[0][1])
 
+    def test_stray_oauth_viewer_tuple_is_removed_and_reported(self):
+        stray = PermissionTuple(
+            "kgm/document",
+            document_object_id(self.connection.pk, self.document.pk),
+            "oauth_viewer",
+            "kgm/user",
+            user_object_id(self.connection.pk, "leftover@example.com"),
+        )
+        spicedb = FakeSpiceDB({stray})
+        with self.assertLogs("authorization.sync", level="ERROR") as logs:
+            run = self.run_sync(
+                [
+                    DrivePermissionResource("folder", "root", permissions=[]),
+                    DrivePermissionResource("document", "doc-1", ["root"], [user_permission()]),
+                ],
+                spicedb=spicedb,
+            )
+        self.assertEqual(run.status, PermissionSyncRun.Status.SUCCEEDED)
+        self.assertNotIn(stray, spicedb.current)
+        self.assertIn(stray, spicedb.write_calls[0][1])
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("1 stray oauth_viewer", logs.output[0])
+        self.assertNotIn("leftover", logs.output[0])
+
+    def test_desired_state_containing_oauth_viewer_fails_the_run(self):
+        from authorization import sync as sync_module
+
+        poisoned = sync_module.SyncResult(
+            frozenset(
+                {
+                    PermissionTuple(
+                        "kgm/document",
+                        document_object_id(self.connection.pk, self.document.pk),
+                        "oauth_viewer",
+                        "kgm/user",
+                        user_object_id(self.connection.pk, "user@example.com"),
+                    )
+                }
+            ),
+            {},
+            {},
+            0,
+        )
+        spicedb = FakeSpiceDB()
+        with (
+            patch.object(sync_module, "_desired_state", return_value=poisoned),
+            self.assertRaises(PermissionSyncError) as raised,
+        ):
+            self.run_sync(
+                [DrivePermissionResource("folder", "root", permissions=[])],
+                spicedb=spicedb,
+            )
+        self.assertEqual(str(raised.exception), "oauth_viewer_in_delegated_state")
+        self.assertEqual(spicedb.write_calls, [])
+
     def test_verification_mismatch_keeps_document_ineligible(self):
         spicedb = FakeSpiceDB(mismatch=True)
         with self.assertRaises(PermissionSyncError):

@@ -9,9 +9,9 @@ from rest_framework.views import APIView
 
 from integrations.drive.client import DriveRootCandidate
 from integrations.drive.google_client import (
+    DriveCredentialUnavailableError,
     GoogleDriveApiError,
     GoogleDriveMetadataClient,
-    MissingServiceAccountKeyError,
 )
 from integrations.models import DriveConnection, DriveSyncRun, SourceDocument
 from integrations.serializers import DriveDelegatedSubjectSerializer, DriveRootSelectionSerializer
@@ -23,10 +23,14 @@ def _active_connection() -> DriveConnection | None:
 
 
 def _connection_defaults_from_settings() -> dict[str, object]:
+    credential_reference = {
+        "application_default": "GOOGLE_APPLICATION_CREDENTIALS",
+        "oauth_dev": "GOOGLE_OAUTH_TOKEN_FILE",
+    }.get(settings.GOOGLE_DRIVE_AUTH_MODE, "GOOGLE_SERVICE_ACCOUNT_FILE")
     return {
         "workspace_domain": settings.GOOGLE_WORKSPACE_DOMAIN,
         "delegated_subject_email": settings.GOOGLE_DRIVE_DELEGATED_SUBJECT,
-        "credential_reference": "GOOGLE_SERVICE_ACCOUNT_FILE",
+        "credential_reference": credential_reference,
         "scope_type": settings.GOOGLE_DRIVE_SCOPE_TYPE,
         "root_folder_id": (
             settings.GOOGLE_DRIVE_ROOT_ID
@@ -68,7 +72,7 @@ def _root_candidate_payload(candidate: DriveRootCandidate) -> dict[str, str]:
     }
 
 
-def _root_candidate_error_response(exc: MissingServiceAccountKeyError) -> Response:
+def _root_candidate_error_response(exc: DriveCredentialUnavailableError) -> Response:
     return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
 
@@ -116,7 +120,7 @@ class DriveRootListView(APIView):
         connection = _active_connection() or _transient_connection_from_settings()
         try:
             candidates = GoogleDriveMetadataClient().list_root_candidates(connection)
-        except MissingServiceAccountKeyError as exc:
+        except DriveCredentialUnavailableError as exc:
             return _root_candidate_error_response(exc)
         except GoogleDriveApiError as exc:
             return _drive_api_error_response(exc)
@@ -143,7 +147,7 @@ class DriveRootSelectionView(APIView):
         connection = _active_or_bootstrap_connection()
         try:
             candidates = GoogleDriveMetadataClient().list_root_candidates(connection)
-        except MissingServiceAccountKeyError as exc:
+        except DriveCredentialUnavailableError as exc:
             return _root_candidate_error_response(exc)
         except GoogleDriveApiError as exc:
             return _drive_api_error_response(exc)
@@ -259,7 +263,7 @@ class DrivePermissionCheckView(APIView):
 
         try:
             report = GoogleDriveMetadataClient().check_permission_access(connection)
-        except MissingServiceAccountKeyError as exc:
+        except DriveCredentialUnavailableError as exc:
             return _root_candidate_error_response(exc)
         except GoogleDriveApiError as exc:
             return _drive_api_error_response(exc)

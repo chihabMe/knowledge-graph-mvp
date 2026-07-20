@@ -33,6 +33,12 @@
 
 ### Permission Tests
 
+- Admin approval without user consent produces no grant.
+- OAuth callback rejects bad/replayed state, wrong audience/domain, unverified
+  email, and missing Drive scope.
+- Stored refresh credentials are encrypted and never serialized or logged.
+- Visibility sync checks only already-indexed file IDs and never enumerates the
+  user's Drive or downloads content.
 - User with access retrieves answer.
 - User without access does not retrieve answer.
 - Group-based access works.
@@ -40,6 +46,9 @@
 - Permission-only change updates SpiceDB without re-embedding.
 - Expired permission-verification evidence denies access even when a stale
   SpiceDB grant remains.
+- OAuth disconnect, token revocation/refresh failure, account/root/mode change,
+  and per-user evidence expiry deny even when a stale SpiceDB tuple remains.
+- One user's visibility refresh cannot touch another user's evidence or tuples.
 
 ### Retrieval Tests
 

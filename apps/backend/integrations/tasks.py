@@ -16,12 +16,20 @@ from integrations.drive.google_client import (
     build_drive_service,
 )
 from integrations.drive.sync import sync_drive_metadata
+from integrations.drive.user_oauth import REQUIRED_SCOPES
+from integrations.drive.user_visibility_sync import (
+    UserVisibilitySyncError,
+    invalidate_authorization_evidence,
+    synchronize_user_visibility,
+)
 from integrations.models import (
     DriveConnection,
     DriveSyncRun,
+    GoogleDriveAuthorization,
     PermissionSyncRun,
     SourceDocument,
     SourceDocumentContent,
+    UserVisibilitySyncRun,
 )
 
 _UNSET = object()
@@ -76,6 +84,71 @@ def run_permission_sync(self, run_id: int) -> dict[str, int | str]:
             cache.delete(lock_key)
 
 
+_RETRYABLE_USER_VISIBILITY_ERRORS = frozenset(
+    {
+        "credential_refresh_failed",
+        "relationship_verification_mismatch",
+        "spicedb_operation_failed",
+        "visibility_sync_failed",
+    }
+)
+
+
+@shared_task(
+    bind=True,
+    name="integrations.run_user_visibility_sync",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=3,
+)
+def run_user_visibility_sync(self, run_id: int) -> dict[str, int | str]:
+    """Refresh one durable authorization using no task-supplied identity or file IDs."""
+    run = UserVisibilitySyncRun.objects.select_related("connection", "authorization").get(pk=run_id)
+    if run.status not in {
+        UserVisibilitySyncRun.Status.QUEUED,
+        UserVisibilitySyncRun.Status.RUNNING,
+    }:
+        return {"run_id": run.pk, "status": run.status}
+    lock_key = f"user-visibility-sync:authorization:{run.authorization_id}"
+    lock_token = f"run:{run.pk}"
+    lock_ttl_seconds = settings.GOOGLE_USER_VISIBILITY_STALE_RUN_TIMEOUT_MINUTES * 60
+    if not cache.add(lock_key, lock_token, timeout=lock_ttl_seconds):
+        raise self.retry(countdown=_retry_countdown(self.request.retries))
+    try:
+        claimed = UserVisibilitySyncRun.objects.filter(
+            pk=run_id,
+            status=UserVisibilitySyncRun.Status.QUEUED,
+        ).update(
+            status=UserVisibilitySyncRun.Status.RUNNING,
+            started_at=timezone.now(),
+            finished_at=None,
+        )
+        run.refresh_from_db()
+        if not claimed and run.status != UserVisibilitySyncRun.Status.RUNNING:
+            return {"run_id": run.pk, "status": run.status}
+        try:
+            run = synchronize_user_visibility(run)
+        except UserVisibilitySyncError as exc:
+            if (
+                str(exc) in _RETRYABLE_USER_VISIBILITY_ERRORS
+                and self.request.retries < self.max_retries
+            ):
+                UserVisibilitySyncRun.objects.filter(pk=run.pk).update(
+                    status=UserVisibilitySyncRun.Status.QUEUED,
+                    error_code="",
+                    finished_at=None,
+                )
+                raise self.retry(
+                    exc=exc,
+                    countdown=_retry_countdown(self.request.retries),
+                ) from exc
+            raise
+        return {"run_id": run.pk, "status": run.status}
+    finally:
+        if cache.get(lock_key) == lock_token:
+            cache.delete(lock_key)
+
+
 def _set_graph_extraction_state(
     source_document_id: int,
     status: str,
@@ -103,6 +176,28 @@ def _set_graph_extraction_state(
     if expected_content_hash is not None:
         documents = documents.filter(content_hash=expected_content_hash)
     return bool(documents.update(**updates))
+
+
+def _mark_per_user_content_ready(
+    source_document_id: int,
+    expected_content_hash: str,
+) -> None:
+    """Open only the coarse content gate; user evidence still grants access."""
+    if settings.GOOGLE_PERMISSION_AUTHORITY != DriveConnection.PermissionAuthority.PER_USER_OAUTH:
+        return
+    SourceDocument.objects.filter(
+        pk=source_document_id,
+        content_hash=expected_content_hash,
+        content__content_hash=expected_content_hash,
+        active_in_scope=True,
+        exclusion_reason="",
+        graph_extraction_status=SourceDocument.GraphExtractionStatus.SUCCEEDED,
+        connection__enabled=True,
+        connection__permission_authority=DriveConnection.PermissionAuthority.PER_USER_OAUTH,
+    ).exclude(source_permissions_version="").update(
+        retrieval_eligible=True,
+        updated_at=timezone.now(),
+    )
 
 
 def _current_content_hash(source_document_id: int) -> str:
@@ -178,7 +273,10 @@ def schedule_permission_syncs() -> dict[str, int]:
     """
     scheduled = 0
     redispatched = 0
-    for connection in DriveConnection.objects.filter(enabled=True).order_by("pk"):
+    for connection in DriveConnection.objects.filter(
+        enabled=True,
+        permission_authority=DriveConnection.PermissionAuthority.DELEGATED_ACL,
+    ).order_by("pk"):
         if not connection.effective_root_id:
             continue
         active = PermissionSyncRun.objects.filter(
@@ -205,6 +303,79 @@ def schedule_permission_syncs() -> dict[str, int]:
     return {"scheduled": scheduled, "redispatched": redispatched}
 
 
+def _user_authorization_ready(authorization: GoogleDriveAuthorization) -> bool:
+    return bool(
+        authorization.status == GoogleDriveAuthorization.Status.ACTIVE
+        and authorization.connection_generation == authorization.connection.authorization_generation
+        and REQUIRED_SCOPES.issubset(set(authorization.granted_scopes))
+        and bytes(authorization.encrypted_refresh_credential)
+        and authorization.encryption_key_version
+    )
+
+
+@shared_task(name="integrations.schedule_user_visibility_syncs")
+def schedule_user_visibility_syncs() -> dict[str, int]:
+    """Refresh each ready pilot authorization before positive evidence expires."""
+    scheduled = 0
+    redispatched = 0
+    skipped_user_cap = 0
+    connections = DriveConnection.objects.filter(
+        enabled=True,
+        permission_authority=DriveConnection.PermissionAuthority.PER_USER_OAUTH,
+    ).order_by("pk")
+    for connection in connections:
+        if (
+            settings.GOOGLE_PERMISSION_AUTHORITY
+            != DriveConnection.PermissionAuthority.PER_USER_OAUTH
+            or not connection.effective_root_id
+        ):
+            continue
+        authorizations = list(
+            GoogleDriveAuthorization.objects.filter(connection=connection)
+            .select_related("connection")
+            .order_by("pk")
+        )
+        ready = [item for item in authorizations if _user_authorization_ready(item)]
+        if len(ready) > settings.GOOGLE_USER_VISIBILITY_MAX_USERS:
+            for authorization in authorizations:
+                invalidate_authorization_evidence(
+                    authorization.pk,
+                    reason_code="user_cap_exceeded",
+                )
+            skipped_user_cap += 1
+            continue
+        for authorization in authorizations:
+            if authorization not in ready:
+                invalidate_authorization_evidence(
+                    authorization.pk,
+                    reason_code="authorization_unavailable",
+                )
+                continue
+            active = UserVisibilitySyncRun.objects.filter(
+                authorization=authorization,
+                status__in=[
+                    UserVisibilitySyncRun.Status.QUEUED,
+                    UserVisibilitySyncRun.Status.RUNNING,
+                ],
+            )
+            if active.filter(status=UserVisibilitySyncRun.Status.RUNNING).exists():
+                continue
+            queued = list(active.order_by("pk"))
+            if queued:
+                for run in queued:
+                    run_user_visibility_sync.delay(run.pk)
+                    redispatched += 1
+                continue
+            run = UserVisibilitySyncRun.create_for_authorization(authorization)
+            run_user_visibility_sync.delay(run.pk)
+            scheduled += 1
+    return {
+        "scheduled": scheduled,
+        "redispatched": redispatched,
+        "skipped_user_cap": skipped_user_cap,
+    }
+
+
 @shared_task(name="integrations.sweep_stale_permission_sync_runs")
 def sweep_stale_permission_sync_runs() -> dict[str, int]:
     """Fail closed on permission runs a crashed worker left stuck in RUNNING.
@@ -224,6 +395,39 @@ def sweep_stale_permission_sync_runs() -> dict[str, int]:
         error_code="stale_run_timeout",
         finished_at=timezone.now(),
     )
+    return {"swept": swept}
+
+
+@shared_task(name="integrations.sweep_stale_user_visibility_sync_runs")
+def sweep_stale_user_visibility_sync_runs() -> dict[str, int]:
+    """Expire evidence for authorizations whose worker died during refresh."""
+    cutoff = timezone.now() - datetime.timedelta(
+        minutes=settings.GOOGLE_USER_VISIBILITY_STALE_RUN_TIMEOUT_MINUTES
+    )
+    stale_runs = list(
+        UserVisibilitySyncRun.objects.filter(
+            status=UserVisibilitySyncRun.Status.RUNNING,
+            started_at__lt=cutoff,
+        ).order_by("pk")
+    )
+    swept = 0
+    for run in stale_runs:
+        claimed = UserVisibilitySyncRun.objects.filter(
+            pk=run.pk,
+            status=UserVisibilitySyncRun.Status.RUNNING,
+            started_at__lt=cutoff,
+        ).update(
+            status=UserVisibilitySyncRun.Status.FAILED,
+            error_code="stale_run_timeout",
+            finished_at=timezone.now(),
+        )
+        if not claimed:
+            continue
+        invalidate_authorization_evidence(
+            run.authorization_id,
+            reason_code="stale_run_timeout",
+        )
+        swept += 1
     return {"swept": swept}
 
 
@@ -350,4 +554,6 @@ def queue_document_extraction(
         finished_at=timezone.now(),
     ):
         return _stale_content_result(source_document_id)
+    if final_status == SourceDocument.GraphExtractionStatus.SUCCEEDED:
+        _mark_per_user_content_ready(source_document_id, expected_content_hash)
     return result

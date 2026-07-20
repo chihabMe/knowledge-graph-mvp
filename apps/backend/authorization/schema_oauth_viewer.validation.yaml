@@ -1,0 +1,13 @@
+schemaFile: "./schema.zed"
+
+relationships: |-
+  kgm/document:c1_d_allowed#oauth_viewer@kgm/user:c1_u_allowed
+  kgm/document:c1_d_other#oauth_viewer@kgm/user:c1_u_other
+
+assertions:
+  assertTrue:
+    - "kgm/document:c1_d_allowed#view@kgm/user:c1_u_allowed"
+    - "kgm/document:c1_d_other#view@kgm/user:c1_u_other"
+  assertFalse:
+    - "kgm/document:c1_d_allowed#view@kgm/user:c1_u_other"
+    - "kgm/document:c1_d_other#view@kgm/user:c1_u_allowed"

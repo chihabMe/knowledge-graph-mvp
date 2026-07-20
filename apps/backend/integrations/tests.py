@@ -19,8 +19,10 @@ from integrations.drive.client import (
     DrivePermissionAccessReport,
     DriveRootCandidate,
 )
+from integrations.drive.credentials import ApplicationDefaultCredentialError
 from integrations.drive.export import content_sha256, export_file_content
 from integrations.drive.google_client import (
+    ApplicationDefaultUnavailableError,
     GoogleDriveApiError,
     GoogleDriveMetadataClient,
     MissingServiceAccountKeyError,
@@ -949,6 +951,44 @@ class BuildDriveServiceTests(SimpleTestCase):
                 build_drive_service(connection)
         mock_load.assert_not_called()
 
+    @patch("googleapiclient.discovery.build")
+    @patch("integrations.drive.google_client.load_application_default_credentials")
+    def test_application_default_mode_uses_keyless_credentials(self, mock_load, mock_build):
+        credentials = mock_load.return_value
+        connection = DriveConnection(delegated_subject_email="")
+
+        with override_settings(GOOGLE_DRIVE_AUTH_MODE="application_default"):
+            build_drive_service(connection)
+
+        mock_load.assert_called_once_with(["https://www.googleapis.com/auth/drive.readonly"])
+        _, build_kwargs = mock_build.call_args
+        self.assertIs(build_kwargs["credentials"], credentials)
+
+    @patch("integrations.drive.google_client.load_application_default_credentials")
+    def test_application_default_mode_rejects_delegated_subject(self, mock_load):
+        connection = DriveConnection(delegated_subject_email="admin@example.com")
+
+        with override_settings(GOOGLE_DRIVE_AUTH_MODE="application_default"):
+            with self.assertRaises(GoogleDriveApiError):
+                build_drive_service(connection)
+
+        mock_load.assert_not_called()
+
+    @patch(
+        "integrations.drive.google_client.load_application_default_credentials",
+        side_effect=ApplicationDefaultCredentialError(
+            "Google Application Default Credentials are unavailable."
+        ),
+    )
+    def test_application_default_discovery_failure_is_controlled(self, _mock_load):
+        connection = DriveConnection(delegated_subject_email="")
+
+        with override_settings(GOOGLE_DRIVE_AUTH_MODE="application_default"):
+            with self.assertRaises(ApplicationDefaultUnavailableError) as context:
+                build_drive_service(connection)
+
+        self.assertNotIn("credential JSON", str(context.exception))
+
 
 class ExportFileContentTests(SimpleTestCase):
     def test_google_doc_exports_to_plain_text(self):
@@ -1036,6 +1076,74 @@ class DriveContentSyncTests(TestCase):
     @staticmethod
     def _collect_queued(queued):
         return lambda document_id, content_hash: queued.append((document_id, content_hash))
+
+    @override_settings(GOOGLE_PERMISSION_AUTHORITY="per_user_oauth")
+    def test_per_user_oauth_sync_exports_when_content_reader_cannot_list_acl(self):
+        self.connection.permission_authority = DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        self.connection.save(update_fields=["permission_authority"])
+        exporter = FakeContentExporter()
+        client = FakeDriveMetadataClient(
+            [
+                DriveFileMetadata(
+                    drive_file_id="drive-file-1",
+                    title="Pilot Notes",
+                    mime_type="application/vnd.google-apps.document",
+                    modified_time=datetime(2026, 7, 2, tzinfo=UTC),
+                    permissions=[],
+                    permissions_fetch_failed=True,
+                )
+            ]
+        )
+
+        run = sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=lambda _document_id, _content_hash: None,
+        )
+
+        document = SourceDocument.objects.get(drive_file_id="drive-file-1")
+        snapshot = DrivePermissionSnapshot.objects.get(source_document=document)
+        self.assertTrue(SourceDocumentContent.objects.filter(source_document=document).exists())
+        self.assertEqual(document.exclusion_reason, "")
+        self.assertFalse(document.retrieval_eligible)
+        self.assertFalse(snapshot.permissions_complete)
+        self.assertEqual(run.stored_files, 1)
+        self.assertEqual(run.skipped_files, 0)
+
+    @override_settings(GOOGLE_PERMISSION_AUTHORITY="delegated_acl")
+    def test_authority_setting_mismatch_keeps_failed_acl_content_excluded(self):
+        self.connection.permission_authority = DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        self.connection.save(update_fields=["permission_authority"])
+        exporter = FakeContentExporter()
+        client = FakeDriveMetadataClient(
+            [
+                DriveFileMetadata(
+                    drive_file_id="drive-file-1",
+                    title="Pilot Notes",
+                    mime_type="application/vnd.google-apps.document",
+                    permissions=[],
+                    permissions_fetch_failed=True,
+                )
+            ]
+        )
+
+        run = sync_drive_metadata(
+            connection=self.connection,
+            client=client,
+            content_exporter=exporter,
+            queue_extraction=lambda _document_id, _content_hash: None,
+        )
+
+        document = SourceDocument.objects.get(drive_file_id="drive-file-1")
+        self.assertFalse(SourceDocumentContent.objects.exists())
+        self.assertEqual(
+            document.exclusion_reason,
+            SourceDocument.ExclusionReason.PERMISSION_METADATA_INCOMPLETE,
+        )
+        self.assertFalse(document.retrieval_eligible)
+        self.assertEqual(run.stored_files, 0)
+        self.assertEqual(run.skipped_files, 1)
 
     def test_sync_stores_content_and_queues_extraction(self):
         exporter = FakeContentExporter()
@@ -1706,7 +1814,8 @@ class DriveRootApiTests(TestCase):
 
     @override_settings(
         GOOGLE_WORKSPACE_DOMAIN="example.com",
-        GOOGLE_DRIVE_DELEGATED_SUBJECT="admin@example.com",
+        GOOGLE_DRIVE_AUTH_MODE="application_default",
+        GOOGLE_DRIVE_DELEGATED_SUBJECT="",
         GOOGLE_DRIVE_SCOPE_TYPE="folder",
         GOOGLE_DRIVE_ROOT_ID="",
         GOOGLE_SHARED_DRIVE_ID="",
@@ -1731,8 +1840,8 @@ class DriveRootApiTests(TestCase):
         transient = fake_client.connections[0]
         self.assertIsNone(transient.pk)
         self.assertEqual(transient.workspace_domain, "example.com")
-        self.assertEqual(transient.delegated_subject_email, "admin@example.com")
-        self.assertEqual(transient.credential_reference, "GOOGLE_SERVICE_ACCOUNT_FILE")
+        self.assertEqual(transient.delegated_subject_email, "")
+        self.assertEqual(transient.credential_reference, "GOOGLE_APPLICATION_CREDENTIALS")
 
     @patch("integrations.views.GoogleDriveMetadataClient")
     def test_drive_api_errors_return_controlled_bad_gateway(self, mock_client_class):
@@ -2192,6 +2301,40 @@ class QueueDocumentExtractionTaskTests(TestCase):
         )
         self.assertIsNotNone(self.document.graph_extraction_started_at)
         self.assertIsNotNone(self.document.graph_extraction_finished_at)
+
+    @override_settings(GOOGLE_PERMISSION_AUTHORITY="per_user_oauth")
+    @patch("integrations.tasks.extract_document_to_graph")
+    def test_per_user_success_opens_only_the_coarse_content_gate(self, mock_extract):
+        self.connection.permission_authority = DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        self.connection.save(update_fields=["permission_authority"])
+        self.document.source_permissions_version = "authority-generation"
+        self.document.save(update_fields=["source_permissions_version"])
+        mock_extract.return_value = {
+            "source_document_id": self.document.pk,
+            "status": "extracted",
+            "chunks": 1,
+        }
+
+        queue_document_extraction(self.document.pk)
+
+        self.document.refresh_from_db()
+        self.assertTrue(self.document.retrieval_eligible)
+
+    @override_settings(GOOGLE_PERMISSION_AUTHORITY="delegated_acl")
+    @patch("integrations.tasks.extract_document_to_graph")
+    def test_delegated_success_does_not_bypass_permission_verification(self, mock_extract):
+        self.document.source_permissions_version = "permission-version"
+        self.document.save(update_fields=["source_permissions_version"])
+        mock_extract.return_value = {
+            "source_document_id": self.document.pk,
+            "status": "extracted",
+            "chunks": 1,
+        }
+
+        queue_document_extraction(self.document.pk)
+
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.retrieval_eligible)
 
     @patch("integrations.tasks.extract_document_to_graph", side_effect=RuntimeError("boom"))
     def test_permanent_failure_is_recorded_without_error_text(self, _mock_extract):

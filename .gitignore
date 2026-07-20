@@ -40,3 +40,8 @@ chat-client.md
 output/
 tmp/
 private/
+
+# Detailed local Phase 6 working reports - operator reference, not part of
+# the shared repo (the tracker links the tracked plan documents instead)
+docs/phase-6-local-implementation-report.md
+docs/phase-6-per-user-oauth-cutover-work-report.md

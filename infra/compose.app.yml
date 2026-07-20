@@ -18,18 +18,42 @@ services:
           memory: 1G
     env_file:
       - ${APP_ENV_FILE:-../.env}
-    # Google credentials stay outside the repo. Keys are read-only; the OAuth
-    # token gets a dedicated writable directory so refresh can atomically
-    # replace the file without making the other secrets writable.
+    # Google credentials stay outside the repo. Local ADC and legacy keys are
+    # read-only; an attached Compute Engine service account needs no file.
+    # The development OAuth token gets a dedicated writable directory.
     volumes:
+      - ${GOOGLE_ADC_FILE:-/dev/null}:/run/secrets/google-application-default.json:ro
       - ${GOOGLE_SERVICE_ACCOUNT_FILE:-/dev/null}:/run/secrets/google-service-account.json:ro
       - ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-oauth-client.json:ro
+      - ${GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-user-oauth-client.json:ro
+      - ${GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE:-/dev/null}:/run/secrets/google-user-token-keyring.json:ro
       - ${GOOGLE_OAUTH_TOKEN_DIR:-/dev/null}:/run/secrets/google-oauth-token-store:rw
     environment:
-      GOOGLE_DRIVE_AUTH_MODE: ${GOOGLE_DRIVE_AUTH_MODE:-service_account}
+      # Open WebUI reaches the compatible API through Compose DNS. Preserve
+      # the operator's external host allowlist and add only that internal name.
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1},django
+      GOOGLE_DRIVE_AUTH_MODE: ${GOOGLE_DRIVE_AUTH_MODE:-application_default}
+      # Empty means ADC may fall through to the Compute Engine metadata server.
+      # Local development sets this to the read-only mount above.
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_ADC_CONTAINER_FILE:-}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
       GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-oauth-client.json
       GOOGLE_OAUTH_TOKEN_FILE: /run/secrets/google-oauth-token-store/google-oauth-token.json
+      GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-user-oauth-client.json
+      GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/google-user-token-keyring.json
+      # Explicit interpolation lets an operator rotate or smoke-test these
+      # values without writing credentials into the Compose files. The same
+      # two values are supplied independently to Open WebUI.
+      OPEN_WEBUI_COMPATIBLE_API_ENABLED: ${OPEN_WEBUI_COMPATIBLE_API_ENABLED:-false}
+      OPEN_WEBUI_BACKEND_API_KEY: ${OPEN_WEBUI_BACKEND_API_KEY:-}
+      OPEN_WEBUI_IDENTITY_JWT_SECRET: ${OPEN_WEBUI_IDENTITY_JWT_SECRET:-}
+      OPEN_WEBUI_IDENTITY_JWT_HEADER: ${OPEN_WEBUI_IDENTITY_JWT_HEADER:-X-OpenWebUI-User-Jwt}
+      OPEN_WEBUI_IDENTITY_JWT_ISSUER: ${OPEN_WEBUI_IDENTITY_JWT_ISSUER:-open-webui}
+      OPEN_WEBUI_IDENTITY_JWT_MAX_LIFETIME_SECONDS: ${OPEN_WEBUI_IDENTITY_JWT_MAX_LIFETIME_SECONDS:-300}
+      OPEN_WEBUI_IDENTITY_JWT_CLOCK_SKEW_SECONDS: ${OPEN_WEBUI_IDENTITY_JWT_CLOCK_SKEW_SECONDS:-10}
+      OPEN_WEBUI_MODEL_ID: ${OPEN_WEBUI_MODEL_ID:-client-knowledge-graph}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-}
     command:
       - gunicorn
       - config.wsgi:application
@@ -92,16 +116,23 @@ services:
     env_file:
       - ${APP_ENV_FILE:-../.env}
     # The Drive sync task runs here, so the worker needs the same credential
-    # mounts and the dedicated writable OAuth-token directory.
+    # sources and the dedicated writable OAuth-token directory.
     volumes:
+      - ${GOOGLE_ADC_FILE:-/dev/null}:/run/secrets/google-application-default.json:ro
       - ${GOOGLE_SERVICE_ACCOUNT_FILE:-/dev/null}:/run/secrets/google-service-account.json:ro
       - ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-oauth-client.json:ro
+      - ${GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-user-oauth-client.json:ro
+      - ${GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE:-/dev/null}:/run/secrets/google-user-token-keyring.json:ro
       - ${GOOGLE_OAUTH_TOKEN_DIR:-/dev/null}:/run/secrets/google-oauth-token-store:rw
     environment:
-      GOOGLE_DRIVE_AUTH_MODE: ${GOOGLE_DRIVE_AUTH_MODE:-service_account}
+      GOOGLE_DRIVE_AUTH_MODE: ${GOOGLE_DRIVE_AUTH_MODE:-application_default}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_ADC_CONTAINER_FILE:-}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
       GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-oauth-client.json
       GOOGLE_OAUTH_TOKEN_FILE: /run/secrets/google-oauth-token-store/google-oauth-token.json
+      GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-user-oauth-client.json
+      GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/google-user-token-keyring.json
     command:
       - celery
       - -A
@@ -133,6 +164,12 @@ services:
     logging: *default-logging
     env_file:
       - ${APP_ENV_FILE:-../.env}
+    volumes:
+      - ${GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-user-oauth-client.json:ro
+      - ${GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE:-/dev/null}:/run/secrets/google-user-token-keyring.json:ro
+    environment:
+      GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-user-oauth-client.json
+      GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/google-user-token-keyring.json
     command:
       - python
       - manage.py
@@ -155,6 +192,12 @@ services:
           memory: 256M
     env_file:
       - ${APP_ENV_FILE:-../.env}
+    volumes:
+      - ${GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-user-oauth-client.json:ro
+      - ${GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE:-/dev/null}:/run/secrets/google-user-token-keyring.json:ro
+    environment:
+      GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-user-oauth-client.json
+      GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/google-user-token-keyring.json
     command:
       - celery
       - -A

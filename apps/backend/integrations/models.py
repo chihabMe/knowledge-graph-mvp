@@ -1,4 +1,5 @@
 import datetime
+import uuid
 
 from django.conf import settings
 from django.db import models
@@ -17,6 +18,10 @@ class DriveConnection(models.Model):
         FOLDER = "folder", "Folder"
         SHARED_DRIVE = "shared_drive", "Shared drive"
 
+    class PermissionAuthority(models.TextChoices):
+        DELEGATED_ACL = "delegated_acl", "Delegated ACL (legacy)"
+        PER_USER_OAUTH = "per_user_oauth", "Per-user OAuth"
+
     name = models.CharField(max_length=120, default="Primary Google Drive")
     workspace_domain = models.CharField(max_length=255)
     delegated_subject_email = models.EmailField(blank=True)
@@ -33,6 +38,16 @@ class DriveConnection(models.Model):
     )
     root_folder_id = models.CharField(max_length=255, blank=True)
     shared_drive_id = models.CharField(max_length=255, blank=True)
+    permission_authority = models.CharField(
+        max_length=32,
+        choices=PermissionAuthority.choices,
+        default=PermissionAuthority.DELEGATED_ACL,
+    )
+    # Rotated by the cutover service before a root, account, or authority
+    # change may grant access. It is intentionally not derived from mutable
+    # identifiers and is never exposed through status APIs.
+    authorization_generation = models.UUIDField(default=uuid.uuid4, editable=False)
+    permission_authority_changed_at = models.DateTimeField(null=True, blank=True)
     enabled = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -184,6 +199,158 @@ class SourceDocument(models.Model):
             and self.spicedb_verified_at >= permission_verification_cutoff()
             and self.source_permissions_version == version
             and self.spicedb_permissions_version == version
+        )
+
+
+class GoogleDriveAuthorization(models.Model):
+    """One encrypted per-user Drive authorization for an indexed connection."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        SCOPE_MISSING = "scope_missing", "Required scope missing"
+        REFRESH_FAILED = "refresh_failed", "Refresh failed"
+        REVOKED = "revoked", "Revoked"
+        DISCONNECTED = "disconnected", "Disconnected"
+
+    connection = models.ForeignKey(
+        DriveConnection,
+        on_delete=models.PROTECT,
+        related_name="google_drive_authorizations",
+    )
+    google_issuer = models.CharField(max_length=255)
+    google_subject = models.CharField(max_length=255)
+    normalized_email = models.EmailField()
+    workspace_domain = models.CharField(max_length=255)
+    # Ciphertext only. Plain refresh credentials never have a model field and
+    # this value is non-editable so generic model forms omit it by default.
+    encrypted_refresh_credential = models.BinaryField(default=bytes, editable=False)
+    encryption_key_version = models.CharField(max_length=32, blank=True, editable=False)
+    granted_scopes = models.JSONField(default=list, blank=True)
+    connection_generation = models.UUIDField(editable=False)
+    authorization_generation = models.UUIDField(default=uuid.uuid4, editable=False)
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.DISCONNECTED)
+    connected_at = models.DateTimeField(null=True, blank=True)
+    last_refreshed_at = models.DateTimeField(null=True, blank=True)
+    last_successful_visibility_sync_at = models.DateTimeField(null=True, blank=True)
+    disconnected_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["connection", "google_issuer", "google_subject"],
+                name="unique_google_drive_authorization_per_connection_subject",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["connection", "normalized_email", "status"]),
+            models.Index(fields=["connection", "connection_generation"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Drive authorization {self.pk or 'unsaved'} ({self.status})"
+
+
+class UserDocumentVisibility(models.Model):
+    """Fresh PostgreSQL evidence that narrows, but never creates, a SpiceDB grant."""
+
+    class State(models.TextChoices):
+        VERIFIED_VISIBLE = "verified_visible", "Verified visible"
+        DENIED = "denied", "Denied"
+        UNKNOWN = "unknown", "Unknown"
+
+    authorization = models.ForeignKey(
+        GoogleDriveAuthorization,
+        on_delete=models.CASCADE,
+        related_name="document_visibility",
+    )
+    source_document = models.ForeignKey(
+        SourceDocument,
+        on_delete=models.CASCADE,
+        related_name="user_visibility_evidence",
+    )
+    connection_generation = models.UUIDField(editable=False)
+    authorization_generation = models.UUIDField(editable=False)
+    state = models.CharField(max_length=32, choices=State.choices, default=State.UNKNOWN)
+    checked_at = models.DateTimeField(default=timezone.now)
+    visibility_sync_marker = models.UUIDField(default=uuid.uuid4, editable=False)
+    spicedb_revision = models.CharField(max_length=1024, blank=True)
+    spicedb_verified_at = models.DateTimeField(null=True, blank=True)
+    # Controlled labels only; never store a remote response or exception text.
+    reason_code = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["authorization", "source_document"],
+                name="unique_user_visibility_per_authorization_document",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["authorization", "state", "checked_at"]),
+            models.Index(
+                fields=["source_document", "connection_generation", "authorization_generation"]
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"User document visibility {self.pk or 'unsaved'} ({self.state})"
+
+
+class UserVisibilitySyncRun(models.Model):
+    """Durable, controlled audit state for one user's indexed-ID visibility run."""
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        PARTIAL = "partial", "Partial"
+        FAILED = "failed", "Failed"
+
+    connection = models.ForeignKey(
+        DriveConnection,
+        on_delete=models.PROTECT,
+        related_name="user_visibility_sync_runs",
+    )
+    authorization = models.ForeignKey(
+        GoogleDriveAuthorization,
+        on_delete=models.PROTECT,
+        related_name="visibility_sync_runs",
+    )
+    connection_generation = models.UUIDField(editable=False)
+    authorization_generation = models.UUIDField(editable=False)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
+    documents_considered = models.PositiveIntegerField(default=0)
+    documents_verified_visible = models.PositiveIntegerField(default=0)
+    documents_denied = models.PositiveIntegerField(default=0)
+    documents_unknown = models.PositiveIntegerField(default=0)
+    relationships_touched = models.PositiveIntegerField(default=0)
+    relationships_deleted = models.PositiveIntegerField(default=0)
+    error_code = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["authorization", "status", "created_at"]),
+            models.Index(fields=["connection", "status", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"User visibility sync {self.pk or 'unsaved'} ({self.status})"
+
+    @classmethod
+    def create_for_authorization(cls, authorization):
+        return cls.objects.create(
+            connection=authorization.connection,
+            authorization=authorization,
+            connection_generation=authorization.connection_generation,
+            authorization_generation=authorization.authorization_generation,
         )
 
 

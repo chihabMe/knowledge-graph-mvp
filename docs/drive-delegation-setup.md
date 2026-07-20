@@ -1,5 +1,10 @@
 # Enabling Drive Permission Sync
 
+> **Legacy optional mode:** ADR-015 replaces domain-wide delegation as the
+> default POC permission authority. Use this guide only when a client explicitly
+> selects delegated ACL/group synchronization. The active Phase 6 path is
+> `docs/phase-6-pre-authorized-oauth-completion-plan.md`.
+
 The knowledge layer only answers from documents a user is allowed to see. To
 know who is allowed, it must read each file's sharing list ("who has access")
 and expand any Google Groups those lists reference.

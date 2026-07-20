@@ -175,6 +175,76 @@ services:
           memory: 1G
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-this-webui-secret}
+      # Environment values are authoritative so a stale value in the named
+      # volume cannot silently re-enable a provider, signup, or direct access.
+      ENABLE_PERSISTENT_CONFIG: "false"
+      ENABLE_OAUTH_PERSISTENT_CONFIG: "false"
+      WEBUI_URL: ${WEBUI_URL:-http://localhost:3000}
+      CORS_ALLOW_ORIGIN: ${WEBUI_URL:-http://localhost:3000}
+      SAFE_MODE: "true"
+      # Expose only the Django-owned logical model. OpenRouter remains private
+      # behind answer_query(); Open WebUI never receives its provider key.
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URL: http://django:8000/v1
+      OPENAI_API_KEY: ${OPEN_WEBUI_BACKEND_API_KEY:-change-this-open-webui-backend-api-key}
+      OPENAI_API_CONFIGS: '{"0":{"enable":true,"model_ids":["${OPEN_WEBUI_MODEL_ID:-client-knowledge-graph}"]}}'
+      DEFAULT_MODELS: ${OPEN_WEBUI_MODEL_ID:-client-knowledge-graph}
+      DEFAULT_PINNED_MODELS: ${OPEN_WEBUI_MODEL_ID:-client-knowledge-graph}
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
+      # This deployment exposes exactly one Django-owned logical model. Allow
+      # every authenticated tenant user to discover it automatically; Django
+      # still verifies the signed identity and enforces document authorization.
+      BYPASS_MODEL_ACCESS_CONTROL: ${OPEN_WEBUI_BYPASS_MODEL_ACCESS_CONTROL:-true}
+      ENABLE_DIRECT_CONNECTIONS: "false"
+      ENABLE_OPENAI_API_PASSTHROUGH: "false"
+      # The bearer key identifies this service; this independent short-lived
+      # JWT identifies the authenticated user on each chat request.
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+      FORWARD_USER_INFO_HEADER_JWT_SECRET: ${OPEN_WEBUI_IDENTITY_JWT_SECRET:-change-this-open-webui-identity-jwt-secret}
+      FORWARD_USER_INFO_HEADER_JWT: ${OPEN_WEBUI_IDENTITY_JWT_HEADER:-X-OpenWebUI-User-Jwt}
+      FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS: ${OPEN_WEBUI_IDENTITY_JWT_MAX_LIFETIME_SECONDS:-300}
+      # Google performs interactive login. Local password recovery is an
+      # explicit, temporary operator override and is disabled by default.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      OPENID_PROVIDER_URL: https://accounts.google.com/.well-known/openid-configuration
+      ENABLE_OAUTH_SIGNUP: "true"
+      # Keep automatic model discovery tenant-scoped by admitting OAuth users
+      # only from the same domain accepted by the Django Drive flow.
+      OAUTH_ALLOWED_DOMAINS: ${GOOGLE_USER_OAUTH_ALLOWED_DOMAIN:-example.com}
+      ENABLE_OAUTH_ID_TOKEN_COOKIE: "false"
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "false"
+      ENABLE_PROFILE_IMAGE_URL_FORWARDING: "false"
+      ENABLE_SIGNUP: "false"
+      ENABLE_LOGIN_FORM: ${OPEN_WEBUI_ENABLE_LOGIN_FORM:-false}
+      ENABLE_PASSWORD_AUTH: ${OPEN_WEBUI_ENABLE_PASSWORD_AUTH:-false}
+      ENABLE_PASSWORD_CHANGE_FORM: ${OPEN_WEBUI_ENABLE_PASSWORD_CHANGE_FORM:-false}
+      # Auxiliary model calls would turn chat history into new queries. The
+      # knowledge-graph adapter accepts only explicit user questions.
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
+      ENABLE_AUTOCOMPLETE_GENERATION: "false"
+      ENABLE_SEARCH_QUERY_GENERATION: "false"
+      # Open WebUI is only the chat shell. Its own file/RAG/tool surfaces are
+      # not another retrieval path and must not download or query local models.
+      RAG_EMBEDDING_ENGINE: openai
+      RAG_EMBEDDING_MODEL_AUTO_UPDATE: "false"
+      BYPASS_EMBEDDING_AND_RETRIEVAL: "true"
+      ENABLE_RAG_LOCAL_WEB_FETCH: "false"
+      USER_PERMISSIONS_CHAT_CONTROLS: "false"
+      USER_PERMISSIONS_CHAT_SYSTEM_PROMPT: "false"
+      USER_PERMISSIONS_CHAT_PARAMS: "false"
+      USER_PERMISSIONS_CHAT_FILE_UPLOAD: "false"
+      USER_PERMISSIONS_CHAT_WEB_UPLOAD: "false"
+      USER_PERMISSIONS_CHAT_MULTIPLE_MODELS: "false"
+      USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: "false"
+      USER_PERMISSIONS_FEATURES_WEB_SEARCH: "false"
+      USER_PERMISSIONS_FEATURES_IMAGE_GENERATION: "false"
+      USER_PERMISSIONS_FEATURES_CODE_INTERPRETER: "false"
+      USER_PERMISSIONS_FEATURES_MEMORIES: "false"
     # Public access goes through Traefik; the direct port is local-dev only.
     ports:
       - "127.0.0.1:${OPEN_WEBUI_PORT:-3000}:8080"

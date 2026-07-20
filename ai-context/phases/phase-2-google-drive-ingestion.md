@@ -6,8 +6,9 @@ Ingest supported Google Drive content and metadata into the system while preserv
 
 ## Scope
 
-- Per-client Google service-account connection, with domain-wide delegation
-  only as a fallback.
+- Per-client Google service-account connection for selected-root content.
+- Optional legacy domain-wide delegation diagnostics; employee visibility now
+  belongs to ADR-015 per-user OAuth in Phase 6.
 - Admin-selectable Drive root folder/shared-drive scope persisted in
   `DriveConnection`.
 - Drive folder/shared-drive scanning.
@@ -15,7 +16,7 @@ Ingest supported Google Drive content and metadata into the system while preserv
 - Google Sheets export.
 - PDF/downloaded file support.
 - Metadata persistence in PostgreSQL.
-- Drive sharing metadata capture.
+- Drive sharing metadata capture for the optional delegated ACL mode.
 - Folder ancestry and owner/creator metadata capture.
 - Source permissions version tracking.
 - Retrieval eligibility flag, defaulting to false.
@@ -31,8 +32,9 @@ Ingest supported Google Drive content and metadata into the system while preserv
 
 ## Source Permissions Version
 
-`source_permissions_version` must be a SHA-256 hash of a canonical JSON payload
-built from the sorted Google Drive permissions response for the file.
+The current delegated ACL implementation computes `source_permissions_version`
+as a SHA-256 hash of a canonical JSON payload built from the sorted Google
+Drive permissions response for the file.
 
 The payload should include stable permission fields such as permission ID, type,
 role, email/domain, allow-file-discovery flags, and inherited status where
@@ -40,6 +42,12 @@ available. It should exclude volatile fetch timestamps.
 
 Store this value with `last_permission_sync_time` so permission-only changes can
 be detected without re-downloading or re-embedding file content.
+
+ADR-015 changes the meaning in per-user OAuth mode: Phase 6 will migrate this
+field to a deterministic, non-empty provenance generation tied to the
+connection, selected-root generation, permission authority, and file ID.
+Per-user access freshness belongs in `UserDocumentVisibility`, not this global
+field, and visibility changes must not trigger re-embedding.
 
 ## Tasks
 
@@ -76,11 +84,13 @@ be detected without re-downloading or re-embedding file content.
   pilot service account. See ADR-009 for the pilot-folder caveat (personal
   account, not a client Workspace domain).
 - [~] Supported files ingest. (Metadata capture live-validated end-to-end;
-  the one available live test file failed `permissions.list()` — see
-  ADR-009 — so it was correctly excluded before the content-export path ran.
-  The content-export/storage path itself is still offline-test-only; needs a
-  live file whose permission fetch actually succeeds, most likely via
-  domain-wide delegation in a real Workspace, to validate end-to-end.)
+  the one available live test file failed legacy `permissions.list()` — see
+  ADR-009 — so the current pre-cutover code correctly excluded it before the
+  content-export path ran. The content-export/storage path itself remains
+  offline-test-only. ADR-015 removes readable service-account ACLs as a content
+  prerequisite after the Phase 6 mode-aware cutover; live validation must then
+  use the selected-root service-account content path plus separate per-user
+  visibility checks.)
 - [x] Unsupported files are skipped safely.
 - [x] No file contents or credentials appear in logs. Live-validated
   2026-07-08: inspected `django` and `celery-worker` container logs across
@@ -111,8 +121,10 @@ change detection, Celery sync task with post-commit extraction queueing
 rate-limited, audited `POST /api/ingest/drive/sync/` endpoint are implemented
 with offline tests (fake Drive service — no network). The admin connection flow
 also includes controlled domain-wide delegated-subject configuration for the
-fallback case where folder sharing cannot expose permission metadata. Remaining
-before live client onboarding: share the pilot folder/shared drive with the
-service account, choose it through the backend flow, then run live validation
-against real Drive data. Creator metadata remains a follow-up via the Revisions
-API.
+optional legacy permission mode. After ADR-015's Phase 6 cutover, unreadable
+service-account ACLs will no longer block the POC content path; Phase 6 will
+verify employee visibility with per-user OAuth over the already-indexed IDs.
+Until that mode-aware implementation lands, the existing code still follows
+the legacy global eligibility gate. Remaining content onboarding work is to
+share the pilot folder/shared drive, select it through the backend, and run live
+validation. Creator metadata remains a follow-up via the Revisions API.

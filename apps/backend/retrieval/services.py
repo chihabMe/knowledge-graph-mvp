@@ -5,8 +5,7 @@ from dataclasses import dataclass
 
 from django.conf import settings
 
-from authorization.lookup import allowed_source_document_ids
-from integrations.models import SourceDocument
+from authorization.lookup import allowed_source_document_ids, fresh_authorized_documents
 from retrieval.answers import AnswerGenerator, build_answer_generator
 from retrieval.context import assemble_context
 from retrieval.neo4j import Neo4jPermissionSafeRetriever
@@ -66,14 +65,9 @@ def answer_query(
         if not candidate_ids:
             return _refusal()
 
-        # Recheck the shared permission-evidence predicate after Neo4j returns.
-        # This can only narrow the SpiceDB allowlist; PostgreSQL never grants access.
-        documents = {
-            document.pk: document
-            for document in SourceDocument.objects.permission_verified().filter(
-                pk__in=candidate_ids
-            )
-        }
+        # Recheck the current mode's PostgreSQL deny evidence after Neo4j
+        # returns. This can only narrow the SpiceDB allowlist; it never grants.
+        documents = fresh_authorized_documents(user_email, candidate_ids)
         safe_evidence = RetrievalEvidence(
             chunks=tuple(item for item in evidence.chunks if item.source_document_id in documents),
             facts=tuple(item for item in evidence.facts if item.source_document_id in documents),

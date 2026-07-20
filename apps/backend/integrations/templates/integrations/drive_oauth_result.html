@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Google Drive authorization</title>
+  </head>
+  <body>
+    <main>
+      {% if connected %}
+        <h1>Google Drive connected</h1>
+        {% if sync_queued %}
+          <p>Your document permissions are synchronizing now.</p>
+        {% else %}
+          <p>Your document permissions will synchronize automatically.</p>
+        {% endif %}
+        <p>You can close this page and return to chat.</p>
+      {% else %}
+        <h1>Google Drive was not connected</h1>
+        <p>Return to chat and try again, or contact an administrator.</p>
+      {% endif %}
+    </main>
+  </body>
+</html>

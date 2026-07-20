@@ -1,0 +1,26 @@
+services:
+  django:
+    environment:
+      OPEN_WEBUI_COMPATIBLE_API_ENABLED: "true"
+      OPEN_WEBUI_BACKEND_API_KEY: ${LOCAL_OPEN_WEBUI_BACKEND_API_KEY:?set local backend key}
+      OPEN_WEBUI_IDENTITY_JWT_SECRET: ${LOCAL_OPEN_WEBUI_IDENTITY_JWT_SECRET:?set local identity secret}
+      OPENROUTER_API_KEY: ""
+      GRAPH_EXTRACTION_ENGINE: paragraph
+      GRAPH_EMBEDDING_PROVIDER: none
+      QUERY_ANSWER_PROVIDER: extractive
+
+  celery-worker:
+    environment:
+      OPENROUTER_API_KEY: ""
+      GRAPH_EXTRACTION_ENGINE: paragraph
+      GRAPH_EMBEDDING_PROVIDER: none
+      QUERY_ANSWER_PROVIDER: extractive
+
+  open-webui:
+    environment:
+      WEBUI_SECRET_KEY: ${LOCAL_WEBUI_SECRET_KEY:?set local WebUI secret}
+      OPENAI_API_KEY: ${LOCAL_OPEN_WEBUI_BACKEND_API_KEY:?set local backend key}
+      FORWARD_USER_INFO_HEADER_JWT_SECRET: ${LOCAL_OPEN_WEBUI_IDENTITY_JWT_SECRET:?set local identity secret}
+      ENABLE_SIGNUP: "true"
+      ENABLE_LOGIN_FORM: "true"
+      ENABLE_PASSWORD_AUTH: "true"

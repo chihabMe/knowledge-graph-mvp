@@ -49,15 +49,16 @@ Google Drive
 - PostgreSQL, Redis, and Neo4j connectivity.
 - Repeatable lint/test/start commands.
 
-### Milestone 2: Google Drive Metadata Ingestion
+### Milestone 2: Google Drive Content And Visibility
 
-- Configure a per-client Google service account, with domain-wide delegation
-  only as a fallback.
+- Configure a per-client service account for selected-root content ingestion.
 - Add controlled admin folder/shared-drive selection before live sync.
+- Add admin-approved per-user Drive OAuth for employee visibility.
 - Store Drive connection records.
 - Track sync runs.
 - List supported Drive files.
-- Store file metadata, permission metadata, folder ancestry, and content hashes in PostgreSQL.
+- Store file/provenance metadata, per-user visibility evidence, and content
+  hashes in PostgreSQL.
 
 ### Milestone 3: Content Extraction And Graph Build
 
@@ -71,9 +72,10 @@ Google Drive
 
 ### Milestone 4: SpiceDB Permission Sync
 
-- Model users, groups, folders, and documents.
-- Sync Drive sharing metadata.
-- Resolve folder/group inheritance.
+- Model users and indexed documents; retain group/folder ACL modeling as an
+  optional legacy mode.
+- Verify already-indexed IDs with each connected employee's OAuth credential.
+- Sync direct user/document visibility with freshness evidence.
 - Build allowed-document checks.
 
 ### Milestone 5: Permission-Safe Retrieval Chat
@@ -97,11 +99,11 @@ Google Drive
 4–6 week target. The build milestones above map to the 7 work packages defined in the developer scope doc (`output/pdf/organizational-knowledge-graph-developer-scope-v6.pdf`, WP1–WP7). Tracking against work packages directly, not a flattened set of phases, because collapsing them hides real prerequisites (WP6 must be decided before WP1 extraction is finalized) and distinct concerns (WP5 and WP7 are different problems that happen to land in the same week).
 
 - **Week 1 — Foundation + WP6 start (Ontology):** Finalize scope, stand up the backend/Docker foundation, confirm the Google Drive access approach, prepare data models. Begin WP6 — decide entity/relationship types and the provenance visibility rule (any-source-visible vs. all-sources-visible) before extraction is finalized. (Milestone 1, start of Milestone 2)
-- **Week 2 — WP1 (Document Intake & Graph Building), Drive connector half:** Google Drive ingestion — Docs, Sheets, PDFs, metadata, permissions metadata, sync tracking. (Milestone 2 complete)
+- **Week 2 — WP1 (Document Intake & Graph Building), Drive connector half:** Google Drive ingestion — Docs, Sheets, PDFs, selected-root/provenance metadata, and sync tracking. Full copied ACL metadata is optional legacy-mode work. (Milestone 2 content foundation)
 - **Week 3 — WP1 continued + WP6 finalized:** Neo4j graph/provenance layer; evaluate the best extraction approach (neo4j-graphrag vs. Graphify/Graphiti); provenance tagging on every node/relationship. Ontology (WP6) locked before this closes. (Milestone 3)
-- **Week 4 — WP4 (Identity & Permissions):** SpiceDB permission modeling (Part B: sync Drive sharing into SpiceDB relationships) and Google OAuth/OIDC login (Part A). Start of the permission pre-filter that WP2 depends on. (Milestone 4, start of Milestone 5)
+- **Week 4 — WP4 (Identity & Permissions):** Open WebUI Google login, separate admin-approved Django Drive consent, indexed-ID visibility checks, and direct per-user SpiceDB relationships with fresh evidence. Start of the permission pre-filter that WP2 depends on. (Milestone 4, start of Milestone 5)
 - **Week 5 — WP2 (Retrieval Middleware) + WP3 (Hybrid Retrieval + Embeddings):** Open WebUI/OpenRouter integration, permission pre-filter wired into retrieval, embeddings + vector index alongside graph traversal, citations, chat flow testing. (Milestone 5 complete)
-- **Week 6 — WP5 (Change-Driven Re-Indexing) + WP7 (Evaluation):** Two distinct packages, not one cleanup step. WP5: Drive change-feed triggered re-indexing, cheap permission-only refresh, folder/group blind spots closed. WP7: fixed test-question set, leak tests including graph-path probes (not just document probes) — this is what proves WP4 actually holds. Plus deployment/handoff docs. (Milestone 6)
+- **Week 6 — WP5 (Change-Driven Re-Indexing) + WP7 (Evaluation):** Two distinct packages, not one cleanup step. WP5: Drive change-feed triggered re-indexing plus cheap per-user visibility refresh without re-embedding; Google evaluates inherited, group, nested-group, and Shared Drive access for the real user. WP7: fixed test-question set and leak tests including graph-path probes (not just document probes). Plus deployment/handoff docs. (Milestone 6)
 
 Grouped into 3 delivery phases only for payment tracking (see `private/client-agreement.md` for amounts) — the phase boundary is a billing convenience, the work package list above is the real plan:
 

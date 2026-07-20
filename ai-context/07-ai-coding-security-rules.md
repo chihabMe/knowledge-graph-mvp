@@ -119,6 +119,9 @@ python manage.py check --deploy
 - If provenance is incomplete, default to deny.
 - If SpiceDB is unavailable, retrieval must fail closed and return no graph context.
 - If a document has not been written and verified in SpiceDB, it is not eligible for retrieval.
+- In per-user OAuth mode, a SpiceDB document grant is insufficient without a
+  matching fresh `UserDocumentVisibility` row for the same authorization and
+  generation.
 - If a document's successful SpiceDB verification is older than
   `PERMISSION_VERIFICATION_MAX_AGE_SECONDS`, it is not eligible for retrieval.
 - If a graph fact comes from multiple source documents, require all required source documents to be visible unless a later documented policy says otherwise.
@@ -135,14 +138,21 @@ python manage.py check --deploy
 - Permission metadata exists but SpiceDB relationships are not verified -> document is not retrievable.
 - Permission verification evidence expired -> document is not retrievable,
   even if SpiceDB still returns an old grant.
+- Per-user OAuth missing/revoked/mismatched or visibility evidence stale -> no
+  context for that user, even if a direct SpiceDB tuple still exists.
 - Partial permission sync failure -> every document touched by the run remains retrieval-ineligible until the run completes and all SpiceDB relationships are verified.
 - Shared-link/public visibility is unknown -> exclude the document from retrieval until explicitly modeled.
 
 ## Google Drive Rules
 
-- First pilot defaults to a per-client Google service account and controlled
-  admin folder/shared-drive selection. Domain-wide delegation is a fallback,
-  not the default.
+- First pilot uses a per-client Google service account only for content
+  ingestion from the controlled admin-selected folder/shared drive. Prefer
+  keyless Application Default Credentials: local impersonation for development
+  and an attached service account on Google Compute Engine. Do not weaken an
+  organization policy merely to create a long-lived service-account key.
+- Employee visibility uses admin-approved per-user OAuth under ADR-015.
+  Domain-wide delegation is an optional legacy/future mode, not an automatic
+  fallback.
 - Manual Drive root IDs in `.env` are a bootstrap/developer fallback. The
   client-facing path must persist the selected root in `DriveConnection`.
 - Store Drive metadata needed for provenance and sync:
@@ -156,7 +166,17 @@ python manage.py check --deploy
   - Permissions version.
 - Separate content updates from permission-only updates.
 - Do not re-embed documents when only permissions changed.
-- Capture shared-link/domain visibility explicitly.
+- In per-user mode, call Drive only for active file IDs already indexed from the
+  selected root. Do not enumerate the user's whole Drive or accept candidate
+  file IDs from an API request/task payload.
+- Encrypt refresh tokens with a dedicated deployment key. Never log, serialize,
+  return, or pass tokens through Celery/Redis; tasks receive only durable IDs.
+- Require the verified Django Drive OAuth email to match the signed Open WebUI
+  email exactly before its visibility evidence can be used.
+- Pre-invalidate per-user candidate evidence before refresh and require exact
+  SpiceDB verification before making positive evidence fresh.
+- Missing consent, scope loss, token refresh failure, account/root/mode
+  generation mismatch, unknown Drive results, or stale evidence must deny.
 - Never log downloaded document content.
 
 ## OpenRouter And LLM Rules

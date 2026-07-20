@@ -8,6 +8,12 @@ from pathlib import Path
 import environ
 from django.core.exceptions import ImproperlyConfigured
 
+from config.settings_validators import (
+    validate_google_session_oauth_settings,
+    validate_google_user_oauth_settings,
+    validate_open_webui_compatible_settings,
+)
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BASE_DIR.parent.parent
 
@@ -162,6 +168,21 @@ LOGGING = {
     },
     "handlers": {
         "console": {"class": "logging.StreamHandler", "formatter": "console"},
+        "oauth_safe_console": {
+            "class": "logging.StreamHandler",
+            "formatter": "console",
+            "filters": ["redact_oauth_callback_query"],
+        },
+    },
+    "filters": {
+        "redact_oauth_callback_query": {"()": "config.logging_filters.RedactOAuthCallbackQuery"}
+    },
+    "loggers": {
+        "django.server": {
+            "handlers": ["oauth_safe_console"],
+            "level": env("DJANGO_LOG_LEVEL", default="INFO"),
+            "propagate": False,
+        }
     },
     "root": {
         "handlers": ["console"],
@@ -181,10 +202,53 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "drive-roots": env("DRIVE_ROOTS_THROTTLE_RATE", default="30/hour"),
         "drive-sync": env("DRIVE_SYNC_THROTTLE_RATE", default="10/hour"),
+        "drive-oauth-start": env("DRIVE_OAUTH_START_THROTTLE_RATE", default="10/hour"),
+        "drive-oauth-callback": env("DRIVE_OAUTH_CALLBACK_THROTTLE_RATE", default="20/hour"),
+        "drive-oauth-status": env("DRIVE_OAUTH_STATUS_THROTTLE_RATE", default="120/hour"),
+        "drive-oauth-disconnect": env("DRIVE_OAUTH_DISCONNECT_THROTTLE_RATE", default="10/hour"),
+        "drive-visibility-sync": env("DRIVE_VISIBILITY_SYNC_THROTTLE_RATE", default="10/hour"),
+        "google-session-start": env("GOOGLE_SESSION_START_THROTTLE_RATE", default="10/hour"),
+        "google-session-callback": env("GOOGLE_SESSION_CALLBACK_THROTTLE_RATE", default="20/hour"),
         "permission-sync": env("PERMISSION_SYNC_THROTTLE_RATE", default="10/hour"),
         "query": env("QUERY_THROTTLE_RATE", default="60/hour"),
+        "open-webui-models": env("OPEN_WEBUI_MODELS_THROTTLE_RATE", default="120/hour"),
+        "open-webui-chat": env("OPEN_WEBUI_CHAT_THROTTLE_RATE", default="60/hour"),
     },
 }
+
+OPEN_WEBUI_COMPATIBLE_API_ENABLED = env.bool("OPEN_WEBUI_COMPATIBLE_API_ENABLED", default=False)
+OPEN_WEBUI_BACKEND_API_KEY = env("OPEN_WEBUI_BACKEND_API_KEY", default="")
+OPEN_WEBUI_IDENTITY_JWT_SECRET = env("OPEN_WEBUI_IDENTITY_JWT_SECRET", default="")
+OPEN_WEBUI_IDENTITY_JWT_HEADER = env(
+    "OPEN_WEBUI_IDENTITY_JWT_HEADER", default="X-OpenWebUI-User-Jwt"
+)
+OPEN_WEBUI_IDENTITY_JWT_ISSUER = env("OPEN_WEBUI_IDENTITY_JWT_ISSUER", default="open-webui")
+OPEN_WEBUI_IDENTITY_JWT_MAX_LIFETIME_SECONDS = env.int(
+    "OPEN_WEBUI_IDENTITY_JWT_MAX_LIFETIME_SECONDS", default=300
+)
+OPEN_WEBUI_IDENTITY_JWT_CLOCK_SKEW_SECONDS = env.int(
+    "OPEN_WEBUI_IDENTITY_JWT_CLOCK_SKEW_SECONDS", default=10
+)
+OPEN_WEBUI_MODEL_ID = env("OPEN_WEBUI_MODEL_ID", default="client-knowledge-graph")
+_open_webui_secret_key = env("WEBUI_SECRET_KEY", default="")
+validate_open_webui_compatible_settings(
+    enabled=OPEN_WEBUI_COMPATIBLE_API_ENABLED,
+    backend_api_key=OPEN_WEBUI_BACKEND_API_KEY,
+    identity_jwt_secret=OPEN_WEBUI_IDENTITY_JWT_SECRET,
+    webui_secret_key=_open_webui_secret_key,
+    identity_jwt_header=OPEN_WEBUI_IDENTITY_JWT_HEADER,
+    identity_jwt_issuer=OPEN_WEBUI_IDENTITY_JWT_ISSUER,
+    identity_jwt_max_lifetime_seconds=OPEN_WEBUI_IDENTITY_JWT_MAX_LIFETIME_SECONDS,
+    identity_jwt_clock_skew_seconds=OPEN_WEBUI_IDENTITY_JWT_CLOCK_SKEW_SECONDS,
+    model_id=OPEN_WEBUI_MODEL_ID,
+)
+_google_user_oauth_independent_secrets = (
+    SECRET_KEY,
+    OPEN_WEBUI_BACKEND_API_KEY,
+    OPEN_WEBUI_IDENTITY_JWT_SECRET,
+    _open_webui_secret_key,
+)
+del _open_webui_secret_key
 
 REDIS_URL = env("REDIS_URL", default="redis://redis:6379/0")
 
@@ -400,8 +464,10 @@ if GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag" and not (
 
 GOOGLE_WORKSPACE_DOMAIN = env("GOOGLE_WORKSPACE_DOMAIN", default="")
 GOOGLE_DRIVE_AUTH_MODE = env("GOOGLE_DRIVE_AUTH_MODE", default="service_account")
-if GOOGLE_DRIVE_AUTH_MODE not in {"service_account", "oauth_dev"}:
-    raise ImproperlyConfigured("GOOGLE_DRIVE_AUTH_MODE must be 'service_account' or 'oauth_dev'.")
+if GOOGLE_DRIVE_AUTH_MODE not in {"application_default", "service_account", "oauth_dev"}:
+    raise ImproperlyConfigured(
+        "GOOGLE_DRIVE_AUTH_MODE must be 'application_default', 'service_account', or 'oauth_dev'."
+    )
 if GOOGLE_DRIVE_AUTH_MODE == "oauth_dev" and not _development_context:
     raise ImproperlyConfigured(
         "GOOGLE_DRIVE_AUTH_MODE='oauth_dev' is permitted only in development/test context."
@@ -410,6 +476,81 @@ GOOGLE_OAUTH_CLIENT_SECRET_FILE = env("GOOGLE_OAUTH_CLIENT_SECRET_FILE", default
 GOOGLE_OAUTH_TOKEN_FILE = env("GOOGLE_OAUTH_TOKEN_FILE", default="")
 GOOGLE_SERVICE_ACCOUNT_FILE = env("GOOGLE_SERVICE_ACCOUNT_FILE", default="")
 GOOGLE_DRIVE_DELEGATED_SUBJECT = env("GOOGLE_DRIVE_DELEGATED_SUBJECT", default="")
+GOOGLE_PERMISSION_AUTHORITY = env("GOOGLE_PERMISSION_AUTHORITY", default="delegated_acl")
+GOOGLE_SESSION_OAUTH_ENABLED = env.bool("GOOGLE_SESSION_OAUTH_ENABLED", default=False)
+GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID", default="")
+GOOGLE_CLIENT_SECRET = env("GOOGLE_CLIENT_SECRET", default="")
+GOOGLE_SESSION_OAUTH_REDIRECT_URI = env("GOOGLE_SESSION_OAUTH_REDIRECT_URI", default="")
+GOOGLE_SESSION_OAUTH_STATE_MAX_AGE_SECONDS = env.int(
+    "GOOGLE_SESSION_OAUTH_STATE_MAX_AGE_SECONDS", default=600
+)
+GOOGLE_USER_OAUTH_CLIENT_ID = env("GOOGLE_USER_OAUTH_CLIENT_ID", default="")
+GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE = env("GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE", default="")
+GOOGLE_USER_OAUTH_REDIRECT_URI = env("GOOGLE_USER_OAUTH_REDIRECT_URI", default="")
+GOOGLE_USER_OAUTH_ALLOWED_DOMAIN = env("GOOGLE_USER_OAUTH_ALLOWED_DOMAIN", default="")
+GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE = env("GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE", default="")
+GOOGLE_USER_VISIBILITY_SYNC_INTERVAL_SECONDS = env.int(
+    "GOOGLE_USER_VISIBILITY_SYNC_INTERVAL_SECONDS", default=900
+)
+GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS = env.int(
+    "GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS", default=1800
+)
+GOOGLE_USER_VISIBILITY_MAX_USERS = env.int("GOOGLE_USER_VISIBILITY_MAX_USERS", default=10)
+GOOGLE_USER_VISIBILITY_MAX_DOCUMENTS = env.int("GOOGLE_USER_VISIBILITY_MAX_DOCUMENTS", default=1000)
+GOOGLE_USER_VISIBILITY_BATCH_SIZE = env.int("GOOGLE_USER_VISIBILITY_BATCH_SIZE", default=100)
+GOOGLE_USER_VISIBILITY_STALE_RUN_TIMEOUT_MINUTES = env.int(
+    "GOOGLE_USER_VISIBILITY_STALE_RUN_TIMEOUT_MINUTES", default=120
+)
+if not 1 <= GOOGLE_USER_VISIBILITY_STALE_RUN_TIMEOUT_MINUTES <= 1440:
+    raise ImproperlyConfigured(
+        "GOOGLE_USER_VISIBILITY_STALE_RUN_TIMEOUT_MINUTES must be between 1 and 1440."
+    )
+GOOGLE_USER_OAUTH_STATE_MAX_AGE_SECONDS = env.int(
+    "GOOGLE_USER_OAUTH_STATE_MAX_AGE_SECONDS", default=600
+)
+validate_google_session_oauth_settings(
+    enabled=GOOGLE_SESSION_OAUTH_ENABLED,
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    redirect_uri=GOOGLE_SESSION_OAUTH_REDIRECT_URI,
+    allowed_domain=GOOGLE_USER_OAUTH_ALLOWED_DOMAIN,
+    state_max_age_seconds=GOOGLE_SESSION_OAUTH_STATE_MAX_AGE_SECONDS,
+    development_context=_development_context,
+)
+validate_google_user_oauth_settings(
+    permission_authority=GOOGLE_PERMISSION_AUTHORITY,
+    client_id=GOOGLE_USER_OAUTH_CLIENT_ID,
+    client_secret_file=GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE,
+    redirect_uri=GOOGLE_USER_OAUTH_REDIRECT_URI,
+    allowed_domain=GOOGLE_USER_OAUTH_ALLOWED_DOMAIN,
+    token_encryption_key_file=GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE,
+    sync_interval_seconds=GOOGLE_USER_VISIBILITY_SYNC_INTERVAL_SECONDS,
+    visibility_max_age_seconds=GOOGLE_USER_VISIBILITY_MAX_AGE_SECONDS,
+    maximum_users=GOOGLE_USER_VISIBILITY_MAX_USERS,
+    maximum_documents=GOOGLE_USER_VISIBILITY_MAX_DOCUMENTS,
+    batch_size=GOOGLE_USER_VISIBILITY_BATCH_SIZE,
+    state_max_age_seconds=GOOGLE_USER_OAUTH_STATE_MAX_AGE_SECONDS,
+    development_context=_development_context,
+    independent_secret_values=_google_user_oauth_independent_secrets,
+    other_secret_files=(
+        GOOGLE_SERVICE_ACCOUNT_FILE,
+        GOOGLE_OAUTH_CLIENT_SECRET_FILE,
+        GOOGLE_OAUTH_TOKEN_FILE,
+    ),
+)
+CELERY_BEAT_SCHEDULE.update(
+    {
+        "schedule-user-visibility-syncs": {
+            "task": "integrations.schedule_user_visibility_syncs",
+            "schedule": float(GOOGLE_USER_VISIBILITY_SYNC_INTERVAL_SECONDS),
+        },
+        "sweep-stale-user-visibility-sync-runs": {
+            "task": "integrations.sweep_stale_user_visibility_sync_runs",
+            "schedule": min(float(GOOGLE_USER_VISIBILITY_SYNC_INTERVAL_SECONDS), 900.0),
+        },
+    }
+)
+del _google_user_oauth_independent_secrets
 GOOGLE_DRIVE_SCOPE_TYPE = env("GOOGLE_DRIVE_SCOPE_TYPE", default="folder")
 # Must stay in sync with integrations.models.DriveConnection.ScopeType (models
 # can't be imported here). Fail at startup, not at the first model save.

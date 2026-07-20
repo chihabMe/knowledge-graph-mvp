@@ -34,11 +34,16 @@ This backlog is ordered by dependency and risk.
 - Download PDFs and uploaded files.
 - Store document metadata in PostgreSQL.
 - Add `retrieval_eligible = False` default on source document records.
-- Store Drive sharing metadata, owner/creator data, folder ancestry, and permission version.
-- Store controlled exclusion reasons for shared-link/public files in Phase 2.
+- Store selected-root membership, folder ancestry, owner metadata where
+  available, and the provenance generation required by the active permission
+  authority. Full ACL payloads remain optional legacy-mode metadata.
+- Store controlled exclusion reasons for unsupported/out-of-scope content.
+  Shared-link/public ACL classification applies only to delegated ACL mode;
+  per-user OAuth grants only when Google confirms the actual user's access.
 - Queue extraction jobs.
 - Track content hashes and modified times.
-- Add tests for permission metadata storage and source permissions version computation.
+- Add tests for mode-aware permission metadata and source permissions version
+  computation.
 - Add sync trigger audit logging.
 - Add configured-scope enforcement tests for ingestion endpoints.
 - Add tests that unverified documents remain retrieval-ineligible.
@@ -60,7 +65,9 @@ This backlog is ordered by dependency and risk.
 - Add SpiceDB service to Docker Compose.
 - Define SpiceDB schema for users, groups, folders, and documents.
 - Sync Drive permissions into SpiceDB.
-- Switch source documents to retrieval-eligible only after SpiceDB relationships are written and verified.
+- Keep source documents globally content/provenance eligible only when their
+  active permission mode is ready; user retrieval additionally requires the
+  mode-specific SpiceDB relationship and fresh evidence.
 - Add permission checks in backend.
 - Add allowed-document list lookup for retrieval.
 
@@ -78,13 +85,30 @@ This backlog is ordered by dependency and risk.
 
 - Configure Open WebUI service.
 - Configure Google OAuth/OIDC.
-- Connect Open WebUI to backend endpoint or pipeline.
-- Confirm user identity is available to backend.
+- Add the selected Django OpenAI-compatible model and chat endpoints over the
+  existing permission-safe query service.
+- Authenticate the Open WebUI service and verify its short-lived signed user
+  identity JWT in Django.
+- Confirm the verified Google identity is available to SpiceDB lookup.
+- Add a separate admin-approved Django Drive OAuth connection flow with
+  encrypted refresh-token storage.
+- Check only already-indexed file IDs as each connected user; do not enumerate
+  the user's Drive or use the token for content ingestion.
+- Write and exactly verify direct per-user document relationships in SpiceDB.
+- Intersect SpiceDB results with fresh matching per-user visibility evidence.
+- Invalidate grants on root/account/mode changes, OAuth disconnect, refresh
+  failure, and evidence expiry.
+- Test allowed and restricted users through the real chat interface.
 
 ## Phase 7: Change Feed And Evaluation
 
 - Add Google Drive change feed handling.
+- Add change-triggered synchronization where possible while retaining a
+  periodic reconciliation sweep.
 - Separate content updates from permission-only updates.
+- Validate and enable a 5-minute visibility refresh with 10-minute evidence
+  expiry under the bounded pilot caps; keep 15/30 until monitoring is ready.
+- Monitor failed/delayed synchronization and alert before evidence expiry.
 - Add evaluation question set.
 - Add leak tests.
 - Add scheduled evaluation job.
@@ -94,5 +118,7 @@ This backlog is ordered by dependency and risk.
 - Add backup docs.
 - Add restore docs.
 - Add maintenance checklist.
+- Document the permission-freshness SLA and synchronization incident runbook.
+- Define, approve, configure, and test a chat-history deletion/retention policy.
 - Add environment setup docs.
 - Add demo script.
