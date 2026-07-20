@@ -440,6 +440,7 @@ class OpenWebUIAdapterLeakTests(TestCase):
             "source_permissions_version": "v1",
             "spicedb_permissions_version": "v1",
             "spicedb_verified_at": timezone.now(),
+            "content_hash": "content-v1",
         }
         values.update(overrides)
         return SourceDocument.objects.create(**values)
@@ -467,7 +468,14 @@ class OpenWebUIAdapterLeakTests(TestCase):
     ):
         document = self.create_document("allowed")
         retriever_class.return_value.retrieve.return_value = RetrievalEvidence(
-            chunks=(RetrievedChunk(document.pk, f"{document.pk}:0", "Sarah owns Atlas."),)
+            chunks=(
+                RetrievedChunk(
+                    document.pk,
+                    f"{document.pk}:0",
+                    "Sarah owns Atlas.",
+                    content_version="content-v1",
+                ),
+            )
         )
         allowed_lookup.side_effect = lambda email: (
             (document.pk,) if email == "reader@example.com" else ()
@@ -497,11 +505,14 @@ class OpenWebUIAdapterLeakTests(TestCase):
         allowed_lookup.return_value = (allowed.pk,)
         retriever_class.return_value.retrieve.return_value = RetrievalEvidence(
             chunks=(
-                RetrievedChunk(allowed.pk, f"{allowed.pk}:0", "Allowed text."),
+                RetrievedChunk(
+                    allowed.pk, f"{allowed.pk}:0", "Allowed text.", content_version="content-v1"
+                ),
                 RetrievedChunk(
                     restricted.pk,
                     f"{restricted.pk}:0",
                     "Restricted secret text.",
+                    content_version="content-v1",
                 ),
             )
         )
@@ -563,7 +574,11 @@ class OpenWebUIAdapterLeakTests(TestCase):
         )
         allowed_lookup.return_value = (document.pk,)
         retriever_class.return_value.retrieve.return_value = RetrievalEvidence(
-            chunks=(RetrievedChunk(document.pk, f"{document.pk}:0", "Expired text."),)
+            chunks=(
+                RetrievedChunk(
+                    document.pk, f"{document.pk}:0", "Expired text.", content_version="content-v1"
+                ),
+            )
         )
 
         response = self.post()
@@ -601,7 +616,14 @@ class OpenWebUIAdapterLeakTests(TestCase):
         document = self.create_document("allowed")
         allowed_lookup.return_value = (document.pk,)
         retriever_class.return_value.retrieve.return_value = RetrievalEvidence(
-            chunks=(RetrievedChunk(document.pk, f"{document.pk}:0", "Accessible text."),)
+            chunks=(
+                RetrievedChunk(
+                    document.pk,
+                    f"{document.pk}:0",
+                    "Accessible text.",
+                    content_version="content-v1",
+                ),
+            )
         )
         build_answer_generator.return_value.generate.side_effect = OSError("provider details")
 

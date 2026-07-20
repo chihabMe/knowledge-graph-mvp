@@ -42,6 +42,19 @@ def _refusal() -> QueryResult:
     )
 
 
+def _content_current(item, documents) -> bool:
+    """Require the item's extracted content version to match the document's
+    current content hash. Superseded, empty, and unknown versions are all
+    excluded, so chunks from a replaced document version cannot reach answer
+    context while re-extraction is pending or failed."""
+    document = documents.get(item.source_document_id)
+    return (
+        document is not None
+        and bool(item.content_version)
+        and item.content_version == document.content_hash
+    )
+
+
 def answer_query(
     question: str,
     user_email: str,
@@ -66,11 +79,12 @@ def answer_query(
             return _refusal()
 
         # Recheck the current mode's PostgreSQL deny evidence after Neo4j
-        # returns. This can only narrow the SpiceDB allowlist; it never grants.
+        # returns, and gate every item on content currency. Both checks can
+        # only narrow the SpiceDB allowlist; they never grant.
         documents = fresh_authorized_documents(user_email, candidate_ids)
         safe_evidence = RetrievalEvidence(
-            chunks=tuple(item for item in evidence.chunks if item.source_document_id in documents),
-            facts=tuple(item for item in evidence.facts if item.source_document_id in documents),
+            chunks=tuple(item for item in evidence.chunks if _content_current(item, documents)),
+            facts=tuple(item for item in evidence.facts if _content_current(item, documents)),
         )
         if not safe_evidence.chunks and not safe_evidence.facts:
             return _refusal()

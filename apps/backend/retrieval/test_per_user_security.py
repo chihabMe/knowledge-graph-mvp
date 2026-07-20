@@ -74,6 +74,7 @@ class PerUserQuerySecurityTests(TestCase):
             active_in_scope=True,
             retrieval_eligible=True,
             source_permissions_version="per-user-v1",
+            content_hash="content-v1",
         )
         self.authorization = GoogleDriveAuthorization.objects.create(
             connection=self.connection,
@@ -111,6 +112,7 @@ class PerUserQuerySecurityTests(TestCase):
                     source_document_id=self.document.pk,
                     chunk_id=f"{self.document.pk}:0",
                     text="Per-user accessible context.",
+                    content_version="content-v1",
                 ),
             )
         )

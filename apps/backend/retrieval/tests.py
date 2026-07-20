@@ -47,7 +47,7 @@ def chunk_record(source_document_id=1, **chunk_overrides):
     return {
         "chunk": chunk,
         "belongs": provenance(source_document_id),
-        "document": provenance(source_document_id),
+        "document": {**provenance(source_document_id), "content_hash": "content-v1"},
         "relevance": 2,
     }
 
@@ -64,7 +64,7 @@ def fact_record(source_document_id=1):
             "text": "Sarah owns the Atlas project.",
         },
         "belongs": provenance(source_document_id),
-        "document": provenance(source_document_id),
+        "document": {**provenance(source_document_id), "content_hash": "content-v1"},
         "relationship_type": "responsible_for",
         "relevance": 2,
     }
@@ -167,6 +167,8 @@ class Neo4jRetrievalSecurityTests(SimpleTestCase):
 
         self.assertEqual(len(result.chunks), 1)
         self.assertEqual(len(result.facts), 1)
+        self.assertEqual(result.chunks[0].content_version, "content-v1")
+        self.assertEqual(result.facts[0].content_version, "content-v1")
         self.assertEqual(db_session.run.call_count, 2)
         for call in db_session.run.call_args_list:
             self.assertEqual(call.kwargs["allowed_source_document_ids"], [1])
@@ -235,6 +237,22 @@ class Neo4jRetrievalSecurityTests(SimpleTestCase):
         ).retrieve("Who owns Atlas?", (1,))
 
         self.assertEqual(result, RetrievalEvidence())
+
+    @patch("retrieval.neo4j.session")
+    def test_missing_or_non_string_document_content_hash_becomes_unknown_version(
+        self, mock_session
+    ):
+        absent = chunk_record(1)
+        absent["document"].pop("content_hash")
+        numeric = chunk_record(2)
+        numeric["document"]["content_hash"] = 7
+        db_session = MagicMock()
+        db_session.run.side_effect = [[absent, numeric], []]
+        mock_session.return_value.__enter__.return_value = db_session
+
+        result = Neo4jPermissionSafeRetriever().retrieve("Who owns Atlas?", (1, 2))
+
+        self.assertEqual([chunk.content_version for chunk in result.chunks], ["", ""])
 
     @override_settings(GRAPH_CHUNK_EMBEDDING_DIMENSIONS=3)
     @patch("retrieval.neo4j.session")
@@ -356,6 +374,7 @@ class QueryServiceSecurityTests(TestCase):
             "source_permissions_version": "v1",
             "spicedb_permissions_version": "v1",
             "spicedb_verified_at": timezone.now(),
+            "content_hash": "content-v1",
         }
         values.update(overrides)
         return SourceDocument.objects.create(**values)
@@ -368,6 +387,7 @@ class QueryServiceSecurityTests(TestCase):
                     source_document_id=document.pk,
                     chunk_id=f"{document.pk}:0",
                     text="Sarah owns Atlas.",
+                    content_version="content-v1",
                 ),
             )
         )
@@ -499,8 +519,15 @@ class QueryServiceSecurityTests(TestCase):
         restricted = self.create_document("restricted")
         evidence = RetrievalEvidence(
             chunks=(
-                RetrievedChunk(allowed.pk, f"{allowed.pk}:0", "Allowed text."),
-                RetrievedChunk(restricted.pk, f"{restricted.pk}:0", "Restricted text."),
+                RetrievedChunk(
+                    allowed.pk, f"{allowed.pk}:0", "Allowed text.", content_version="content-v1"
+                ),
+                RetrievedChunk(
+                    restricted.pk,
+                    f"{restricted.pk}:0",
+                    "Restricted text.",
+                    content_version="content-v1",
+                ),
             )
         )
 
@@ -534,7 +561,12 @@ class QueryServiceSecurityTests(TestCase):
         documents = (inactive, ineligible, unverified, expired)
         evidence = RetrievalEvidence(
             chunks=tuple(
-                RetrievedChunk(document.pk, f"{document.pk}:0", f"{document.title} text")
+                RetrievedChunk(
+                    document.pk,
+                    f"{document.pk}:0",
+                    f"{document.title} text",
+                    content_version="content-v1",
+                )
                 for document in documents
             )
         )
@@ -549,6 +581,92 @@ class QueryServiceSecurityTests(TestCase):
         self.assertTrue(result.refused)
         self.assertEqual(result.citations, ())
 
+    def test_stale_content_version_is_excluded_from_context_and_citations(self):
+        current = self.create_document("current")
+        superseded = self.create_document("superseded", content_hash="content-v2")
+        evidence = RetrievalEvidence(
+            chunks=(
+                RetrievedChunk(
+                    current.pk, f"{current.pk}:0", "Current text.", content_version="content-v1"
+                ),
+                RetrievedChunk(
+                    superseded.pk,
+                    f"{superseded.pk}:0",
+                    "Superseded text.",
+                    content_version="content-v1",
+                ),
+            )
+        )
+        generator = StubAnswerGenerator(answer="Current generated answer.")
+
+        result = answer_query(
+            "text",
+            "reader@example.com",
+            allowed_lookup=lambda _email: (current.pk, superseded.pk),
+            retriever=StubRetriever(evidence),
+            answer_generator=generator,
+        )
+
+        self.assertFalse(result.refused)
+        self.assertEqual([citation["drive_file_id"] for citation in result.citations], ["current"])
+        prompt_context = generator.calls[0][1]
+        self.assertNotIn("Superseded text", prompt_context.text)
+
+    def test_all_stale_content_versions_return_the_controlled_refusal(self):
+        document = self.create_document("allowed", content_hash="content-v2")
+        evidence = RetrievalEvidence(
+            chunks=(
+                RetrievedChunk(
+                    document.pk, f"{document.pk}:0", "Old text.", content_version="content-v1"
+                ),
+            ),
+            facts=(
+                RetrievedFact(
+                    source_document_id=document.pk,
+                    chunk_id=f"{document.pk}:0",
+                    source_name="Sarah",
+                    relationship_type="responsible_for",
+                    target_name="Atlas",
+                    text="Old text.",
+                    content_version="content-v1",
+                ),
+            ),
+        )
+
+        result = answer_query(
+            "Who owns Atlas?",
+            "reader@example.com",
+            allowed_lookup=lambda _email: (document.pk,),
+            retriever=StubRetriever(evidence),
+        )
+
+        self.assertTrue(result.refused)
+        self.assertEqual(result.reason, "insufficient_accessible_context")
+        self.assertEqual(result.citations, ())
+
+    def test_missing_or_empty_content_version_fails_closed(self):
+        versioned = self.create_document("versioned")
+        unversioned = self.create_document("unversioned", content_hash="")
+        for chunk in (
+            RetrievedChunk(versioned.pk, f"{versioned.pk}:0", "No graph version."),
+            RetrievedChunk(
+                unversioned.pk,
+                f"{unversioned.pk}:0",
+                "Empty on both sides.",
+                content_version="",
+            ),
+        ):
+            with self.subTest(chunk=chunk):
+                result = answer_query(
+                    "text",
+                    "reader@example.com",
+                    allowed_lookup=lambda _email, pk=chunk.source_document_id: (pk,),
+                    retriever=StubRetriever(RetrievalEvidence(chunks=(chunk,))),
+                )
+
+                self.assertTrue(result.refused)
+                self.assertEqual(result.citations, ())
+
     def test_fact_only_context_returns_cited_extract_without_llm(self):
         document = self.create_document("allowed")
         evidence = RetrievalEvidence(
@@ -560,6 +678,7 @@ class QueryServiceSecurityTests(TestCase):
                     relationship_type="responsible_for",
                     target_name="Atlas",
                     text="Sarah owns Atlas.",
+                    content_version="content-v1",
                 ),
             )
         )
@@ -598,7 +717,14 @@ class QueryServiceSecurityTests(TestCase):
     def test_answer_provider_failure_discards_context_and_logs_no_payload(self):
         document = self.create_document("allowed")
         evidence = RetrievalEvidence(
-            chunks=(RetrievedChunk(document.pk, f"{document.pk}:0", "Secret allowed text."),)
+            chunks=(
+                RetrievedChunk(
+                    document.pk,
+                    f"{document.pk}:0",
+                    "Secret allowed text.",
+                    content_version="content-v1",
+                ),
+            )
         )
         generator = StubAnswerGenerator(error=OSError("provider response body"))
 
@@ -621,7 +747,14 @@ class QueryServiceSecurityTests(TestCase):
     def test_unsupported_model_answer_returns_the_shared_refusal_without_citations(self):
         document = self.create_document("allowed")
         evidence = RetrievalEvidence(
-            chunks=(RetrievedChunk(document.pk, f"{document.pk}:0", "Accessible text."),)
+            chunks=(
+                RetrievedChunk(
+                    document.pk,
+                    f"{document.pk}:0",
+                    "Accessible text.",
+                    content_version="content-v1",
+                ),
+            )
         )
 
         result = answer_query(
@@ -639,8 +772,18 @@ class QueryServiceSecurityTests(TestCase):
     @override_settings(QUERY_CONTEXT_MAX_CHARS=100)
     def test_citations_cover_only_evidence_that_fit_the_prompt_context(self):
         document = self.create_document("allowed")
-        first = RetrievedChunk(document.pk, f"{document.pk}:0", "First accessible source.")
-        second = RetrievedChunk(document.pk, f"{document.pk}:1", "Second accessible source.")
+        first = RetrievedChunk(
+            document.pk,
+            f"{document.pk}:0",
+            "First accessible source.",
+            content_version="content-v1",
+        )
+        second = RetrievedChunk(
+            document.pk,
+            f"{document.pk}:1",
+            "Second accessible source.",
+            content_version="content-v1",
+        )
         generator = StubAnswerGenerator()
 
         result = answer_query(
@@ -738,9 +881,14 @@ class QueryApiSecurityTests(TestCase):
             source_permissions_version="v1",
             spicedb_permissions_version="v1",
             spicedb_verified_at=timezone.now(),
+            content_hash="content-v1",
         )
         retriever_class.return_value.retrieve.return_value = RetrievalEvidence(
-            chunks=(RetrievedChunk(document.pk, f"{document.pk}:0", "Allowed answer."),)
+            chunks=(
+                RetrievedChunk(
+                    document.pk, f"{document.pk}:0", "Allowed answer.", content_version="content-v1"
+                ),
+            )
         )
         allowed_lookup.side_effect = lambda email: (
             (document.pk,) if email == "trusted.reader@example.com" else ()
