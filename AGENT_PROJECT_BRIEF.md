@@ -351,6 +351,13 @@ The per-user visibility process should:
   account, authorization generation, or permission mode changes.
 - Refresh visibility separately from content extraction so access changes never
   trigger re-embedding.
+- Present the separate Drive consent as guided chat onboarding: the first chat
+  while disconnected returns a server-built link to the public Django session
+  bootstrap, which chains into Drive consent and returns to Open WebUI only
+  after fresh visibility evidence is ready.
+- Treat only Google's explicit OAuth `invalid_grant` refresh response as a
+  terminal credential failure requiring renewed consent. Transient provider or
+  network failures remain retryable and must not wipe a usable credential.
 
 The query process should:
 
@@ -424,6 +431,11 @@ buffered Server-Sent Events required by pinned Open WebUI 0.10.2. Open WebUI's
 bounded tool inventory is accepted only as ignored compatibility metadata; the
 adapter never executes those tools. The complete permission-safe answer and
 server-owned citations are decided before any streaming event is emitted.
+When OpenRouter returns HTTP success but violates the strict answer JSON
+contract, the answer boundary may retry exactly once with the same already
+permission-filtered context. A second contract violation, or any other provider
+failure, still returns the shared fail-closed refusal; response validation is
+never relaxed.
 
 Important:
 
@@ -439,6 +451,17 @@ Important:
   identity-only login client. That flow stores no Google token and redirects
   directly into the separate Drive authorization endpoint after a successful,
   domain-restricted login.
+- Open WebUI is not patched for this flow. Before any SpiceDB, Neo4j,
+  embedding, or answer-provider call, the compatible chat endpoint maps the
+  signed user to one controlled Drive state: `not_connected`, `syncing`,
+  `ready`, `reauthorization_required`, or `temporarily_unavailable`. Only
+  `ready` reaches retrieval; the other states return safe guidance or retry
+  text, with connect/reconnect links derived from the validated public session
+  callback origin.
+- After Drive consent, the no-store callback page polls authenticated status
+  every two seconds and redirects to the validated existing `WEBUI_URL` when
+  visibility synchronization becomes ready. Polling stops after two minutes
+  and leaves a safe manual return path.
 - Local password login should be disabled or hidden for production pilots.
 
 ## 13. Change-Driven Re-Indexing
@@ -589,11 +612,15 @@ visibility refresh for only the verified Django identity. If dispatch is
 temporarily unavailable, the connection remains valid and the durable queued
 run or periodic scheduler retries without requiring another consent flow. The
 result page distinguishes active synchronization from scheduled fallback. It
-never returns tokens to Open WebUI or the browser.
+never returns tokens to Open WebUI or the browser. While connected, it polls
+the authenticated status endpoint for up to two minutes and automatically
+returns to the configured Open WebUI origin when fresh visibility evidence is
+ready.
 
 ### `GET /api/drive/oauth/status` and `POST /api/drive/oauth/disconnect`
 
-Returns controlled connection status without credential data and lets the user
+Returns controlled connection status without credential data, including the
+additive five-state onboarding `state`, and lets the user
 revoke local access. Disconnect immediately invalidates that user's visibility
 evidence and removes their managed SpiceDB relationships; Google token
 revocation is attempted without making local denial depend on its success.
@@ -692,7 +719,11 @@ permission data is returned.
 Accepts an OpenAI-compatible chat request from the server-side Open WebUI
 connection. The endpoint must authenticate the service bearer key, verify the
 short-lived signed Open WebUI identity JWT, extract a bounded user question,
-and call the existing `answer_query()` service. Request-supplied identity and
+and gate Drive onboarding readiness before calling the existing
+`answer_query()` service. Only `ready` reaches SpiceDB, Neo4j, embeddings, or
+OpenRouter; disconnected or terminal users receive a public connect/reconnect
+link and in-progress or transient states receive controlled retry guidance.
+Request-supplied identity and
 plain forwarded email headers are never authorization evidence.
 
 Invalid compatible requests return a bounded OpenAI-style `error` envelope

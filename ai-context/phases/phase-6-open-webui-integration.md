@@ -107,6 +107,29 @@ Expose the permission-safe backend through Open WebUI as the main user interface
   disconnect, then reconnected and received only the expected private canary
   value, `User 2 private document`, and `Visible to both users` after the
   callback-triggered run. The 15-minute scheduler wait was not required.)
+- [x] Add guided Drive onboarding from the first blocked Open WebUI chat.
+  Effort: High. (ADR-018 adds a five-state readiness service and blocks the
+  compatible chat path before retrieval unless fresh visibility evidence is
+  ready. Connect/reconnect responses link through the existing identity
+  bootstrap, the Drive callback polls authenticated status and automatically
+  returns to validated `WEBUI_URL`, and only explicit Google `invalid_grant`
+  wipes credentials and requires renewed consent. Implemented locally on
+  2026-07-20 and deployed to the development stack; the guided first-connect
+  browser matrix and User 2 disconnect/reconnect passed.)
+- [x] Live-validate guided first connection and the three-user visibility
+  matrix. Effort: High. (The admin received all three Google-verified sources;
+  User 1 and User 2 each received only their own private source plus the shared
+  source. PostgreSQL evidence and durable runs matched 3-visible/0-denied,
+  2-visible/1-denied, and 2-visible/1-denied with zero unknown results. One
+  HTTP-success OpenRouter response violated the strict answer schema and
+  correctly failed closed; the boundary now retries that contract failure
+  exactly once without relaxing validation.)
+- [x] Live-validate guided disconnect and reconnect. Effort: High. (User 2's
+  local disconnect wiped the encrypted credential, deleted all evidence, and
+  reduced the permission-safe allowlist to zero. The next chat presented the
+  guided connection flow; callback-triggered synchronization succeeded with
+  two visible, one denied, and zero unknown documents before the UI again
+  returned only User 2's private source and the shared source.)
 
 Adapter implementation history: `docs/phase-6-implementation-plan.md`.
 
@@ -157,3 +180,8 @@ Phase 6 is complete. The operator reviewed both untracked Phase 6 reports and
 approved formal closeout on 2026-07-19, ruling the citation over-inclusion a
 non-blocking relevance-quality follow-up tracked in GitHub issue #6. The full backend validation (449 tests, Ruff, migration drift) was
 re-run green in Docker on the closeout date.
+
+The 2026-07-20 ADR-018 usability follow-up does not reopen the permission-safe
+Phase 6 boundary. Its automated tests, development deployment, three-user
+first-connect matrix, and guided disconnect/reconnect acceptance are complete
+on the isolated onboarding branch.

@@ -554,6 +554,64 @@ Trade-offs:
 Status: Accepted and implemented (2026-07-18). The exact callback registration
 and live two-user acceptance remain.
 
+## ADR-018: Chat-Guided Drive Onboarding Without An Open WebUI Patch
+
+Decision: Keep Open WebUI's identity-only login and Django's Drive OAuth flow
+as separate trust boundaries, but guide the user between them from the existing
+OpenAI-compatible chat response. Before retrieval, Django resolves the signed
+user to one controlled state: `not_connected`, `syncing`, `ready`,
+`reauthorization_required`, or `temporarily_unavailable`. Only `ready` may call
+the existing query service. A disconnected or terminal user receives a
+server-built Markdown link to the public `/api/session/google/start` endpoint;
+syncing and transient failures receive bounded retry guidance.
+
+The connect URL is derived only from the already validated public origin of
+`GOOGLE_SESSION_OAUTH_REDIRECT_URI`. The identity bootstrap continues to force
+account selection and then redirects directly into separate Drive consent. The
+successful Drive callback polls the authenticated additive status response
+every two seconds and returns to the validated existing `WEBUI_URL` when fresh
+visibility evidence is ready. Polling stops after two minutes and retains a
+safe manual return link. No callback query parameter, handoff token, Open WebUI
+patch, or additional OAuth redirect setting is introduced.
+
+Only an explicit structured Google OAuth `invalid_grant` response is terminal:
+the backend marks the authorization `refresh_failed`, wipes its encrypted
+credential, rotates the authorization generation, deletes visibility evidence,
+and removes managed SpiceDB relationships best-effort. Other refresh, network,
+and provider failures remain retryable and surface as temporary unavailability.
+Separately, an HTTP-success answer response that violates the strict
+`answer`/`supported` JSON contract is retried exactly once with the same
+already-filtered context. Validation is not relaxed, and all other provider
+failures remain single-attempt and fail closed.
+
+Reason:
+
+- Pinned Open WebUI does not create Django's browser session or provide a
+  supported post-login callback hook, while standard Markdown links work in
+  both buffered streaming and non-streaming responses.
+- The chat gate gives non-technical users one clear action without joining the
+  identity and Drive-token trust boundaries.
+- Reusing validated public origins prevents request-host injection and avoids
+  proliferating redirect configuration.
+- Gating before the query service guarantees incomplete onboarding cannot
+  reach SpiceDB, Neo4j, embeddings, or OpenRouter.
+
+Trade-offs:
+
+- First-time users click once in chat and still complete two Google screens:
+  identity selection followed by explicit Drive consent.
+- Automatic return depends on the browser retaining the authenticated Django
+  session; after two minutes the user uses the manual return link.
+- Temporary synchronization failures block chat until fresh evidence is
+  restored, preserving fail-closed behavior at the cost of availability.
+
+Status: Accepted, implemented, and deployed to the development stack
+(2026-07-20). First-connect acceptance passed for the admin and both pilot
+users with exact 3/3, 2/3, and 2/3 visibility respectively and no cross-user
+source leakage. Guided User 2 disconnect/reconnect also passed: local denial
+immediately reduced the allowlist to zero, and reconnection restored exactly
+two visible and one denied document only after the callback-triggered refresh.
+
 ## ADR-013: Pre-Filter Vector Similarity And Server-Owned Answer Citations
 
 Decision: Phase 5 uses one deployment-configured OpenRouter embedding adapter
