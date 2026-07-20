@@ -46,6 +46,19 @@ encode who can see what inside the client's organization.
 2. Replace the synthetic rows with the client-provided data.
 3. The pilot documents themselves go in `data/import/` (also gitignored).
 
+Run the private fixture from `apps/backend/`:
+
+```bash
+python manage.py run_evaluation --dataset-dir ../../data/eval
+```
+
+The command uses the real permission-safe query service. A positive case must
+contain the expected answer text and cite the expected source. Each refusal
+case runs twice: the allowed identity must answer with the restricted source,
+and the denied identity must return a refusal with no citations. The command
+prints only case IDs, result types, pass/fail reason codes, and timings; it does
+not store or print fixture content or identities. Any failed case exits nonzero.
+
 ## Target size for the first POC
 
 - ~20 positive questions in `questions.yaml`.
