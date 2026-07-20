@@ -170,10 +170,23 @@ class GoogleDriveMetadataClient:
         root_id = self._root_id(connection)
         root_name = self._folder_name(service, root_id, connection)
         files: list[DriveFileMetadata] = []
+        per_user_oauth_authority = bool(
+            settings.GOOGLE_PERMISSION_AUTHORITY
+            == DriveConnection.PermissionAuthority.PER_USER_OAUTH
+            and connection.permission_authority
+            == DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        )
 
         # A folder-listing failure here propagates (no on_listing_error), so the
         # sync fails and sync.py fails it closed — never a partial "success".
         for entry, folder_path in self._walk_files(service, connection, root_id, f"/{root_name}"):
+            if per_user_oauth_authority:
+                # The ingestion identity is content-only in ADR-015 mode. Google
+                # verifies each already-indexed file with the employee's own
+                # credential, so permissions.list here is both non-authoritative
+                # and commonly forbidden for a folder Viewer.
+                files.append(self._to_metadata(entry, folder_path, [], False))
+                continue
             # A single file's permission ACL can be unreadable even when the
             # file itself is listable (e.g. folder-level sharing without
             # "manage permissions" rights) — isolate that to this one file

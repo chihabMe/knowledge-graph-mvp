@@ -19,6 +19,7 @@ from django.utils import timezone
 
 from integrations.models import (
     DriveConnection,
+    DriveSyncRun,
     GoogleDriveAuthorization,
     PermissionSyncRun,
     SchedulerHeartbeat,
@@ -43,6 +44,11 @@ class FreshnessReport:
     heartbeat_age_seconds: int | None
     active_connections: int
     active_authorizations: int
+    content_sync_targets: int
+    content_sync_never_succeeded: int
+    content_sync_expiring_soon: int
+    content_sync_overdue: int
+    worst_content_sync_age_seconds: int | None
     sync_targets: int
     targets_never_succeeded: int
     targets_expiring_soon: int
@@ -68,6 +74,11 @@ class FreshnessReport:
 
 @dataclass
 class _Aggregation:
+    content_sync_targets: int = 0
+    content_sync_never_succeeded: int = 0
+    content_sync_expiring_soon: int = 0
+    content_sync_overdue: int = 0
+    worst_content_sync_age_seconds: int | None = None
     sync_targets: int = 0
     targets_never_succeeded: int = 0
     targets_expiring_soon: int = 0
@@ -375,6 +386,51 @@ def _record_content_currency(
     ).count()
 
 
+def _record_content_sync_freshness(
+    aggregate: _Aggregation,
+    *,
+    connections: list[DriveConnection],
+    now: datetime.datetime,
+) -> None:
+    """Aggregate periodic Drive content-sync age without exposing identities."""
+    max_age = settings.DRIVE_CONTENT_SYNC_MAX_AGE_SECONDS
+    warning_age = max_age * (1.0 - settings.FRESHNESS_WARN_REMAINING_FRACTION)
+    for connection in connections:
+        aggregate.content_sync_targets += 1
+        runs = DriveSyncRun.objects.filter(connection=connection)
+        last_success = (
+            runs.filter(
+                status=DriveSyncRun.Status.SUCCEEDED,
+                finished_at__isnull=False,
+            )
+            .order_by("-pk")
+            .values_list("finished_at", flat=True)
+            .first()
+        )
+        age = _age_seconds(now, last_success)
+        if age is None:
+            aggregate.content_sync_never_succeeded += 1
+            first_seen_age = _age_seconds(now, connection.created_at)
+            if (
+                first_seen_age is not None
+                and first_seen_age <= settings.FRESHNESS_NEVER_SYNCED_GRACE_SECONDS
+            ):
+                aggregate.content_sync_expiring_soon += 1
+            else:
+                aggregate.content_sync_overdue += 1
+        else:
+            aggregate.worst_content_sync_age_seconds = _maximum(
+                aggregate.worst_content_sync_age_seconds,
+                age,
+            )
+            if age >= max_age:
+                aggregate.content_sync_overdue += 1
+            elif age > warning_age:
+                aggregate.content_sync_expiring_soon += 1
+        _record_run_backlog(aggregate, now=now, runs=runs)
+        _record_recent_runs(aggregate, runs, sample_limit=settings.FRESHNESS_RUN_SAMPLE_LIMIT)
+
+
 def build_freshness_report(*, now: datetime.datetime | None = None) -> FreshnessReport:
     now = now or timezone.now()
     heartbeat = SchedulerHeartbeat.objects.filter(name=FRESHNESS_HEARTBEAT_NAME).first()
@@ -391,15 +447,22 @@ def build_freshness_report(*, now: datetime.datetime | None = None) -> Freshness
         )
     elif authority == DriveConnection.PermissionAuthority.DELEGATED_ACL:
         _aggregate_delegated(aggregate, connections=connections, now=now)
+    _record_content_sync_freshness(aggregate, connections=connections, now=now)
     _record_content_currency(aggregate, connections=connections)
 
     heartbeat_stale = (
         heartbeat_age is None or heartbeat_age > settings.FRESHNESS_HEARTBEAT_MAX_AGE_SECONDS
     )
-    if heartbeat_stale or aggregate.targets_expired or aggregate.expired_evidence_documents:
+    if (
+        heartbeat_stale
+        or aggregate.targets_expired
+        or aggregate.expired_evidence_documents
+        or aggregate.content_sync_overdue
+    ):
         status = STATUS_ERROR
     elif (
         aggregate.targets_expiring_soon
+        or aggregate.content_sync_expiring_soon
         or aggregate.unknown_documents
         or aggregate.max_consecutive_failures
         or aggregate.latest_error_runs

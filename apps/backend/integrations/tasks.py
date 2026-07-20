@@ -223,53 +223,109 @@ def _stale_content_result(source_document_id: int) -> dict[str, int | str]:
     return {"source_document_id": source_document_id, "status": "skipped_stale_content_version"}
 
 
-@shared_task(name="integrations.run_drive_sync")
-def run_drive_sync(run_id: int) -> dict[str, int | str]:
+@shared_task(
+    bind=True,
+    name="integrations.run_drive_sync",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=3,
+)
+def run_drive_sync(self, run_id: int) -> dict[str, int | str]:
     """Execute a pre-created Drive sync run: metadata, permissions, content.
 
     Takes a primitive id, never a model instance. The run row is the audit
     record the API view created before dispatch; sync_drive_metadata updates
     its status/counters and stores only an exception class name on failure.
     """
-    # Atomic claim: a read-then-check guard would let two workers holding
-    # duplicate deliveries both see QUEUED and both execute. Only the worker
-    # whose UPDATE actually transitions the row proceeds.
-    claimed = DriveSyncRun.objects.filter(pk=run_id, status=DriveSyncRun.Status.QUEUED).update(
-        status=DriveSyncRun.Status.RUNNING, started_at=timezone.now()
-    )
     run = DriveSyncRun.objects.select_related("connection").get(pk=run_id)
-    if not claimed:
+    if run.status not in {DriveSyncRun.Status.QUEUED, DriveSyncRun.Status.RUNNING}:
         return {"run_id": run.pk, "status": run.status}
     connection = run.connection
-
+    lock_key = f"drive-sync:connection:{connection.pk}"
+    lock_token = f"run:{run.pk}"
+    lock_ttl_seconds = settings.DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES * 60
+    if not cache.add(lock_key, lock_token, timeout=lock_ttl_seconds):
+        raise self.retry(countdown=_retry_countdown(self.request.retries))
     try:
-        # One authenticated service shared by the metadata walk and the exporter.
-        service = build_drive_service(connection)
-    except Exception as exc:
-        # Without this, a bad credential file would leave the audit row
-        # stuck in QUEUED forever. Class name only, as everywhere else.
-        run.status = DriveSyncRun.Status.FAILED
-        run.error_summary = f"{type(exc).__module__}.{type(exc).__name__}"[:512]
-        run.finished_at = timezone.now()
-        run.save(update_fields=["status", "error_summary", "finished_at"])
-        raise
-    client = GoogleDriveMetadataClient(service=service)
+        # Atomic claim: duplicate deliveries and scheduler redispatches can
+        # never execute the same durable run twice.
+        claimed = DriveSyncRun.objects.filter(
+            pk=run_id,
+            status=DriveSyncRun.Status.QUEUED,
+        ).update(status=DriveSyncRun.Status.RUNNING, started_at=timezone.now())
+        run.refresh_from_db()
+        if not claimed:
+            return {"run_id": run.pk, "status": run.status}
 
-    def content_exporter(file_metadata):
-        return export_file_content(
-            service,
-            drive_file_id=file_metadata.drive_file_id,
-            mime_type=file_metadata.mime_type,
+        try:
+            # One authenticated service shared by the metadata walk and exporter.
+            service = build_drive_service(connection)
+            client = GoogleDriveMetadataClient(service=service)
+
+            def content_exporter(file_metadata):
+                return export_file_content(
+                    service,
+                    drive_file_id=file_metadata.drive_file_id,
+                    mime_type=file_metadata.mime_type,
+                )
+
+            run = sync_drive_metadata(
+                connection=connection,
+                client=client,
+                run=run,
+                content_exporter=content_exporter,
+                queue_extraction=queue_document_extraction.delay,
+            )
+        except Exception as exc:
+            if isinstance(exc, DRIVE_API_ERRORS) and self.request.retries < self.max_retries:
+                DriveSyncRun.objects.filter(pk=run.pk).update(
+                    status=DriveSyncRun.Status.QUEUED,
+                    error_summary="",
+                    started_at=None,
+                    finished_at=None,
+                )
+                raise self.retry(
+                    exc=exc,
+                    countdown=_retry_countdown(self.request.retries),
+                ) from exc
+            # Credential/configuration errors can occur before sync_drive_metadata
+            # owns the row. Persist only the exception class, never provider text.
+            DriveSyncRun.objects.filter(pk=run.pk).update(
+                status=DriveSyncRun.Status.FAILED,
+                error_summary=f"{type(exc).__module__}.{type(exc).__name__}"[:512],
+                finished_at=timezone.now(),
+            )
+            raise
+        return {"run_id": run.pk, "status": run.status}
+    finally:
+        if cache.get(lock_key) == lock_token:
+            cache.delete(lock_key)
+
+
+@shared_task(name="integrations.schedule_drive_syncs")
+def schedule_drive_syncs() -> dict[str, int]:
+    """Keep the bounded POC corpus current without a change-feed service."""
+    scheduled = 0
+    redispatched = 0
+    for connection in DriveConnection.objects.filter(enabled=True).order_by("pk"):
+        if not connection.effective_root_id:
+            continue
+        active = DriveSyncRun.objects.filter(
+            connection=connection,
+            status__in=[DriveSyncRun.Status.QUEUED, DriveSyncRun.Status.RUNNING],
         )
-
-    run = sync_drive_metadata(
-        connection=connection,
-        client=client,
-        run=run,
-        content_exporter=content_exporter,
-        queue_extraction=queue_document_extraction.delay,
-    )
-    return {"run_id": run.pk, "status": run.status}
+        if active.filter(status=DriveSyncRun.Status.RUNNING).exists():
+            continue
+        queued = list(active.order_by("pk"))
+        if queued:
+            for run in queued:
+                run_drive_sync.delay(run.pk)
+                redispatched += 1
+            continue
+        run = DriveSyncRun.create_for_connection(connection)
+        run_drive_sync.delay(run.pk)
+        scheduled += 1
+    return {"scheduled": scheduled, "redispatched": redispatched}
 
 
 @shared_task(name="integrations.schedule_permission_syncs")
@@ -504,17 +560,20 @@ def monitor_freshness() -> dict[str, int | str | None]:
     report = build_freshness_report()
     if report.status == STATUS_ERROR:
         logger.error(
-            "freshness error: expired_targets=%d expired_evidence=%d heartbeat_age=%s",
+            "freshness error: expired_targets=%d expired_evidence=%d "
+            "content_sync_overdue=%d heartbeat_age=%s",
             report.targets_expired,
             report.expired_evidence_documents,
+            report.content_sync_overdue,
             report.heartbeat_age_seconds,
         )
     elif report.status == STATUS_WARN:
         logger.warning(
             "freshness warn: expiring_soon=%d unknown_documents=%d "
-            "consecutive_failures=%d extraction_failed=%d",
+            "content_sync_expiring=%d consecutive_failures=%d extraction_failed=%d",
             report.targets_expiring_soon,
             report.unknown_documents,
+            report.content_sync_expiring_soon,
             report.max_consecutive_failures,
             report.content_extraction_failed_documents,
         )

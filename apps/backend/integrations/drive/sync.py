@@ -103,6 +103,20 @@ def sync_drive_metadata(
                     and not exclusion_reason
                     and existing_document.is_permission_verified(permissions_version)
                 )
+                preserve_per_user_content_gate = bool(
+                    existing_document
+                    and per_user_oauth_authority
+                    and not exclusion_reason
+                    and existing_document.retrieval_eligible
+                    and existing_document.graph_extraction_status
+                    == SourceDocument.GraphExtractionStatus.SUCCEEDED
+                    and existing_document.content_hash
+                    and previous_modified_time == file_metadata.modified_time
+                    and SourceDocumentContent.objects.filter(
+                        source_document=existing_document,
+                        content_hash=existing_document.content_hash,
+                    ).exists()
+                )
 
                 document, _created = SourceDocument.objects.update_or_create(
                     connection=connection,
@@ -128,7 +142,14 @@ def sync_drive_metadata(
                         "last_permission_sync_time": timezone.now(),
                         "active_in_scope": True,
                         "last_seen_sync_marker": sync_marker,
-                        "retrieval_eligible": preserve_permission_verification,
+                        # In per-user mode this is only the coarse content gate;
+                        # fresh user evidence plus SpiceDB still authorize every
+                        # query. Preserve it for an unchanged, fully extracted
+                        # content version, but close it for every changed/new or
+                        # otherwise indeterminate document.
+                        "retrieval_eligible": (
+                            preserve_permission_verification or preserve_per_user_content_gate
+                        ),
                         "spicedb_permissions_version": (
                             permissions_version if preserve_permission_verification else ""
                         ),
