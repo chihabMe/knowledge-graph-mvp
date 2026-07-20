@@ -29,7 +29,12 @@ def _connection_defaults_from_settings() -> dict[str, object]:
     }.get(settings.GOOGLE_DRIVE_AUTH_MODE, "GOOGLE_SERVICE_ACCOUNT_FILE")
     return {
         "workspace_domain": settings.GOOGLE_WORKSPACE_DOMAIN,
-        "delegated_subject_email": settings.GOOGLE_DRIVE_DELEGATED_SUBJECT,
+        "delegated_subject_email": (
+            settings.GOOGLE_DRIVE_DELEGATED_SUBJECT
+            if settings.GOOGLE_PERMISSION_AUTHORITY
+            == DriveConnection.PermissionAuthority.DELEGATED_ACL
+            else ""
+        ),
         "credential_reference": credential_reference,
         "scope_type": settings.GOOGLE_DRIVE_SCOPE_TYPE,
         "root_folder_id": (
@@ -43,6 +48,7 @@ def _connection_defaults_from_settings() -> dict[str, object]:
             else ""
         ),
         "enabled": True,
+        "permission_authority": settings.GOOGLE_PERMISSION_AUTHORITY,
     }
 
 
