@@ -358,6 +358,19 @@ def validate_google_user_oauth_settings(
         )
 
 
+def validate_drive_content_sync_settings(*, interval_seconds: int, max_age_seconds: int) -> None:
+    """Keep periodic content reconciliation bounded and observable."""
+    if not 60 <= interval_seconds <= 86_400:
+        raise ImproperlyConfigured(
+            "DRIVE_CONTENT_SYNC_INTERVAL_SECONDS must be between 60 and 86400."
+        )
+    if not interval_seconds < max_age_seconds <= 172_800:
+        raise ImproperlyConfigured(
+            "DRIVE_CONTENT_SYNC_MAX_AGE_SECONDS must exceed the sync interval and be "
+            "at most 172800."
+        )
+
+
 def validate_freshness_monitor_settings(
     *,
     interval_seconds: int,

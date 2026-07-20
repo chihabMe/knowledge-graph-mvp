@@ -9,6 +9,7 @@ import environ
 from django.core.exceptions import ImproperlyConfigured
 
 from config.settings_validators import (
+    validate_drive_content_sync_settings,
     validate_drive_onboarding_urls,
     validate_freshness_monitor_settings,
     validate_google_session_oauth_settings,
@@ -273,6 +274,12 @@ CELERY_TIMEZONE = TIME_ZONE
 # A worker crash mid-task leaves the DriveSyncRun row stuck in RUNNING
 # forever with no other signal that it died. The sweep is the recovery path.
 DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int("DRIVE_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120)
+DRIVE_CONTENT_SYNC_INTERVAL_SECONDS = env.int("DRIVE_CONTENT_SYNC_INTERVAL_SECONDS", default=900)
+DRIVE_CONTENT_SYNC_MAX_AGE_SECONDS = env.int("DRIVE_CONTENT_SYNC_MAX_AGE_SECONDS", default=1800)
+validate_drive_content_sync_settings(
+    interval_seconds=DRIVE_CONTENT_SYNC_INTERVAL_SECONDS,
+    max_age_seconds=DRIVE_CONTENT_SYNC_MAX_AGE_SECONDS,
+)
 PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES = env.int(
     "PERMISSION_SYNC_STALE_RUN_TIMEOUT_MINUTES", default=120
 )
@@ -291,6 +298,10 @@ if PERMISSION_VERIFICATION_MAX_AGE_SECONDS <= PERMISSION_SYNC_INTERVAL_SECONDS:
         "PERMISSION_SYNC_INTERVAL_SECONDS."
     )
 CELERY_BEAT_SCHEDULE = {
+    "schedule-drive-syncs": {
+        "task": "integrations.schedule_drive_syncs",
+        "schedule": float(DRIVE_CONTENT_SYNC_INTERVAL_SECONDS),
+    },
     "schedule-permission-syncs": {
         "task": "integrations.schedule_permission_syncs",
         "schedule": float(PERMISSION_SYNC_INTERVAL_SECONDS),

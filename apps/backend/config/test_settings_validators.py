@@ -8,6 +8,7 @@ from django.test import SimpleTestCase
 
 from config.settings_validators import (
     load_google_user_token_keyring,
+    validate_drive_content_sync_settings,
     validate_drive_onboarding_urls,
     validate_freshness_monitor_settings,
     validate_google_session_oauth_settings,
@@ -323,6 +324,34 @@ class GoogleUserOAuthSettingsValidationTests(SimpleTestCase):
         )
         with self.assertRaises(ImproperlyConfigured):
             load_google_user_token_keyring(str(self.keyring_file))
+
+
+class DriveContentSyncSettingsValidationTests(SimpleTestCase):
+    def test_valid_schedule_passes(self):
+        self.assertIsNone(
+            validate_drive_content_sync_settings(
+                interval_seconds=900,
+                max_age_seconds=1800,
+            )
+        )
+
+    def test_interval_must_stay_within_bounds(self):
+        for interval in (0, 59, 86_401):
+            with self.subTest(interval=interval):
+                with self.assertRaises(ImproperlyConfigured):
+                    validate_drive_content_sync_settings(
+                        interval_seconds=interval,
+                        max_age_seconds=1800,
+                    )
+
+    def test_max_age_must_exceed_interval_and_stay_bounded(self):
+        for max_age in (899, 900, 172_801):
+            with self.subTest(max_age=max_age):
+                with self.assertRaises(ImproperlyConfigured):
+                    validate_drive_content_sync_settings(
+                        interval_seconds=900,
+                        max_age_seconds=max_age,
+                    )
 
 
 class FreshnessMonitorSettingsValidationTests(SimpleTestCase):
