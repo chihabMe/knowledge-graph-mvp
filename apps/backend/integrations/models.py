@@ -555,3 +555,18 @@ class PermissionSyncRun(models.Model):
             triggered_by=triggered_by,
             actor_email=actor_email,
         )
+
+
+class SchedulerHeartbeat(models.Model):
+    """Liveness marker a periodic task updates on every tick.
+
+    The freshness health endpoint reads the tick age, so a dead Celery beat
+    or worker is itself detectable instead of silently freezing alerting.
+    """
+
+    name = models.CharField(max_length=64, unique=True)
+    last_tick_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Scheduler heartbeat {self.name}"
