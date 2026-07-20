@@ -41,7 +41,7 @@ class DriveConnection(models.Model):
     permission_authority = models.CharField(
         max_length=32,
         choices=PermissionAuthority.choices,
-        default=PermissionAuthority.DELEGATED_ACL,
+        default=PermissionAuthority.PER_USER_OAUTH,
     )
     # Rotated by the cutover service before a root, account, or authority
     # change may grant access. It is intentionally not derived from mutable

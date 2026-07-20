@@ -41,10 +41,10 @@ class UserVisibilityModelTests(TestCase):
             status=GoogleDriveAuthorization.Status.ACTIVE,
         )
 
-    def test_new_connections_default_to_legacy_authority_with_an_opaque_generation(self):
+    def test_new_connections_default_to_per_user_authority_with_an_opaque_generation(self):
         self.assertEqual(
             self.connection.permission_authority,
-            DriveConnection.PermissionAuthority.DELEGATED_ACL,
+            DriveConnection.PermissionAuthority.PER_USER_OAUTH,
         )
         self.assertIsInstance(self.connection.authorization_generation, uuid.UUID)
 
