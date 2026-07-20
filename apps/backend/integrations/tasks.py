@@ -1,4 +1,5 @@
 import datetime
+import logging
 
 from celery import shared_task
 from django.conf import settings
@@ -22,15 +23,24 @@ from integrations.drive.user_visibility_sync import (
     invalidate_authorization_evidence,
     synchronize_user_visibility,
 )
+from integrations.freshness import (
+    FRESHNESS_HEARTBEAT_NAME,
+    STATUS_ERROR,
+    STATUS_WARN,
+    build_freshness_report,
+)
 from integrations.models import (
     DriveConnection,
     DriveSyncRun,
     GoogleDriveAuthorization,
     PermissionSyncRun,
+    SchedulerHeartbeat,
     SourceDocument,
     SourceDocumentContent,
     UserVisibilitySyncRun,
 )
+
+logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
@@ -476,6 +486,37 @@ def sweep_stale_graph_extractions() -> dict[str, int]:
         updated_at=timezone.now(),
     )
     return {"swept": swept}
+
+
+@shared_task(name="integrations.monitor_freshness")
+def monitor_freshness() -> dict[str, int | str | None]:
+    """Tick the scheduler heartbeat and log pre-expiry freshness alerts.
+
+    Read-only apart from the single heartbeat row and idempotent, so it
+    needs no per-run lock or stale-run sweep: overlapping ticks converge on
+    the same state. The returned payload is counts, ages, and status labels
+    only — safe for the Celery result backend under the evidence policy.
+    """
+    SchedulerHeartbeat.objects.update_or_create(
+        name=FRESHNESS_HEARTBEAT_NAME,
+        defaults={"last_tick_at": timezone.now()},
+    )
+    report = build_freshness_report()
+    if report.status == STATUS_ERROR:
+        logger.error(
+            "freshness error: expired_targets=%d expired_evidence=%d heartbeat_age=%s",
+            report.targets_expired,
+            report.expired_evidence_documents,
+            report.heartbeat_age_seconds,
+        )
+    elif report.status == STATUS_WARN:
+        logger.warning(
+            "freshness warn: expiring_soon=%d unknown_documents=%d consecutive_failures=%d",
+            report.targets_expiring_soon,
+            report.unknown_documents,
+            report.max_consecutive_failures,
+        )
+    return report.as_payload()
 
 
 @shared_task(
