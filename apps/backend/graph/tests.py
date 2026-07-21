@@ -688,6 +688,15 @@ class GraphRAGExtractorTests(SimpleTestCase):
 
         self.assertEqual([e.chunk_index for e in result.entities], [0, 1])
 
+    def test_unparseable_model_output_raises_the_retryable_wrapper(self):
+        from graph.graphrag import RETRYABLE_LLM_EXCEPTIONS, MalformedModelOutputError
+
+        extractor = GraphRAGExtractor(llm=_fake_llm("this is not json"))
+
+        with self.assertRaises(MalformedModelOutputError):
+            extractor.extract("Some text.")
+        self.assertIn(MalformedModelOutputError, RETRYABLE_LLM_EXCEPTIONS)
+
     def test_llm_extraction_uses_bounded_chunks(self):
         payload = '{"nodes": [], "relationships": []}'
         extractor = GraphRAGExtractor(
@@ -702,6 +711,7 @@ class GraphRAGExtractorTests(SimpleTestCase):
 
     @override_settings(
         GRAPH_EXTRACTION_MODEL="test-model",
+        GRAPH_EXTRACTION_FALLBACK_MODELS=[],
         OPENROUTER_BASE_URL="https://openrouter.ai/api/v1",
         OPENROUTER_API_KEY="test-key",
     )
@@ -718,6 +728,21 @@ class GraphRAGExtractorTests(SimpleTestCase):
             api_key="test-key",
             base_url="https://openrouter.ai/api/v1",
         )
+
+    @override_settings(
+        GRAPH_EXTRACTION_MODEL="test-model",
+        GRAPH_EXTRACTION_FALLBACK_MODELS=["fallback-a", "fallback-b"],
+        OPENROUTER_BASE_URL="https://openrouter.ai/api/v1",
+        OPENROUTER_API_KEY="test-key",
+    )
+    @patch("neo4j_graphrag.llm.OpenAILLM")
+    def test_fallback_models_ride_along_as_openrouter_extra_body(self, mock_llm):
+        from graph.graphrag import build_graphrag_extractor
+
+        build_graphrag_extractor()
+
+        model_params = mock_llm.call_args.kwargs["model_params"]
+        self.assertEqual(model_params["extra_body"], {"models": ["fallback-a", "fallback-b"]})
 
 
 class ExtractionEngineSelectionTests(SimpleTestCase):

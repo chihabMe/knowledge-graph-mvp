@@ -475,6 +475,11 @@ if GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag" and not (
         "GRAPH_EXTRACTION_ENGINE='neo4j_graphrag' requires OPENROUTER_API_KEY "
         "and GRAPH_EXTRACTION_MODEL to be set."
     )
+# OpenRouter-side model fallbacks for extraction: when every provider for the
+# primary model fails, the router reroutes the request to these models in
+# order. Defends against upstream faults the primary's providers all share
+# (e.g. in-body 502 "provider_unavailable" delivered with HTTP 200).
+GRAPH_EXTRACTION_FALLBACK_MODELS = env.list("GRAPH_EXTRACTION_FALLBACK_MODELS", default=[])
 
 GOOGLE_WORKSPACE_DOMAIN = env("GOOGLE_WORKSPACE_DOMAIN", default="")
 GOOGLE_DRIVE_AUTH_MODE = env("GOOGLE_DRIVE_AUTH_MODE", default="service_account")

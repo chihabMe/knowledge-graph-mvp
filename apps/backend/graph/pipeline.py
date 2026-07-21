@@ -55,8 +55,13 @@ def get_retryable_extraction_exceptions() -> tuple[type[BaseException], ...]:
     infrastructure = (OSError, ServiceUnavailable, SessionExpired, TransientError)
     if settings.GRAPH_EXTRACTION_ENGINE == "neo4j_graphrag":
         from graph.graphrag import RETRYABLE_LLM_EXCEPTIONS
+        from graph.ontology import UnknownEntityTypeError, UnknownRelationshipTypeError
 
         infrastructure += RETRYABLE_LLM_EXCEPTIONS
+        # Ontology violations stay a hard, fail-closed rejection — but with a
+        # nondeterministic LLM engine the same chunk usually conforms on a
+        # fresh attempt, so the bounded task retries get a chance first.
+        infrastructure += (UnknownEntityTypeError, UnknownRelationshipTypeError)
     if settings.GRAPH_EMBEDDING_PROVIDER == "openrouter":
         infrastructure += RETRYABLE_EMBEDDING_EXCEPTIONS
     return infrastructure

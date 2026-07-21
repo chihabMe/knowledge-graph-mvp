@@ -15,6 +15,7 @@ validate_extraction_result in the pipeline.
 import asyncio
 
 from django.conf import settings
+from neo4j_graphrag.exceptions import LLMGenerationError
 from neo4j_graphrag.experimental.components.entity_relation_extractor import (
     LLMEntityRelationExtractor,
     OnError,
@@ -38,6 +39,16 @@ from graph.extraction import (
 )
 from graph.ontology import ENTITY_TYPES, RELATIONSHIP_TYPES
 
+
+class MalformedModelOutputError(Exception):
+    """The extraction model returned output the engine could not parse.
+
+    At temperature 0 the provider is still nondeterministic in practice, so a
+    fresh attempt on the identical chunk regularly succeeds — this is a
+    transient quality failure, not a bug in our pipeline.
+    """
+
+
 # Transient provider failures this engine's extraction can hit. Owned here so
 # the task layer never has to know which LLM stack an engine is built on.
 RETRYABLE_LLM_EXCEPTIONS = (
@@ -45,6 +56,7 @@ RETRYABLE_LLM_EXCEPTIONS = (
     APITimeoutError,
     InternalServerError,
     RateLimitError,
+    MalformedModelOutputError,
 )
 
 
@@ -109,11 +121,17 @@ class GraphRAGExtractor:
 
         async def extract_chunk(chunk: ExtractedChunk):
             async with semaphore:
-                return await self._extractor.extract_for_chunk(
-                    self._schema,
-                    "",
-                    TextChunk(text=chunk.text, index=chunk.index),
-                )
+                try:
+                    return await self._extractor.extract_for_chunk(
+                        self._schema,
+                        "",
+                        TextChunk(text=chunk.text, index=chunk.index),
+                    )
+                except (LLMGenerationError, TypeError, KeyError, IndexError, AttributeError) as exc:
+                    # The engine choked on what the model produced (None
+                    # content, truncated JSON, missing fields). Classified
+                    # retryable so the task-level backoff gets a fresh sample.
+                    raise MalformedModelOutputError(type(exc).__name__) from exc
 
         chunk_graphs = await asyncio.gather(*(extract_chunk(chunk) for chunk in chunks))
 
@@ -159,9 +177,15 @@ class GraphRAGExtractor:
 def build_graphrag_extractor() -> GraphRAGExtractor:
     from neo4j_graphrag.llm import OpenAILLM
 
+    model_params: dict = {"temperature": 0.0, "response_format": {"type": "json_object"}}
+    if settings.GRAPH_EXTRACTION_FALLBACK_MODELS:
+        # OpenRouter's model-fallback routing: `model` stays the primary and
+        # `models` lists the rescue chain. Passed via extra_body because it is
+        # an OpenRouter extension the OpenAI SDK does not model natively.
+        model_params["extra_body"] = {"models": list(settings.GRAPH_EXTRACTION_FALLBACK_MODELS)}
     llm = OpenAILLM(
         model_name=settings.GRAPH_EXTRACTION_MODEL,
-        model_params={"temperature": 0.0, "response_format": {"type": "json_object"}},
+        model_params=model_params,
         api_key=settings.OPENROUTER_API_KEY,
         base_url=settings.OPENROUTER_BASE_URL,
     )

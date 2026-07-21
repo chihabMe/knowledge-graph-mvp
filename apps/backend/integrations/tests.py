@@ -2533,6 +2533,23 @@ class QueueDocumentExtractionTaskTests(TestCase):
         self.assertIn(RateLimitError, retryable)
         self.assertIn(ServiceUnavailable, retryable)
 
+    @override_settings(GRAPH_EXTRACTION_ENGINE="neo4j_graphrag")
+    def test_the_llm_engine_retries_model_quality_failures(self):
+        from graph.graphrag import MalformedModelOutputError
+        from graph.ontology import UnknownEntityTypeError, UnknownRelationshipTypeError
+
+        retryable = get_retryable_extraction_exceptions()
+
+        self.assertIn(MalformedModelOutputError, retryable)
+        self.assertIn(UnknownEntityTypeError, retryable)
+        self.assertIn(UnknownRelationshipTypeError, retryable)
+
+    @override_settings(GRAPH_EXTRACTION_ENGINE="paragraph")
+    def test_the_deterministic_engine_never_retries_ontology_violations(self):
+        from graph.ontology import UnknownRelationshipTypeError
+
+        self.assertNotIn(UnknownRelationshipTypeError, get_retryable_extraction_exceptions())
+
     @patch("integrations.tasks.extract_document_to_graph")
     def test_stale_result_does_not_overwrite_the_newer_content_state(self, mock_extract):
         def replace_content_while_extracting(*_args):
