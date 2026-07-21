@@ -1,6 +1,10 @@
 # Development overlay — never used alone, always layered on the base files:
-#   make up-dev  →  compose -f compose.infrastructure.yml -f compose.app.yml \
-#                           -f compose.dev.yml up -d --build
+#   make up      → core services only (postgres, redis, neo4j, spicedb,
+#                   django, celery-worker), no traefik/dozzle/open-webui.
+#   make up-dev  → core services + celery-beat + open-webui, still no
+#                   traefik/dozzle (this project's traefik is only meant
+#                   for a real single-customer VM, not a shared dev box).
+#   make up-all  → everything, including this project's own traefik/dozzle.
 #
 # It swaps the app containers onto the Dockerfile's `dev` target and
 # bind-mounts the source packages for hot reload. Individual packages are
@@ -15,6 +19,9 @@ x-dev-source: &dev-source
   - ../apps/backend/integrations:/app/integrations
   - ../apps/backend/retrieval:/app/retrieval
   - ../apps/backend/manage.py:/app/manage.py
+  # Read-only so `make demo-eval` (run_evaluation) can reach the demo
+  # evaluation fixture from inside the container; nothing here writes to it.
+  - ../data/eval:/data/eval:ro
 
 services:
   django:

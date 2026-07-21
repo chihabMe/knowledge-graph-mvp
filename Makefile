@@ -15,8 +15,13 @@ COMPOSE_PROD = $(COMPOSE_BASE)
 COMPOSE = $(COMPOSE_DEV)
 BACKEND_DIR = apps/backend
 CORE_SERVICES = postgres redis neo4j spicedb django celery-worker
+# Local dev, chat-capable stack: core services + the scheduler + the chat UI,
+# without the reverse proxy or log viewer (traefik/dozzle are only useful on
+# a real single-customer VM deployment and just collide with a host-wide
+# proxy on a shared dev machine).
+DEV_APP_SERVICES = $(CORE_SERVICES) celery-beat open-webui
 
-.PHONY: config up up-prod up-all up-all-prod down logs migrate migration-check django-check test lint format health smoke review-staged review review-branch install-hooks
+.PHONY: config up up-dev up-prod up-all up-all-prod down logs migrate migration-check django-check test lint format health smoke review-staged review review-branch install-hooks demo-eval demo-select-root
 
 config:
 	$(CONFIG_COMPOSE) -f infra/compose.infrastructure.yml config >/tmp/kg-infra-compose-check.txt
@@ -25,6 +30,11 @@ config:
 
 up:
 	$(COMPOSE) up -d --build $(CORE_SERVICES)
+
+# Core services + celery-beat + open-webui for local dev, deliberately
+# skipping this project's own traefik/dozzle (see DEV_APP_SERVICES above).
+up-dev:
+	$(COMPOSE) --profile scheduler up -d --build $(DEV_APP_SERVICES)
 
 up-prod:
 	$(COMPOSE_PROD) up -d --build $(CORE_SERVICES)
@@ -89,3 +99,19 @@ review-branch:
 # Install git hooks (run once after cloning)
 install-hooks:
 	bash scripts/install-hooks.sh
+
+# Run the permission-safe retrieval demo evaluation fixture (data/eval/) through
+# the real query path. Requires QUERY_ANSWER_PROVIDER=openrouter to be set on the
+# django service - the default extractive provider will fail positive-case scoring.
+# See docs/runbooks/demo-drive-permission-proof.md.
+demo-eval:
+	$(COMPOSE) exec -T django python manage.py run_evaluation --dataset-dir /data/eval
+
+# Select the ingestion root and trigger a sync, without needing an admin
+# session/curl/cookies. Usage: make demo-select-root ROOT_ID=<folder-or-shared-drive-id>
+# Runs inside the already-up django container so it picks up the same Google
+# credentials and database the running stack uses. See docs/runbooks/
+# demo-drive-permission-proof.md.
+demo-select-root:
+	@test -n "$(ROOT_ID)" || (echo "usage: make demo-select-root ROOT_ID=<folder-or-shared-drive-id>" && exit 1)
+	$(COMPOSE) exec -T django python manage.py select_drive_root_and_sync $(ROOT_ID)
