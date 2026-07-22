@@ -30,8 +30,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      # Dashboard has no auth of its own — never publish it beyond localhost.
-      - "127.0.0.1:${TRAEFIK_DASHBOARD_HOST_PORT:-8088}:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
@@ -51,8 +49,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-knowledge_graph}
       POSTGRES_USER: ${POSTGRES_USER:-kg_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-postgres-password}
-    ports:
-      - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -73,8 +69,6 @@ services:
         limits:
           memory: 256M
     command: redis-server --appendonly yes
-    ports:
-      - "127.0.0.1:${REDIS_HOST_PORT:-16379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -99,9 +93,6 @@ services:
       NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/change-this-neo4j-password}
       NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL:-512m}
       NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-1G}
-    ports:
-      - "127.0.0.1:${NEO4J_HTTP_HOST_PORT:-17474}:7474"
-      - "127.0.0.1:${NEO4J_BOLT_HOST_PORT:-17687}:7687"
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
       interval: 10s
@@ -140,9 +131,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
-    ports:
-      - "127.0.0.1:${SPICEDB_GRPC_HOST_PORT:-15051}:50051"
-      - "127.0.0.1:${SPICEDB_HTTP_HOST_PORT:-18443}:8443"
     networks:
       - kg-private
 
@@ -245,9 +233,6 @@ services:
       USER_PERMISSIONS_FEATURES_IMAGE_GENERATION: "false"
       USER_PERMISSIONS_FEATURES_CODE_INTERPRETER: "false"
       USER_PERMISSIONS_FEATURES_MEMORIES: "false"
-    # Public access goes through Traefik; the direct port is local-dev only.
-    ports:
-      - "127.0.0.1:${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - open-webui-data:/app/backend/data
     networks:
@@ -269,11 +254,6 @@ services:
           memory: 256M
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    # The direct port bypasses the ops-auth middleware below (it exposes every
-    # container's logs), so it must stay bound to localhost. Remote access
-    # goes through Traefik, which enforces basicauth.
-    ports:
-      - "127.0.0.1:${DOZZLE_HOST_PORT:-9999}:8080"
     networks:
       - kg-public
     labels:

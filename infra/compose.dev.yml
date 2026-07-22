@@ -71,3 +71,30 @@ services:
       # This one-off Django command loads the same settings as the app. It must
       # be recognized as development when the local OAuth workaround is active.
       DJANGO_DEBUG: "true"
+
+  # Publish infra ports on localhost for DEVELOPMENT only. In production/deploy
+  # these stay unpublished (only the proxy binds host ports), so multiple client
+  # stacks can coexist on one host without colliding.
+  traefik:
+    ports:
+      - "127.0.0.1:${TRAEFIK_DASHBOARD_HOST_PORT:-8088}:8080"
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-16379}:6379"
+  neo4j:
+    ports:
+      - "127.0.0.1:${NEO4J_HTTP_HOST_PORT:-17474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_HOST_PORT:-17687}:7687"
+  spicedb:
+    ports:
+      - "127.0.0.1:${SPICEDB_GRPC_HOST_PORT:-15051}:50051"
+      - "127.0.0.1:${SPICEDB_HTTP_HOST_PORT:-18443}:8443"
+  open-webui:
+    ports:
+      - "127.0.0.1:${OPEN_WEBUI_PORT:-3000}:8080"
+  dozzle:
+    ports:
+      - "127.0.0.1:${DOZZLE_HOST_PORT:-9999}:8080"
