@@ -44,3 +44,8 @@ private/
 # the shared repo (the tracker links the tracked plan documents instead)
 docs/phase-6-local-implementation-report.md
 docs/phase-6-per-user-oauth-cutover-work-report.md
+
+# Local, for-later exploration reports and decision drafts. Kept in the repo
+# tree for convenience but never committed (public repo). The rest of docs/
+# stays tracked (ADRs, runbooks, daily reports).
+docs/local/

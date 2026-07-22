@@ -1,0 +1,68 @@
+# Production deploy overlay: run the PUBLISHED image instead of building on the
+# host, and apply Django migrations automatically as an init step. Layer it over
+# the base files and deploy without building:
+#
+#   docker compose -f infra/compose.infrastructure.yml \
+#                  -f infra/compose.app.yml \
+#                  -f infra/compose.deploy.yml pull
+#   docker compose -f infra/compose.infrastructure.yml \
+#                  -f infra/compose.app.yml \
+#                  -f infra/compose.deploy.yml up -d --no-build
+#
+# All app services run the SAME image (Django, Celery worker/beat, the
+# SpiceDB-schema job, and the Django-migrate job are one artifact). KG_IMAGE is
+# required and set per deploy to the pinned tag or digest, e.g.:
+#   KG_IMAGE=ghcr.io/chihabMe/kg-backend:v0.1.0
+#
+# Ordered init on every `up` (idempotent): postgres healthy ->
+# spicedb-migrate + spicedb-schema (base compose) -> django-migrate (below) ->
+# django/celery start. Migrations run once per deploy; restarts are safe.
+#
+# Not handled here (owned by the deploy target's proxy / edge):
+#   - TLS + public routing: the fronting proxy terminates HTTPS and routes the
+#     two public hostnames (Open WebUI, Django API). In the Coolify path that is
+#     Coolify's proxy; for a standalone VM add a Traefik-TLS overlay instead.
+#   - Host-published DB/UI ports: those localhost bindings in the base infra
+#     compose are a dev convenience and collide when >1 client runs on a host.
+#     They should move to the dev overlay before co-tenanting (tracked, next).
+services:
+  django:
+    image: ${KG_IMAGE:?set KG_IMAGE to the published ghcr.io/chihabMe/kg-backend tag or digest}
+    depends_on:
+      # Merges with the base django depends_on; gate startup on migrations.
+      django-migrate:
+        condition: service_completed_successfully
+
+  celery-worker:
+    image: ${KG_IMAGE:?set KG_IMAGE to the published ghcr.io/chihabMe/kg-backend tag or digest}
+
+  celery-beat:
+    image: ${KG_IMAGE:?set KG_IMAGE to the published ghcr.io/chihabMe/kg-backend tag or digest}
+
+  spicedb-schema:
+    image: ${KG_IMAGE:?set KG_IMAGE to the published ghcr.io/chihabMe/kg-backend tag or digest}
+
+  # One-shot Django migration job, mirroring the existing spicedb-schema init
+  # container: same image, env, and secret mounts so settings load identically;
+  # runs `migrate` once, then exits. Django waits for it to complete.
+  django-migrate:
+    image: ${KG_IMAGE:?set KG_IMAGE to the published ghcr.io/chihabMe/kg-backend tag or digest}
+    restart: "no"
+    env_file:
+      - ${APP_ENV_FILE:-../.env}
+    volumes:
+      - ${GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/google-user-oauth-client.json:ro
+      - ${GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE:-/dev/null}:/run/secrets/google-user-token-keyring.json:ro
+    environment:
+      GOOGLE_USER_OAUTH_CLIENT_SECRET_FILE: /run/secrets/google-user-oauth-client.json
+      GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/google-user-token-keyring.json
+    command:
+      - python
+      - manage.py
+      - migrate
+      - --noinput
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - kg-private

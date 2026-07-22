@@ -1,0 +1,6 @@
+# Per-client deployment configs hold REAL secrets (generated passwords, the
+# Fernet token keyring, Google credentials). This repo is public — nothing in
+# here may ever be committed. Ignore everything except this file and the README.
+*
+!.gitignore
+!README.md
