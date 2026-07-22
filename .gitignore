@@ -40,12 +40,7 @@ output/
 tmp/
 private/
 
-# Detailed local Phase 6 working reports - operator reference, not part of
-# the shared repo (the tracker links the tracked plan documents instead)
-docs/phase-6-local-implementation-report.md
-docs/phase-6-per-user-oauth-cutover-work-report.md
-
-# Local, for-later exploration reports and decision drafts. Kept in the repo
-# tree for convenience but never committed (public repo). The rest of docs/
-# stays tracked (ADRs, runbooks, daily reports).
-docs/local/
+# The entire docs/ tree is kept local-only and untracked (git rm --cached).
+# Files remain on disk but are not committed. Note: AGENTS.md references docs as
+# required reading, so those pointers dangle for a fresh clone by design.
+docs/
