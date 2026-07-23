@@ -1902,6 +1902,9 @@ class DriveRootApiTests(TestCase):
     @override_settings(
         GOOGLE_WORKSPACE_DOMAIN="example.com",
         GOOGLE_DRIVE_AUTH_MODE="application_default",
+        GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL=(
+            "knowledge-graph-ingestion@knowledge-graph-pilot.iam.gserviceaccount.com"
+        ),
         GOOGLE_DRIVE_DELEGATED_SUBJECT="",
         GOOGLE_DRIVE_SCOPE_TYPE="folder",
         GOOGLE_DRIVE_ROOT_ID="",
@@ -1927,8 +1930,43 @@ class DriveRootApiTests(TestCase):
         transient = fake_client.connections[0]
         self.assertIsNone(transient.pk)
         self.assertEqual(transient.workspace_domain, "example.com")
+        self.assertEqual(
+            transient.service_account_email,
+            "knowledge-graph-ingestion@knowledge-graph-pilot.iam.gserviceaccount.com",
+        )
         self.assertEqual(transient.delegated_subject_email, "")
         self.assertEqual(transient.credential_reference, "GOOGLE_APPLICATION_CREDENTIALS")
+
+    @override_settings(
+        GOOGLE_WORKSPACE_DOMAIN="example.com",
+        GOOGLE_DRIVE_AUTH_MODE="application_default",
+        GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL=(
+            "knowledge-graph-ingestion@knowledge-graph-pilot.iam.gserviceaccount.com"
+        ),
+        GOOGLE_DRIVE_DELEGATED_SUBJECT="",
+        GOOGLE_DRIVE_SCOPE_TYPE="folder",
+        GOOGLE_DRIVE_ROOT_ID="",
+        GOOGLE_SHARED_DRIVE_ID="",
+    )
+    @patch("integrations.views.GoogleDriveMetadataClient")
+    def test_root_selection_bootstraps_the_bound_ingestion_identity(self, mock_client_class):
+        self.connection.delete()
+        mock_client_class.return_value = FakeDriveRootClient(self._candidates())
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/api/ingest/drive/connection/root/",
+            data={"scope_type": "folder", "root_id": "folder-123"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        connection = DriveConnection.objects.get()
+        self.assertEqual(
+            connection.service_account_email,
+            "knowledge-graph-ingestion@knowledge-graph-pilot.iam.gserviceaccount.com",
+        )
+        self.assertEqual(connection.root_folder_id, "folder-123")
 
     @patch("integrations.views.GoogleDriveMetadataClient")
     def test_drive_api_errors_return_controlled_bad_gateway(self, mock_client_class):

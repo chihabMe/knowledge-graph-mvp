@@ -30,7 +30,7 @@ redis-data/
 
 # Local Claude Code settings (permission allowlists, absolute paths) and their
 # crash/interrupt temp files — must never be committed
-.claude/settings.local.json*
+.claude/
 .continues-handoff.md
 
 # Personal / client reference material - not part of the shared repo

@@ -19,9 +19,35 @@ GOOGLE_WORKSPACE_DOMAIN_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
+GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL_PATTERN = re.compile(
+    r"^[a-z][a-z0-9-]{4,28}[a-z0-9]@"
+    r"[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$"
+)
 GOOGLE_USER_OAUTH_CALLBACK_PATH = "/api/drive/oauth/callback"
 GOOGLE_SESSION_OAUTH_CALLBACK_PATH = "/api/session/google/callback"
 GOOGLE_USER_TOKEN_KEYRING_MAX_BYTES = 16_384
+
+
+def validate_google_ingestion_service_account(
+    *,
+    auth_mode: str,
+    service_account_email: str,
+    development_context: bool,
+) -> None:
+    """Require an explicit dedicated ingestion identity outside development."""
+    if auth_mode == "oauth_dev":
+        return
+    if not service_account_email:
+        if development_context:
+            return
+        raise ImproperlyConfigured(
+            "GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL is required for Drive ingestion."
+        )
+    if not GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL_PATTERN.fullmatch(service_account_email):
+        raise ImproperlyConfigured(
+            "GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL must name a dedicated Google IAM "
+            "service account."
+        )
 
 
 def validate_drive_onboarding_urls(

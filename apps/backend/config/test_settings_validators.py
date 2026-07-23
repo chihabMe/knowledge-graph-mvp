@@ -11,10 +11,62 @@ from config.settings_validators import (
     validate_drive_content_sync_settings,
     validate_drive_onboarding_urls,
     validate_freshness_monitor_settings,
+    validate_google_ingestion_service_account,
     validate_google_session_oauth_settings,
     validate_google_user_oauth_settings,
     validate_open_webui_compatible_settings,
 )
+
+
+class GoogleIngestionServiceAccountValidationTests(SimpleTestCase):
+    def test_accepts_dedicated_identity(self):
+        self.assertIsNone(
+            validate_google_ingestion_service_account(
+                auth_mode="application_default",
+                service_account_email=(
+                    "knowledge-graph-ingestion@knowledge-graph-pilot.iam.gserviceaccount.com"
+                ),
+                development_context=False,
+            )
+        )
+
+    def test_missing_identity_is_development_only(self):
+        self.assertIsNone(
+            validate_google_ingestion_service_account(
+                auth_mode="application_default",
+                service_account_email="",
+                development_context=True,
+            )
+        )
+        with self.assertRaises(ImproperlyConfigured):
+            validate_google_ingestion_service_account(
+                auth_mode="application_default",
+                service_account_email="",
+                development_context=False,
+            )
+
+    def test_rejects_default_compute_and_non_service_account_identities(self):
+        for identity in (
+            "144917704622-compute@developer.gserviceaccount.com",
+            "admin@example.com",
+            "Knowledge-Graph@project.iam.gserviceaccount.com",
+        ):
+            with self.subTest(identity=identity):
+                with self.assertRaises(ImproperlyConfigured):
+                    validate_google_ingestion_service_account(
+                        auth_mode="application_default",
+                        service_account_email=identity,
+                        development_context=False,
+                    )
+
+    def test_oauth_development_mode_does_not_require_service_account(self):
+        self.assertIsNone(
+            validate_google_ingestion_service_account(
+                auth_mode="oauth_dev",
+                service_account_email="",
+                development_context=False,
+            )
+        )
 
 
 class DriveOnboardingUrlValidationTests(SimpleTestCase):

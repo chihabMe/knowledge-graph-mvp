@@ -6,11 +6,11 @@
 # same flow later (its API replaces the `deploy` step); everything else is
 # identical.
 #
-#   provision-client generate <slug> [--domain BASE_DOMAIN]
-#       Mint clients/<slug>/ (secrets + keyring + env). Then fill the
-#       __FILL_ME__ values and drop the Google JSON files into secrets/.
-#   provision-client check    <slug>
-#       Preflight: refuse to deploy while placeholders/secrets are unresolved.
+#   provision-client generate <slug> [generator options]
+#       Mint clients/<slug>/ (secrets + keyring + env). Fill the remaining
+#       shared OAuth/OpenRouter values without committing the directory.
+#   provision-client check    <slug> [--target coolify|local]
+#       Safe preflight: validate callbacks, client identity, and secret inputs.
 #   provision-client deploy   <slug> --image ghcr.io/chihabMe/kg-backend:vX.Y.Z
 #       check -> pull -> up -d --no-build -> wait for health.
 #   provision-client status   <slug>
@@ -41,31 +41,16 @@ cmd_generate() {
 }
 
 cmd_check() {
-  local slug="${1:?usage: check <slug>}"
-  local env; env="$(client_env "$slug")"
-  [ -f "$env" ] || die "missing $env — run: provision-client generate $slug"
-
-  local problems=0
-  if grep -q "__FILL_ME__" "$env"; then
-    echo "✗ unresolved placeholders (fill these before deploy):"
-    grep -nE "__FILL_ME__" "$env" | sed 's/^/    /'
-    problems=1
-  fi
-  if grep -qE "=change-this" "$env"; then
-    echo "✗ leftover change-this-* secrets:"
-    grep -nE "=change-this" "$env" | sed 's/^/    /'
-    problems=1
-  fi
-  local keyring
-  keyring="$(grep -E '^GOOGLE_USER_TOKEN_ENCRYPTION_KEY_FILE=' "$env" | cut -d= -f2-)"
-  if [ -z "$keyring" ] || [ ! -f "$keyring" ]; then
-    echo "✗ token keyring file missing: ${keyring:-<unset>}"
-    problems=1
-  fi
-  if [ "$problems" -ne 0 ]; then
-    die "preflight failed for $slug — resolve the items above"
-  fi
-  echo "✓ preflight passed for $slug"
+  local slug="${1:?usage: check <slug> [--target coolify|local]}"; shift || true
+  local target="coolify"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --target) target="${2:?}"; shift 2 ;;
+      *) die "unknown check option: $1" ;;
+    esac
+  done
+  case "$target" in coolify|local) ;; *) die "target must be coolify or local" ;; esac
+  python3 scripts/deploy/generate_client.py "$slug" --check --target "$target"
 }
 
 cmd_deploy() {
@@ -79,7 +64,7 @@ cmd_deploy() {
   done
   [ -n "$image" ] || die "deploy requires --image ghcr.io/chihabMe/kg-backend:<tag>"
 
-  cmd_check "$slug"
+  cmd_check "$slug" --target local
   echo "→ pulling images for $slug ($image)"
   KG_IMAGE="$image" compose "$slug" pull
   echo "→ starting $slug (migrations run automatically)"

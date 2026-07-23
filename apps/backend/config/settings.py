@@ -12,6 +12,7 @@ from config.settings_validators import (
     validate_drive_content_sync_settings,
     validate_drive_onboarding_urls,
     validate_freshness_monitor_settings,
+    validate_google_ingestion_service_account,
     validate_google_session_oauth_settings,
     validate_google_user_oauth_settings,
     validate_open_webui_compatible_settings,
@@ -494,6 +495,12 @@ if GOOGLE_DRIVE_AUTH_MODE == "oauth_dev" and not _development_context:
 GOOGLE_OAUTH_CLIENT_SECRET_FILE = env("GOOGLE_OAUTH_CLIENT_SECRET_FILE", default="")
 GOOGLE_OAUTH_TOKEN_FILE = env("GOOGLE_OAUTH_TOKEN_FILE", default="")
 GOOGLE_SERVICE_ACCOUNT_FILE = env("GOOGLE_SERVICE_ACCOUNT_FILE", default="")
+GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL = env("GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL", default="")
+validate_google_ingestion_service_account(
+    auth_mode=GOOGLE_DRIVE_AUTH_MODE,
+    service_account_email=GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL,
+    development_context=_development_context,
+)
 GOOGLE_DRIVE_DELEGATED_SUBJECT = env("GOOGLE_DRIVE_DELEGATED_SUBJECT", default="")
 GOOGLE_PERMISSION_AUTHORITY = env(
     "GOOGLE_PERMISSION_AUTHORITY",

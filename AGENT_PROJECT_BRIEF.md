@@ -268,6 +268,17 @@ authorization is separate: each pilot user grants admin-approved per-user
 OAuth access so Google can answer whether that user can see each already
 indexed file. Domain-wide delegation is not required for the POC path.
 
+For the reseller POC, all isolated client deployments reuse one reseller-owned
+OAuth project and consent screen with two shared OAuth web clients: one identity-only
+client for Open WebUI/Django session login and one restricted Drive-metadata
+client for per-user authorization. Each client deployment still registers its
+own exact HTTPS callback URIs, Workspace domain, encrypted token store, and
+dedicated ingestion service account in the project hosting its GCE VM. The
+OAuth project and hosting project may be different. The shared External app may stay in
+Google's testing/unverified state for the small POC pilot; public rollout,
+verification, and any required security assessment are deferred until the POC
+has a real distribution requirement.
+
 The Drive connector should:
 
 - Let an admin connect Google Drive, list eligible root folders/shared drives,

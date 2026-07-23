@@ -128,10 +128,10 @@ Reason:
 - Isolation *is* the product promise: one client's documents, graph, and
   permission tuples never share a database or network with another client's.
   Infrastructure-level isolation is stronger than any in-app namespacing.
-- It keeps each OAuth app and token store client-specific. A customer-admin-
-  configured pilot may qualify for Google's admin-trusted/internal exceptions,
-  while any future public multi-tenant distribution must separately complete
-  the restricted-scope verification and security-assessment analysis.
+- It keeps each OAuth token store and callback/domain configuration
+  client-specific. ADR-022 permits the two OAuth web clients themselves to be
+  shared for the small reseller POC; public distribution still requires a
+  separate restricted-scope verification and security-assessment decision.
 - Per-deployment `.env` + mounted secrets become the intended configuration
   surface, not a shortcut.
 - Cost: ops effort grows linearly with clients (upgrades, monitoring,
@@ -727,6 +727,37 @@ Reason:
   the POC is accepted.
 
 Status: Accepted and implemented (2026-07-20).
+
+## ADR-022: Shared External OAuth Clients, Dedicated Ingestion Identity Per Client
+
+Decision: Keep one reseller-owned OAuth project and one External consent screen
+for the POC. Reuse two OAuth web clients across isolated deployments:
+the existing identity-only login client and the separate Drive-metadata client.
+Every deployment registers its exact Open WebUI, Django session, and Drive
+callback URIs and restricts users to that client's configured Workspace domain.
+
+Create one dedicated ingestion service account per client in the project that
+hosts its GCE VM and attach it for keyless ADC. The OAuth project and GCE
+hosting project may differ. The client shares only its selected company folder
+or Shared Drive with that address. Persist the non-secret identity in
+`DriveConnection.service_account_email`; never use the default Compute Engine
+service account and do not create a long-lived JSON key for the GCE POC.
+
+Reason:
+
+- Two shared OAuth clients make the proof of concept easier to replicate while
+  preserving separate login and Drive authorization trust boundaries.
+- Per-client service accounts keep Drive content access attributable and limit
+  the ingestion blast radius without requiring clients to manage Google Cloud.
+- Client data, refresh tokens, callback/domain configuration, and databases
+  remain isolated even though the OAuth client IDs are shared.
+
+Limits: Keep the External app in testing/unverified mode for the bounded pilot.
+Google verification, security assessment, automated Google provisioning,
+Terraform, Secret Manager, DNS automation, and fleet operations are explicitly
+deferred until a real post-POC need exists.
+
+Status: Accepted for the POC (2026-07-23).
 
 ## Open / Needs Explicit Confirmation
 

@@ -29,6 +29,7 @@ def _connection_defaults_from_settings() -> dict[str, object]:
     }.get(settings.GOOGLE_DRIVE_AUTH_MODE, "GOOGLE_SERVICE_ACCOUNT_FILE")
     return {
         "workspace_domain": settings.GOOGLE_WORKSPACE_DOMAIN,
+        "service_account_email": settings.GOOGLE_INGESTION_SERVICE_ACCOUNT_EMAIL,
         "delegated_subject_email": (
             settings.GOOGLE_DRIVE_DELEGATED_SUBJECT
             if settings.GOOGLE_PERMISSION_AUTHORITY
