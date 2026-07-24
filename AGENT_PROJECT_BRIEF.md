@@ -979,6 +979,9 @@ positive and allowed/denied leak checks passed through the live query path in
 deleted after the run; no client questions, answers, identities, or source
 content were persisted.
 
+The permission-safe client demonstration script was completed before this
+recovery work and is available in the local Phase 8 handoff material.
+
 ### Phase 9: Optional Production Hardening
 
 Purpose: add an external alert destination, tighter evidence timing, Drive

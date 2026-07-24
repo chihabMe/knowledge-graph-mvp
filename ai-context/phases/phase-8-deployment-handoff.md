@@ -38,7 +38,7 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
   that Drive revocation blocks future retrieval but does not retract previously
   delivered chat text. Start from a configurable 30-day pilot recommendation,
   subject to client/legal requirements. Effort: High.
-- [ ] Write demo script. Effort: Medium.
+- [x] Write demo script. Effort: Medium.
 - [ ] Add troubleshooting guide. Effort: Medium.
 - [ ] Verify clean-server setup path. Effort: High.
 - [x] Run `run_evaluation` against operator-owned real client questions and
@@ -87,7 +87,7 @@ Manager, or Google verification work during the POC.
   follow the documented recovery procedure.
 - [ ] The approved chat-history retention period and deletion responsibilities
   are configured, tested, and included in client handoff.
-- [ ] Demo script shows permission-safe retrieval behavior.
+- [x] Demo script shows permission-safe retrieval behavior.
 - [ ] Clean-server startup rejects delegated ACL configuration and exposes only
   per-user OAuth onboarding/visibility workflows.
 - [ ] The client handoff includes the Phase 7 evidence report and the results
@@ -97,6 +97,6 @@ Manager, or Google verification work during the POC.
 
 Active — live client1 Google/Drive acceptance, document-edit fail-closed
 behavior, worker-loss redelivery, and stale-extraction recovery are verified.
-Remaining Phase 8 work includes clean-server/second-config proof, private
-the soak test, evidence consolidation, backup/restore, maintenance,
-demo, troubleshooting, and final handoff/policy documentation.
+Remaining Phase 8 work includes clean-server/second-config proof, the soak
+test, evidence consolidation, backup/restore, maintenance, troubleshooting,
+and final handoff/policy documentation.
