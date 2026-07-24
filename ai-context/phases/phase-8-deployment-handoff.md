@@ -41,7 +41,7 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
 - [ ] Write demo script. Effort: Medium.
 - [ ] Add troubleshooting guide. Effort: Medium.
 - [ ] Verify clean-server setup path. Effort: High.
-- [ ] Run `run_evaluation` against operator-owned real client questions and
+- [x] Run `run_evaluation` against operator-owned real client questions and
   allowed/denied leak cases. Keep fixtures ignored and do not persist output.
   Effort: High.
 - [x] Run a live document-edit drill: confirm the changed document is refused
@@ -98,5 +98,5 @@ Manager, or Google verification work during the POC.
 Active — live client1 Google/Drive acceptance, document-edit fail-closed
 behavior, worker-loss redelivery, and stale-extraction recovery are verified.
 Remaining Phase 8 work includes clean-server/second-config proof, private
-evaluation, the soak test, evidence consolidation, backup/restore, maintenance,
+the soak test, evidence consolidation, backup/restore, maintenance,
 demo, troubleshooting, and final handoff/policy documentation.

@@ -973,6 +973,12 @@ observed as `neo4j_graphrag`. Final verification found all 15 documents
 duplicate graph identifiers, and retrieval citations confined to the user's
 authorization allowlist.
 
+The operator-run private evaluation also passed on 2026-07-24: seven of seven
+positive and allowed/denied leak checks passed through the live query path in
+19.317 seconds. The temporary fixture and its privacy-safe summary were
+deleted after the run; no client questions, answers, identities, or source
+content were persisted.
+
 ### Phase 9: Optional Production Hardening
 
 Purpose: add an external alert destination, tighter evidence timing, Drive
