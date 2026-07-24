@@ -180,6 +180,7 @@ class PerUserQuerySecurityTests(TestCase):
         self.document.retrieval_eligible = False
         self.document.graph_extraction_status = SourceDocument.GraphExtractionStatus.PENDING
         self.document.save(update_fields=["retrieval_eligible", "graph_extraction_status"])
+
         def pending_lookup(email):
             return has_pending_authorized_content(email, spicedb=self.spicedb)
 

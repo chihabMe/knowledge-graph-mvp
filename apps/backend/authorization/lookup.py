@@ -226,9 +226,7 @@ def allowed_source_document_ids(
     return tuple(sorted(set(allowed)))
 
 
-def has_pending_authorized_content(
-    user_email: str, *, spicedb: SpiceDB | None = None
-) -> bool:
+def has_pending_authorized_content(user_email: str, *, spicedb: SpiceDB | None = None) -> bool:
     """Return whether a user's already-authorized content is re-indexing.
 
     This is a user-experience signal only. It still requires the direct
