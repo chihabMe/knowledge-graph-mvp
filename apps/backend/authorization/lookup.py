@@ -89,6 +89,7 @@ def _fresh_per_user_documents(
     authorization: GoogleDriveAuthorization,
     *,
     source_document_ids=None,
+    pending_only: bool = False,
 ) -> tuple[SourceDocument, ...]:
     cutoff = _visibility_cutoff()
     filters = {
@@ -98,13 +99,24 @@ def _fresh_per_user_documents(
         "authorization__authorization_generation": authorization.authorization_generation,
         "source_document__connection": connection,
         "source_document__active_in_scope": True,
-        "source_document__retrieval_eligible": True,
         "connection_generation": connection.authorization_generation,
         "authorization_generation": authorization.authorization_generation,
         "state": UserDocumentVisibility.State.VERIFIED_VISIBLE,
         "checked_at__gte": cutoff,
         "spicedb_verified_at__gte": cutoff,
     }
+    if pending_only:
+        filters.update(
+            {
+                "source_document__retrieval_eligible": False,
+                "source_document__graph_extraction_status__in": [
+                    SourceDocument.GraphExtractionStatus.PENDING,
+                    SourceDocument.GraphExtractionStatus.RUNNING,
+                ],
+            }
+        )
+    else:
+        filters["source_document__retrieval_eligible"] = True
     if source_document_ids is not None:
         filters["source_document_id__in"] = source_document_ids
     rows = (
@@ -212,6 +224,55 @@ def allowed_source_document_ids(
         )
         return ()
     return tuple(sorted(set(allowed)))
+
+
+def has_pending_authorized_content(
+    user_email: str, *, spicedb: SpiceDB | None = None
+) -> bool:
+    """Return whether a user's already-authorized content is re-indexing.
+
+    This is a user-experience signal only. It still requires the direct
+    SpiceDB relation and fresh per-user visibility evidence, and never returns
+    document identity or makes a document retrievable.
+    """
+    try:
+        normalized_email = normalize_trusted_email(user_email)
+        if (
+            settings.GOOGLE_PERMISSION_AUTHORITY
+            != DriveConnection.PermissionAuthority.PER_USER_OAUTH
+        ):
+            return False
+        client = spicedb or AuthzedSpiceDB()
+        for connection in _active_mode_connections():
+            authorization = _current_authorization(connection, normalized_email)
+            if authorization is None:
+                continue
+            user_id = user_object_id(connection.pk, normalized_email)
+            prefix = connection_prefix(connection.pk)
+            resources = _valid_direct_resource_ids(
+                client.read_oauth_viewer_tuples(prefix, user_id),
+                prefix=prefix,
+                user_id=user_id,
+            )
+            if not resources:
+                continue
+            if any(
+                document_object_id(connection.pk, document.pk) in resources
+                for document in _fresh_per_user_documents(
+                    connection,
+                    authorization,
+                    pending_only=True,
+                )
+            ):
+                return True
+        return False
+    except Exception as exc:
+        logger.warning(
+            "pending authorized content check failed closed: %s.%s",
+            type(exc).__module__,
+            type(exc).__name__,
+        )
+        return False
 
 
 def fresh_authorized_documents(

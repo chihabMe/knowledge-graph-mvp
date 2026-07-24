@@ -417,6 +417,12 @@ Answer behavior:
 
 - If context is insufficient, say what is missing.
 - If the user lacks access, refuse safely.
+- If a document that the user is already authorized to access is temporarily
+  unavailable because its content is pending or running re-extraction, return
+  a generic retry message. Do not name the document, disclose whether a
+  particular question depends on it, or show citations. This state must still
+  require the existing SpiceDB relationship and fresh per-user visibility
+  evidence; PostgreSQL job state never grants access.
 - If sources conflict, mention uncertainty and cite both visible sources.
 - Never reveal that a restricted document contains the answer.
 

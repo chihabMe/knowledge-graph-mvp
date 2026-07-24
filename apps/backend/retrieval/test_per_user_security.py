@@ -3,7 +3,7 @@ from django.utils import timezone
 
 from authorization.client import PermissionTuple
 from authorization.identifiers import document_object_id, user_object_id
-from authorization.lookup import allowed_source_document_ids
+from authorization.lookup import allowed_source_document_ids, has_pending_authorized_content
 from integrations.drive.user_oauth import GOOGLE_ISSUERS, REQUIRED_SCOPES
 from integrations.models import (
     DriveConnection,
@@ -175,3 +175,46 @@ class PerUserQuerySecurityTests(TestCase):
 
         self.assertTrue(result.refused)
         self.assertEqual(retriever.calls, [])
+
+    def test_pending_authorized_content_returns_generic_retry_without_citations(self):
+        self.document.retrieval_eligible = False
+        self.document.graph_extraction_status = SourceDocument.GraphExtractionStatus.PENDING
+        self.document.save(update_fields=["retrieval_eligible", "graph_extraction_status"])
+        def pending_lookup(email):
+            return has_pending_authorized_content(email, spicedb=self.spicedb)
+
+        retriever = Retriever(self.evidence)
+
+        result = answer_query(
+            "question",
+            self.email,
+            allowed_lookup=self.lookup,
+            pending_content_lookup=pending_lookup,
+            retriever=retriever,
+        )
+
+        self.assertTrue(result.refused)
+        self.assertEqual(result.reason, "content_update_in_progress")
+        self.assertEqual(
+            result.answer,
+            (
+                "Some of your accessible documents are being updated. "
+                "Please try again in a few minutes."
+            ),
+        )
+        self.assertEqual(result.citations, ())
+        self.assertEqual(retriever.calls, [])
+
+    def test_pending_content_signal_requires_the_direct_spicedb_tuple(self):
+        self.document.retrieval_eligible = False
+        self.document.graph_extraction_status = SourceDocument.GraphExtractionStatus.RUNNING
+        self.document.save(update_fields=["retrieval_eligible", "graph_extraction_status"])
+        self.spicedb.direct_tuple = PermissionTuple(
+            resource_type="kgm/document",
+            resource_id=document_object_id(self.connection.pk, self.document.pk),
+            relation="oauth_viewer",
+            subject_type="kgm/user",
+            subject_id=user_object_id(self.connection.pk, "other@example.com"),
+        )
+
+        self.assertFalse(has_pending_authorized_content(self.email, spicedb=self.spicedb))
