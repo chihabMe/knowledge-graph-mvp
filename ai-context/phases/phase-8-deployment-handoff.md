@@ -44,10 +44,10 @@ Make the POC understandable, maintainable, recoverable, and reusable for future 
 - [ ] Run `run_evaluation` against operator-owned real client questions and
   allowed/denied leak cases. Keep fixtures ignored and do not persist output.
   Effort: High.
-- [ ] Run a live document-edit drill: confirm the changed document is refused
+- [x] Run a live document-edit drill: confirm the changed document is refused
   while re-extraction is pending, then is available again only after success.
   Effort: High.
-- [ ] Run a controlled Celery-worker crash/recovery drill for a running graph
+- [x] Run a controlled Celery-worker crash/recovery drill for a running graph
   extraction and confirm stale-run recovery cannot leave it stuck. Effort: High.
 - [ ] Run a several-hour scheduled-sync soak test and record queue, retry,
   freshness, and resource observations. Effort: Medium.
@@ -73,7 +73,7 @@ Manager, or Google verification work during the POC.
 - [x] Document the short manual replication path in `clients/README.md`.
 - [x] For client1, attach the dedicated ingestion account with Drive read-only
   scope, share/select the company root, and complete the first real sync.
-- [ ] Complete the live client1 acceptance matrix: domain restriction, separate
+- [x] Complete the live client1 acceptance matrix: domain restriction, separate
   Drive consent, two-user visibility, access removal, and restart persistence.
 - [ ] Generate a second client config and pass the Coolify preflight as the
   replication proof. A second live deployment is not required for the POC.
@@ -95,7 +95,8 @@ Manager, or Google verification work during the POC.
 
 ## Completion Status
 
-Active — the lean POC replication tooling and runbook are implemented. The
-remaining gate is live client1 Google/Drive setup and permission acceptance,
-followed by a second generated-client preflight. Backup, restore, retention,
-and the other handoff tasks above remain open; Phase 8 is not complete.
+Active — live client1 Google/Drive acceptance, document-edit fail-closed
+behavior, worker-loss redelivery, and stale-extraction recovery are verified.
+Remaining Phase 8 work includes clean-server/second-config proof, private
+evaluation, the soak test, evidence consolidation, backup/restore, maintenance,
+demo, troubleshooting, and final handoff/policy documentation.

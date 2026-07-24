@@ -962,6 +962,17 @@ deletion and retention policy.
 
 Status: active.
 
+On 2026-07-24, client1 passed the live document-edit and graph-extraction
+recovery assurance drills. A controlled Celery pool-process termination
+produced a worker-loss error, redelivered the same late-acknowledged task, and
+recovered successfully. A separate 61-minute stale `RUNNING` extraction
+simulation was swept to `FAILED` and recovered through the normal Drive
+reconciliation and requeue path. The deployed client1 extraction engine was
+observed as `neo4j_graphrag`. Final verification found all 15 documents
+`succeeded` and retrieval-eligible, freshness `ok`, no missing provenance or
+duplicate graph identifiers, and retrieval citations confined to the user's
+authorization allowlist.
+
 ### Phase 9: Optional Production Hardening
 
 Purpose: add an external alert destination, tighter evidence timing, Drive
