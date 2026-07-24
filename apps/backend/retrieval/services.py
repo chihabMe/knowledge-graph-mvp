@@ -136,7 +136,7 @@ def answer_query(
         generator = answer_generator or build_answer_generator()
         generated = generator.generate(question, context)
         if not generated.supported:
-            return _refusal()
+            return _refusal_for_user(user_email, pending_lookup)
 
         citations: list[dict[str, str]] = []
         seen_citations: set[tuple[int, str]] = set()

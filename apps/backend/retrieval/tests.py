@@ -477,6 +477,39 @@ class QueryServiceSecurityTests(TestCase):
         self.assertEqual(result.reason, "insufficient_accessible_context")
         self.assertEqual(result.citations, ())
 
+    def test_unsupported_answer_uses_pending_content_retry_message_when_available(self):
+        document = self.create_document("allowed")
+        evidence = RetrievalEvidence(
+            chunks=(
+                RetrievedChunk(
+                    source_document_id=document.pk,
+                    chunk_id=f"{document.pk}:0",
+                    text="Unrelated permitted context.",
+                    content_version="content-v1",
+                ),
+            )
+        )
+
+        result = answer_query(
+            "question about a document being updated",
+            "reader@example.com",
+            allowed_lookup=lambda _email: (document.pk,),
+            pending_content_lookup=lambda _email: True,
+            retriever=StubRetriever(evidence),
+            answer_generator=StubAnswerGenerator(supported=False),
+        )
+
+        self.assertTrue(result.refused)
+        self.assertEqual(result.reason, "content_update_in_progress")
+        self.assertEqual(
+            result.answer,
+            (
+                "Some of your accessible documents are being updated. "
+                "Please try again in a few minutes."
+            ),
+        )
+        self.assertEqual(result.citations, ())
+
     def test_spicedb_failure_refuses_without_retrieval(self):
         retriever = StubRetriever()
 
